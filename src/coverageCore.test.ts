@@ -1,0 +1,194 @@
+import { describe, expect, it } from 'vitest';
+import { computeCoverage, CoverageJob } from './coverageCore';
+import { DemGrid, sampleGrid } from './elevation';
+import { destination, lonLatToPixel } from './geo';
+import { analyzeLink, budget, DEFAULT_RADIO, freeSpaceRange, fspl } from './radio';
+
+const LAT = 55.75, LON = 37.62, Z = 12;
+const SIZE = 1024;                    // ≈ ±11 км при 21.9 м/px на этой широте
+const [CX, CY] = lonLatToPixel(LON, LAT, Z);
+const P = { ...DEFAULT_RADIO };
+const BUDGET = budget(P);
+
+/** Мозаика z=12 с центром в пульте; height(dxPx, dyPx) — рельеф в пикселях от пульта (dy<0 — север). */
+function grid(height: (dx: number, dy: number) => number): DemGrid {
+  const px0 = Math.floor(CX) - SIZE / 2, py0 = Math.floor(CY) - SIZE / 2;
+  const data = new Float32Array(SIZE * SIZE);
+  for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) data[y * SIZE + x] = height(px0 + x + 0.5 - CX, py0 + y + 0.5 - CY);
+  return { z: Z, px0, py0, width: SIZE, height: SIZE, data };
+}
+
+/** Треугольный хребет поперёк направления на север: пик на dy = −at пикселей, полуширина w px. */
+const ridgeAt = (at: number, w: number, h: number) => (_dx: number, dy: number) => Math.max(0, h * (1 - Math.abs(dy + at) / w));
+
+function job(g: DemGrid, over: Partial<CoverageJob> = {}): CoverageJob {
+  return {
+    grid: g, lat: LAT, lon: LON, antH: 2, heights: [30], mode: 'takeoff', radius: 5000, step: 50, rays: 4,
+    freqMHz: P.freqMHz, budget: BUDGET, k: P.k, fade: P.fadeMarginDb, ...over,
+  };
+}
+
+/** Профиль рельефа вдоль луча — тот же способ выборки, что в ядре. */
+function rayProfile(g: DemGrid, az: number, upTo: number, step: number): Float64Array {
+  const n = Math.floor(upTo / step);
+  const out = new Float64Array(n + 1);
+  const [x0, y0] = lonLatToPixel(LON, LAT, Z);
+  out[0] = sampleGrid(g, x0, y0);
+  for (let s = 1; s <= n; s++) {
+    const p = destination({ lat: LAT, lon: LON }, az, s * step);
+    const [x, y] = lonLatToPixel(p.lon, p.lat, Z);
+    out[s] = sampleGrid(g, x, y);
+  }
+  return out;
+}
+
+const M = (res: ReturnType<typeof computeCoverage>, h: number, r: number, rays: number, s: number) =>
+  res.margins[(h * rays + r) * res.samples + s];
+
+describe('computeCoverage: ровная земля', () => {
+  const g = grid(() => 100);
+  const res = computeCoverage(job(g, { heights: [30, 100] }));
+
+  it('размеры массивов и ground0', () => {
+    expect(res.samples).toBe(101);
+    expect(res.margins.length).toBe(2 * 4 * 101);
+    expect(res.firstLoss.length).toBe(2 * 4);
+    expect(res.ground0).toBeCloseTo(100, 4);
+  });
+  it('в точке пульта запас 99 (заглушка)', () => {
+    for (let h = 0; h < 2; h++) for (let r = 0; r < 4; r++) expect(M(res, h, r, 4, 0)).toBe(99);
+  });
+  it('запас на луче = budget − fspl(d) (дифракции нет), убывает с расстоянием', () => {
+    for (let h = 0; h < 2; h++) for (let r = 0; r < 4; r++) {
+      let prev = Infinity;
+      for (let s = 2; s <= 100; s++) {
+        const m = M(res, h, r, 4, s);
+        expect(m).toBeCloseTo(BUDGET - fspl(s * 50, P.freqMHz), 3);
+        expect(m).toBeLessThan(prev);
+        prev = m;
+      }
+    }
+  });
+  it('совпадает с analyzeLink на том же профиле (допуск 0.05 дБ)', () => {
+    const prof = rayProfile(g, 0, 5000, 50);
+    for (const s of [10, 40, 100]) {
+      const a = analyzeLink(prof.subarray(0, s + 1), s * 50, prof[0] + 2, prof[0] + 30, P);
+      expect(M(res, 0, 0, 4, s)).toBeCloseTo(a.margin, 1);
+    }
+  });
+  it('firstLoss на свободных лучах = radius (запас на 5 км ≈ 16 дБ > fade)', () => {
+    for (const v of res.firstLoss) expect(v).toBe(5000);
+  });
+  it('firstLoss = дальность до первого s с запасом < fade при длинном радиусе', () => {
+    const far = computeCoverage(job(g, { radius: 30000, step: 300, rays: 2, antH: 30, heights: [100] }));
+    const fl = far.firstLoss[0];
+    expect(fl).toBeLessThan(30000);
+    // последняя точка с запасом ≥ fade: fspl = budget − fade → ≈ freeSpaceRange (при потерях 4 дБ ≈7.8 км) в пределах шага
+    expect(Math.abs(fl - freeSpaceRange(P))).toBeLessThan(400);
+    expect(M(far, 0, 0, 2, Math.round(fl / 300))).toBeGreaterThanOrEqual(P.fadeMarginDb);
+    expect(M(far, 0, 0, 2, Math.round(fl / 300) + 1)).toBeLessThan(P.fadeMarginDb);
+  });
+  it('прогресс вызывается и не превышает 1', () => {
+    const seen: number[] = [];
+    computeCoverage(job(g, { rays: 33 }), (f) => seen.push(f));
+    expect(seen.length).toBeGreaterThan(0);
+    for (const f of seen) { expect(f).toBeGreaterThanOrEqual(0); expect(f).toBeLessThan(1); }
+  });
+});
+
+describe('computeCoverage: хребет на севере (≈2.2 км, 150 м)', () => {
+  const g = grid(ridgeAt(100, 10, 150));
+  const res = computeCoverage(job(g, { heights: [30, 100, 250], rays: 4 }));
+  // лучи: 0=север (хребет), 1=восток, 2=юг, 3=запад
+  const fl = (h: number, r: number) => res.firstLoss[h * 4 + r];
+
+  it('за хребтом запас резко падает (скачок > 8 дБ относительно свободной земли)', () => {
+    // s=70 → 3.5 км, за гребнем (≈2.2 км)
+    const free = M(res, 0, 1, 4, 70), shadow = M(res, 0, 0, 4, 70);
+    expect(free - shadow).toBeGreaterThan(8);
+    // до хребта (1.5 км) разницы нет
+    expect(M(res, 0, 0, 4, 30)).toBeCloseTo(M(res, 0, 1, 4, 30), 1);
+  });
+  it('firstLoss на луче с хребтом меньше, чем на свободных; свободные = radius', () => {
+    for (const r of [1, 2, 3]) expect(fl(0, r)).toBe(5000);
+    expect(fl(0, 0)).toBeLessThan(5000);
+    expect(fl(0, 0)).toBeGreaterThan(1000);
+    expect(fl(0, 0)).toBeLessThan(3500);
+  });
+  it('большая высота дрона → firstLoss не меньше, и на 250 м строго больше, чем на 30 м', () => {
+    expect(fl(1, 0)).toBeGreaterThanOrEqual(fl(0, 0));
+    expect(fl(2, 0)).toBeGreaterThanOrEqual(fl(1, 0));
+    expect(fl(2, 0)).toBeGreaterThan(fl(0, 0));
+  });
+  it('запас в точке за хребтом растёт с высотой дрона', () => {
+    const s = 60;
+    expect(M(res, 1, 0, 4, s)).toBeGreaterThan(M(res, 0, 0, 4, s));
+    expect(M(res, 2, 0, 4, s)).toBeGreaterThan(M(res, 1, 0, 4, s));
+  });
+  it('запас с ОДНИМ препятствием совпадает с analyzeLink (допуск 1 дБ)', () => {
+    const prof = rayProfile(g, 0, 5000, 50);
+    for (const s of [70, 80, 90, 100]) {
+      const a = analyzeLink(prof.subarray(0, s + 1), s * 50, prof[0] + 2, prof[s] + 30, P);
+      expect(Math.abs(M(res, 0, 0, 4, s) - a.margin)).toBeLessThan(1);
+    }
+  });
+});
+
+describe('computeCoverage: режимы terrain / takeoff', () => {
+  // уклон на север: +0.05 м на пиксель (≈ 2.3 м/км), на 5 км подъём ≈ 11 м... берём круче: 0.3 м/px → ≈ 14 м/км
+  const slope = (_dx: number, dy: number) => Math.max(0, -dy) * 0.3;
+  const g = grid(slope);
+  const take = computeCoverage(job(g, { mode: 'takeoff', heights: [30], rays: 4 }));
+  const terr = computeCoverage(job(g, { mode: 'terrain', heights: [30], rays: 4 }));
+
+  it('на плоском направлении (восток/запад/юг) режимы одинаковы', () => {
+    for (const r of [1, 2, 3]) for (const s of [5, 50, 100]) expect(M(terr, 0, r, 4, s)).toBeCloseTo(M(take, 0, r, 4, s), 1);
+  });
+  it('в гору: «над землёй» (terrain) даёт запас не хуже «от точки взлёта»', () => {
+    for (const s of [20, 50, 100]) expect(M(terr, 0, 0, 4, s)).toBeGreaterThanOrEqual(M(take, 0, 0, 4, s) - 1e-3);
+    expect(terr.firstLoss[0]).toBeGreaterThanOrEqual(take.firstLoss[0]);
+  });
+  it('в гору на 5 км: от точки взлёта дрон (30 м) ниже склона → глухо, terrain — почти свободное пространство', () => {
+    const s = 100;
+    expect(M(take, 0, 0, 4, s)).toBeLessThan(0);
+    expect(M(terr, 0, 0, 4, s)).toBeGreaterThan(BUDGET - fspl(5000, P.freqMHz) - 12);
+    expect(take.firstLoss[0]).toBeLessThan(terr.firstLoss[0]);
+  });
+});
+
+describe('Зона и профиль: ДВА препятствия (оба — Дейгу, до 3 клиньев)', () => {
+  // Два узких хребта на севере (1.1 и 2.8 км). Раньше зона брала только главный клин и была оптимистичнее до ~29 дБ.
+  const twoRidges = (h: number) => {
+    const g = grid((dx, dy) => ridgeAt(50, 4, h)(dx, dy) + ridgeAt(128, 4, h)(dx, dy));
+    const res = computeCoverage(job(g, { heights: [30], rays: 4 }));
+    const prof = rayProfile(g, 0, 5000, 50);
+    const diffs = [70, 80, 90, 100].map((s) => {
+      const a = analyzeLink(prof.subarray(0, s + 1), s * 50, prof[0] + 2, prof[s] + 30, P);
+      return { zone: M(res, 0, 0, 4, s), profile: a.margin, edges: a.edges.length };
+    });
+    return diffs;
+  };
+
+  for (const h of [25, 120]) {
+    it(`хребты ${h} м: запас зоны совпадает с профилем (±0.5 дБ)`, () => {
+      for (const x of twoRidges(h)) {
+        if (h === 120) expect(x.edges).toBeGreaterThanOrEqual(2);
+        expect(Math.abs(x.zone - x.profile)).toBeLessThan(0.5);
+      }
+    });
+  }
+});
+
+describe('аудит (2A): дрон под землёй и море', () => {
+  it('режим takeoff: точки выше взлёта + высоты дрона — связи нет (−99)', () => {
+    // склон вверх на север
+    const g = grid((_dx, dy) => Math.max(0, -dy) * 10); // склон на север (dy<0), ~10 м на пиксель сетки
+    const res = computeCoverage(job(g, { radius: 3000, step: 50, rays: 4, heights: [100], mode: 'takeoff' }));
+    expect(M(res, 0, 0, 4, 59)).toBe(-99); // ~3 км на север рельеф сотни метров > 0 + 100 м
+  });
+  it("режим terrain над морем: отрицательный рельеф не обрезается (дрон считается над дном — пессимистично)", () => {
+    const sea = grid(() => -200);
+    const res = computeCoverage(job(sea, { radius: 2000, step: 50, rays: 4, heights: [50], mode: 'terrain', antH: 2 }));
+    expect(M(res, 0, 0, 4, 20)).toBeGreaterThan(-99);
+  });
+});

@@ -1,8 +1,8 @@
 // Пульт (точка А), «связь до креста», профиль трассы и подбор места для пилота.
 import maplibregl from 'maplibre-gl';
-import { S, $, h, map, center, setGeo, fc, line, toast, openSheet, sheetOpen, emit, on, progress, escapeHtml } from './app';
+import { S, $, h, map, center, setGeo, fc, line, toast, openSheet, emit, on, progress, escapeHtml } from './app';
 import { LatLon, distance, bearing, fmtDist, interpolate, lonLatToPixel, destination } from './geo';
-import { elevationAt, profile, zoomForStep, fetchGrid, sampleGrid } from './elevation';
+import { elevationAt, profile, zoomForStep, fetchGrid, sampleGrid, DemMissingError, DemGrid } from './elevation';
 import { analyzeLink, minHeightForLink, LinkResult, PRESETS, RadioParams, radioHorizon, freeSpaceRange } from './radio';
 import { drawProfile } from './profileChart';
 import { formatCoords } from './coords';
@@ -19,15 +19,50 @@ export function altModeText() {
 
 /** Абсолютная высота дрона над точкой с рельефом groundB. */
 export function droneAbs(groundB: number, hDrone = S.droneH, groundA = stationGround ?? 0) {
+  // Отрицательный рельеф не обрезаем: суша ниже уровня моря (Прикаспий) неотличима от батиметрии,
+  // а ошибка над морем пессимистична (дрон ниже реального) — для оценки дальности это безопаснее.
   return (S.altMode === 'takeoff' ? groundA : groundB) + hDrone;
+}
+
+// Ревизия пульта: каждый перенос/удаление увеличивает её, и ответы,
+// запрошенные для прежнего положения, отбрасываются.
+let stationRev = 0;
+export let stationGroundFailed = false;
+
+async function loadStationGround() {
+  const rev = ++stationRev;
+  stationGround = null;
+  stationGroundFailed = false;
+  if (!S.station) return;
+  const g = await elevationAt({ lat: S.station.lat, lon: S.station.lon });
+  if (rev !== stationRev) return;
+  stationGround = g;
+  stationGroundFailed = g === null;
+  if (stationGroundFailed) toast('Не удалось загрузить высоту пульта — нет данных рельефа');
+  emit('station');
 }
 
 export async function setStation(p: LatLon, name = 'Пульт') {
   S.station = { lat: p.lat, lon: p.lon, antH: S.station?.antH ?? 2, name };
-  stationGround = null;
+  const job = loadStationGround();
   renderStation();
   emit('station');
-  stationGround = await elevationAt(p);
+  await job;
+}
+
+/** Пульт, восстановленный из сохранённого проекта, — подгрузить его высоту. */
+export function initStation() {
+  renderStation();
+  return loadStationGround();
+}
+
+export function removeStation() {
+  S.station = null;
+  stationRev++;
+  stationGround = null;
+  stationGroundFailed = false;
+  renderStation();
+  setGeo('link', fc());
   emit('station');
 }
 
@@ -58,32 +93,38 @@ function showStationSheet() {
   b.querySelector('#stGo')!.addEventListener('click', () => map.flyTo({ center: [st.lon, st.lat] }));
   b.querySelector('#stMove')!.addEventListener('click', () => { setStation(center()); toast('Пульт перенесён'); });
   b.querySelector('#stDel')!.addEventListener('click', () => {
-    S.station = null; stationGround = null; renderStation(); emit('station');
-    setGeo('link', fc()); $('sheet').hidden = true;
+    removeStation(); $('sheet').hidden = true;
   });
 }
 
 // ---------- Расчёт трассы ----------
 
-export interface LinkCalc { res: LinkResult; elev: Float32Array; dist: number; az: number; groundB: number; target: LatLon }
+export interface LinkCalc {
+  res: LinkResult; elev: Float32Array; dist: number; az: number; target: LatLon;
+  groundA: number; groundB: number; antH: number; hA: number;
+}
 
-let seq = 0;
+/**
+ * Расчёт трассы пульт → target. null — пульта нет, его высота не загружена, точки совпадают
+ * или пульт успели перенести, пока грузился профиль. При нехватке рельефа — DemMissingError.
+ */
 export async function calcLink(target: LatLon, radio: RadioParams = S.radio): Promise<LinkCalc | null> {
   if (!S.station || stationGround === null) return null;
+  // Снимок входных данных: после await глобальное состояние могло измениться.
+  const rev = stationRev, groundA = stationGround, antH = S.station.antH;
   const a = { lat: S.station.lat, lon: S.station.lon };
   const dist = distance(a, target);
   if (dist < 5) return null;
   const step = Math.max(dist / 600, 15);
   const n = Math.max(16, Math.min(600, Math.round(dist / step)));
   const z = zoomForStep(a.lat, step);
-  const my = ++seq;
   const elev = await profile(a, target, n, z);
-  if (my !== seq && sheetOpen() === false) { /* устаревший запрос живой строки — всё равно вернём */ }
-  elev[0] = stationGround;
+  if (rev !== stationRev) return null;
+  elev[0] = groundA;
   const groundB = elev[n];
-  const hA = stationGround + S.station.antH;
-  const res = analyzeLink(elev, dist, hA, droneAbs(groundB), radio);
-  return { res, elev, dist, az: bearing(a, target), groundB, target };
+  const hA = groundA + antH;
+  const res = analyzeLink(elev, dist, hA, droneAbs(groundB, S.droneH, groundA), radio);
+  return { res, elev, dist, az: bearing(a, target), target, groundA, groundB, antH, hA };
 }
 
 // ---------- Живая строка «связь до креста» ----------
@@ -95,20 +136,27 @@ export async function updateLive() {
   if (!S.station) { setGeo('link', fc()); $('hereLink').hidden = true; return; }
   if (liveBusy) { livePending = true; return; }
   liveBusy = true;
+  const st = $('lsStatus'), hl = $('hereLink');
   try {
     const c = center();
-    const r = await calcLink(c);
+    let r: LinkCalc | null;
+    try { r = await calcLink(c); } catch (e) {
+      if (!(e instanceof DemMissingError)) throw e;
+      lastLive = null;
+      st.textContent = e.message; hl.hidden = true; setGeo('link', fc());
+      return;
+    }
     lastLive = r;
-    const st = $('lsStatus'), hl = $('hereLink');
+    if (!S.station) { setGeo('link', fc()); hl.hidden = true; return; }
     if (!r) {
-      st.innerHTML = stationGround === null ? 'Загружаю высоту пульта…' : 'Прицел на пульте — сдвиньте карту';
+      st.innerHTML = stationGroundFailed ? 'Нет данных рельефа под пультом' : stationGround === null ? 'Загружаю высоту пульта…' : 'Прицел на пульте — сдвиньте карту';
       setGeo('link', fc()); hl.hidden = true;
     } else {
       const { res } = r;
-      const losTxt = res.los ? (res.minClearance >= 0.6 ? 'прямая видимость, Френель чист' : `прямая видимость, Френель закрыт на ${Math.round(Math.min(1, res.fresnelBlocked) * 100)}%`) : 'прямой видимости нет';
-      st.innerHTML = `Аз. ${r.az.toFixed(1)}° · ${fmtDist(r.dist)} · запас <span class="${res.status}">${res.margin.toFixed(1)} дБ</span> · ${losTxt}`;
+      const losTxt = res.belowGround ? 'дрон ниже рельефа' : res.los ? (res.minClearance >= 0.6 ? 'прямая видимость, Френель чист' : `прямая видимость, Френель закрыт на ${Math.round(Math.min(1, res.fresnelBlocked) * 100)}%`) : 'прямой видимости нет';
+      st.innerHTML = `Аз. ${r.az.toFixed(1)}° · ${fmtDist(r.dist)} · запас <span class="${res.status}">${res.belowGround ? '—' : res.margin.toFixed(1) + ' дБ'}</span> · ${losTxt}`;
       hl.hidden = false;
-      hl.innerHTML = `До пульта <b>${fmtDist(r.dist)}</b>, аз. <b>${r.az.toFixed(0)}°</b><br>Дрон ${S.droneH} м: <b style="color:${STATUS_COL[res.status]}">${STATUS_TXT[res.status]}</b> (${res.margin.toFixed(0)} дБ)`;
+      hl.innerHTML = `До пульта <b>${fmtDist(r.dist)}</b>, аз. <b>${r.az.toFixed(0)}°</b><br>Дрон ${S.droneH} м: <b style="color:${STATUS_COL[res.status]}">${STATUS_TXT[res.status]}</b> ${res.belowGround ? '(ниже рельефа)' : `(${res.margin.toFixed(0)} дБ)`}`;
       setGeo('link', fc([line([[S.station.lon, S.station.lat], [c.lon, c.lat]], { color: STATUS_COL[res.status], dash: res.los ? 0 : 1 })]));
     }
   } finally {
@@ -121,22 +169,28 @@ export async function updateLive() {
 
 export async function showProfile(target = center()) {
   if (!S.station) { toast('Сначала поставьте пульт'); return; }
-  const r = await calcLink(target);
-  if (!r) { toast('Прицел совпадает с пультом'); return; }
+  if (stationGround === null) { toast(stationGroundFailed ? 'Нет данных рельефа под пультом' : 'Высота пульта ещё загружается'); return; }
+  let r: LinkCalc | null;
+  try { r = await calcLink(target); } catch (e) {
+    if (e instanceof DemMissingError) { toast(e.message); return; }
+    throw e;
+  }
+  if (!r) { if (S.station) toast('Прицел совпадает с пультом или пульт перенесён'); return; }
   renderProfileSheet(r);
 }
 
 function renderProfileSheet(r: LinkCalc) {
-  const st = S.station!, res = r.res;
-  const hA = stationGround! + st.antH;
-  const absB = droneAbs(r.groundB);
-  const heightFn = (hh: number) => droneAbs(r.groundB, hh);
+  const res = r.res, hA = r.hA;
+  const st = { antH: r.antH };
+  const absB = droneAbs(r.groundB, S.droneH, r.groundA);
+  const heightFn = (hh: number) => droneAbs(r.groundB, hh, r.groundA);
   const minH = minHeightForLink(r.elev, r.dist, hA, heightFn, S.radio);
   const verdict = {
     ok: `Связь уверенная: запас ${res.margin.toFixed(1)} дБ при требуемых ${S.radio.fadeMarginDb} дБ`,
     weak: `На грани: запас ${res.margin.toFixed(1)} дБ — меньше желаемых ${S.radio.fadeMarginDb} дБ, возможны срывы`,
     none: `Связи нет: не хватает ${(-res.margin).toFixed(1)} дБ до чувствительности приёмника`,
   }[res.status];
+  const verdictText = res.belowGround ? 'Связи нет: дрон ниже рельефа в этой точке — увеличьте высоту или переключите отсчёт «над рельефом»' : verdict;
 
   const heights = [...new Set([...S.coverage.heights, S.droneH])].sort((a, b) => a - b);
   const hRows = heights.map((hh) => {
@@ -153,7 +207,7 @@ function renderProfileSheet(r: LinkCalc) {
 
   const hz = radioHorizon(st.antH, absB - r.groundB, S.radio.k);
   const b = openSheet(`Профиль: пульт → прицел · ${fmtDist(r.dist)}`, `
-    <div class="verdict ${res.status}">${verdict}</div>
+    <div class="verdict ${res.status}">${verdictText}</div>
     <canvas id="profileCanvas"></canvas>
     <div class="legend"><span><i style="background:var(--accent)"></i>линия визирования</span><span><i style="background:rgba(227,169,72,.35)"></i>1-я зона Френеля / 60 %</span><span><i style="background:var(--bad)"></i>перекрытие / препятствия</span></div>
     <div class="kv">
@@ -162,8 +216,8 @@ function renderProfileSheet(r: LinkCalc) {
       <div><small>Свободное пр-во</small><b>${res.fspl.toFixed(1)} дБ</b></div>
       <div><small>Дифракция на рельефе</small><b>${res.diffraction.toFixed(1)} дБ</b></div>
       <div><small>Уровень на приёме</small><b>${res.prx.toFixed(1)} дБм</b></div>
-      <div><small>Запас</small><b style="color:${STATUS_COL[res.status]}">${res.margin.toFixed(1)} дБ</b></div>
-      <div><small>Мин. зазор / Френель</small><b>${Math.round(res.minClearance * 100)} %</b></div>
+      <div><small>Запас</small><b style="color:${STATUS_COL[res.status]}">${res.belowGround ? '—' : res.margin.toFixed(1) + ' дБ'}</b></div>
+      <div><small>Мин. зазор / Френель</small><b>${res.belowGround ? '—' : Math.round(res.minClearance * 100) + ' %'}</b></div>
       <div><small>Радиогоризонт</small><b>${fmtDist(hz)}</b></div>
       <div><small>Мин. высота для связи</small><b>${minH === null ? '&gt;1500 м' : minH + ' м'}</b></div>
       <div><small>Дальность без рельефа</small><b>${fmtDist(freeSpaceRange(S.radio))}</b></div>
@@ -225,7 +279,12 @@ export async function findBestSpot(radius: number) {
   };
   while (z > 9 && tilesFor(z) > 49) z--;
   progress(0.2, 'Загружаю рельеф…');
-  const grid = await fetchGrid([...around, target], z);
+  let grid: DemGrid;
+  try { grid = await fetchGrid([...around, target], z); } catch (e) {
+    progress(null);
+    if (e instanceof DemMissingError) { toast(e.message); return; }
+    throw e;
+  }
   progress(0.6, 'Перебираю точки…');
   const at = (p: LatLon) => { const [x, y] = lonLatToPixel(p.lon, p.lat, z); return sampleGrid(grid, x, y); };
   const gT = at(target);

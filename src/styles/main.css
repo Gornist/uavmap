@@ -1,0 +1,9 @@
+/* Стили модулей main/marks/ruler. */
+.route-label { font: 600 11px system-ui, sans-serif; color: #fff; text-shadow: 0 0 3px #000, 0 0 2px #000; white-space: nowrap; pointer-events: none; transform: translateY(-10px); }
+.gps-dot { width: 16px; height: 16px; border-radius: 50%; background: #4aa3ff; border: 2px solid #fff; box-shadow: 0 0 0 6px #4aa3ff55; }
+.colors { display: flex; gap: 8px; margin: 8px 0; }
+.colors button { width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--line); padding: 0; }
+.colors button.on { border-color: #fff; }
+.txt { width: 100%; box-sizing: border-box; text-align: left; }
+textarea.txt { min-height: 70px; resize: vertical; font: inherit; color: var(--text); background: #0d1119; border: 1px solid var(--line); border-radius: 7px; padding: 6px 8px; }
+.field.col { grid-template-columns: 1fr; }

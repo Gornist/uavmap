@@ -34,7 +34,7 @@ function style(): StyleSpecification {
     { id: 'roads', type: 'raster', source: 'roads', layout: { visibility: S.map.labels ? 'visible' : 'none' }, paint: { 'raster-opacity': 0.85 } },
     { id: 'places', type: 'raster', source: 'places', layout: { visibility: S.map.labels ? 'visible' : 'none' } },
   );
-  return { version: 8, sources, layers };
+  return { version: 8, glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf', sources, layers };
 }
 
 export const map: MLMap = new maplibregl.Map({

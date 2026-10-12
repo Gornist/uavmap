@@ -50,10 +50,29 @@ export function formatCoords(lat: number, lon: number, f: CoordFormat): CoordRow
 
 /** Разбор введённых координат: «55.75 37.62», «55,75; 37,62» или СК-42 «X 6175000 Y 7412000». */
 export function parseCoords(text: string): { lat: number; lon: number } | null {
-  const nums = (text.replace(/,(?=\d)/g, '.').match(/-?\d+(\.\d+)?/g) || []).map(Number);
+  const t = text.replace(/,(?=\d)/g, '.');
+  // Г°М′С″ с полушариями (в том числе формат, который выводит formatCoords('dms')).
+  const dmsRe = /(-?\d+(?:\.\d+)?)\s*°\s*(?:(\d+(?:\.\d+)?)\s*['′]\s*)?(?:(\d+(?:\.\d+)?)\s*["″]\s*)?([NSEWСЮВЗ])?/gi;
+  const dms = [...t.matchAll(dmsRe)];
+  if (dms.length >= 2) {
+    const val = (m: RegExpMatchArray) => {
+      const deg = +m[1], sign = deg < 0 || Object.is(deg, -0) ? -1 : 1;
+      const v = Math.abs(deg) + (+(m[2] || 0)) / 60 + (+(m[3] || 0)) / 3600;
+      return /[SWЮЗ]/i.test(m[4] || '') ? -v : sign * v;
+    };
+    const [a, b] = dms;
+    const aIsLon = /[EWВЗ]/i.test(a[4] || '');
+    const lat = aIsLon ? val(b) : val(a), lon = aIsLon ? val(a) : val(b);
+    return Math.abs(lat) <= 90 && Math.abs(lon) <= 180 ? { lat, lon } : null;
+  }
+  const nums = (t.match(/-?\d+(\.\d+)?/g) || []).map(Number);
   if (nums.length < 2) return null;
-  const [a, b] = nums;
-  if (a > 1e5 && b > 1e5) return fromSK42(a, b);
+  let [a, b] = nums;
+  if (a > 1e5 && b > 1e5) {
+    // СК-42: по умолчанию «X Y»; если первой подписана Y — меняем местами.
+    if (/^\s*Y/i.test(t) || (/X/i.test(t) && t.search(/Y/i) < t.search(/X/i))) [a, b] = [b, a];
+    return fromSK42(a, b);
+  }
   if (Math.abs(a) <= 90 && Math.abs(b) <= 180) return { lat: a, lon: b };
   return null;
 }

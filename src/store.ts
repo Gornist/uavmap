@@ -17,7 +17,7 @@ export interface State {
   radio: RadioParams;
   presetId: string;
   coverage: { radius: number; heights: number[]; show: 'margin' | 'minh'; heightIdx: number; opacity: number };
-  map: { base: string; labels: boolean; hillshade: boolean; dim: number; center: [number, number]; zoom: number };
+  map: { base: string; labels: boolean; hillshade: boolean; contours: boolean; dim: number; center: [number, number]; zoom: number };
   coordFormat: CoordFormat;
 }
 
@@ -33,7 +33,7 @@ export const defaults = (): State => ({
   radio: { ...DEFAULT_RADIO },
   presetId: 'elrs24',
   coverage: { radius: 15000, heights: [30, 60, 100, 150, 250, 400], show: 'margin', heightIdx: 2, opacity: 0.6 },
-  map: { base: 'sat', labels: true, hillshade: false, dim: 0.35, center: [40.2045, 43.6805], zoom: 12 },
+  map: { base: 'sat', labels: true, hillshade: false, contours: true, dim: 0.35, center: [40.2045, 43.6805], zoom: 12 },
   coordFormat: 'sk42',
 });
 
@@ -50,9 +50,65 @@ function merge<T>(base: T, over: unknown): T {
 export function load(): State {
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) return merge(defaults(), JSON.parse(raw));
+    if (raw) return sanitize(merge(defaults(), JSON.parse(raw)));
   } catch { /* повреждённые данные — начинаем с чистого */ }
   return defaults();
+}
+
+const fin = (v: unknown, lo: number, hi: number, def: number) => (typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi ? v : def);
+const okLL = (lat: unknown, lon: unknown) => typeof lat === 'number' && typeof lon === 'number' && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
+const oneOf = <T extends string>(v: unknown, allowed: readonly T[], def: T): T => (allowed.includes(v as T) ? (v as T) : def);
+const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/** Привести состояние из недоверенного источника (localStorage, файл копии) к корректному виду. */
+export function sanitize(s: State): State {
+  const d = defaults();
+  const out: State = { ...d };
+  out.marks = (Array.isArray(s.marks) ? s.marks : []).filter((m) => isObj(m) && okLL(m.lat, m.lon)).map((m) => ({
+    id: typeof m.id === 'string' && m.id ? m.id.slice(0, 40) : uid(),
+    name: str(m.name, 120) || 'Метка', note: str(m.note, 1000),
+    lat: m.lat, lon: m.lon,
+    color: typeof m.color === 'string' && /^#[0-9a-f]{3,8}$/i.test(m.color) ? m.color : '#e3a948',
+    folder: str(m.folder, 120), created: fin(m.created, 0, 1e14, Date.now()),
+  }));
+  out.routes = (Array.isArray(s.routes) ? s.routes : []).filter(isObj).map((r) => ({
+    id: typeof r.id === 'string' && r.id ? r.id.slice(0, 40) : uid(),
+    name: str(r.name, 120) || 'Маршрут',
+    pts: (Array.isArray(r.pts) ? r.pts : []).filter((p): p is [number, number] => Array.isArray(p) && okLL(p[1], p[0])).map((p) => [p[0], p[1]] as [number, number]),
+  })).filter((r) => r.pts.length >= 2);
+  const st = s.station;
+  out.station = isObj(st) && okLL(st.lat, st.lon)
+    ? { lat: st.lat as number, lon: st.lon as number, antH: fin(st.antH, 0, 1000, 2), name: str(st.name, 60) || 'Пульт' }
+    : null;
+  out.droneH = fin(s.droneH, 0, 10000, d.droneH);
+  out.altMode = oneOf(s.altMode, ['takeoff', 'terrain'] as const, d.altMode);
+  const r: Record<string, unknown> = isObj(s.radio) ? s.radio : {};
+  out.radio = { ...d.radio };
+  for (const k of Object.keys(d.radio) as (keyof RadioParams)[]) out.radio[k] = fin(r[k], -1e4, 1e6, d.radio[k]);
+  if (out.radio.freqMHz <= 0) out.radio.freqMHz = d.radio.freqMHz;
+  if (out.radio.k <= 0) out.radio.k = d.radio.k;
+  out.presetId = typeof s.presetId === 'string' ? s.presetId.slice(0, 40) : d.presetId;
+  const c: Record<string, unknown> = isObj(s.coverage) ? s.coverage : {};
+  const heights = (Array.isArray(c.heights) ? c.heights : []).filter((x): x is number => typeof x === 'number' && Number.isFinite(x) && x >= 0 && x <= 10000);
+  const sortedH = [...new Set(heights)].sort((a, b) => a - b).slice(0, 12); // «мин. высота» требует возрастания
+  out.coverage = {
+    radius: fin(c.radius, 500, 100000, d.coverage.radius),
+    heights: sortedH.length ? sortedH : d.coverage.heights,
+    show: oneOf(c.show, ['margin', 'minh'] as const, d.coverage.show),
+    heightIdx: Math.round(fin(c.heightIdx, 0, 11, d.coverage.heightIdx)),
+    opacity: fin(c.opacity, 0, 1, d.coverage.opacity),
+  };
+  const m: Record<string, unknown> = isObj(s.map) ? s.map : {};
+  const ctr = Array.isArray(m.center) && okLL(m.center[1], m.center[0]) ? [m.center[0], m.center[1]] as [number, number] : d.map.center;
+  out.map = {
+    base: typeof m.base === 'string' ? m.base.slice(0, 20) : d.map.base,
+    labels: typeof m.labels === 'boolean' ? m.labels : d.map.labels,
+    hillshade: typeof m.hillshade === 'boolean' ? m.hillshade : d.map.hillshade,
+    contours: typeof m.contours === 'boolean' ? m.contours : d.map.contours,
+    dim: fin(m.dim, 0, 0.9, d.map.dim), center: ctr, zoom: fin(m.zoom, 0, 22, d.map.zoom),
+  };
+  out.coordFormat = oneOf(s.coordFormat, ['sk42', 'dd', 'dms'] as const, d.coordFormat);
+  return out;
 }
 
 let timer = 0;
@@ -106,7 +162,7 @@ export function importText(text: string, name: string): { marks: Mark[]; routes:
       marks.push({ id: uid(), name: nm || 'Метка', note, lat, lon, color: '#e3a948', folder: name, created: Date.now() });
   };
   const addRoute = (pts: [number, number][], nm: string) => {
-    const ok = pts.filter(([a, b]) => Number.isFinite(a) && Number.isFinite(b));
+    const ok = pts.filter(([lon, lat]) => Number.isFinite(lon) && Number.isFinite(lat) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180);
     if (ok.length >= 2) routes.push({ id: uid(), name: nm || 'Маршрут', pts: ok });
   };
 
@@ -124,10 +180,12 @@ export function importText(text: string, name: string): { marks: Mark[]; routes:
   const doc = new DOMParser().parseFromString(t, 'application/xml');
   if (doc.querySelector('parsererror')) throw new Error('Не удалось разобрать XML');
   const txt = (el: Element | null) => (el?.textContent || '').trim().slice(0, 500);
+  // Отсутствующий атрибут — NaN (а не 0, как дал бы +null), такая точка отбрасывается.
+  const attr = (el: Element, n: string) => { const v = el.getAttribute(n); return v === null || v.trim() === '' ? NaN : Number(v); };
   // GPX
-  doc.querySelectorAll('wpt').forEach((w) => addMark(+w.getAttribute('lat')!, +w.getAttribute('lon')!, txt(w.querySelector('name')), txt(w.querySelector('desc'))));
+  doc.querySelectorAll('wpt').forEach((w) => addMark(attr(w, 'lat'), attr(w, 'lon'), txt(w.querySelector('name')), txt(w.querySelector('desc'))));
   doc.querySelectorAll('rte, trk').forEach((r) => addRoute(
-    [...r.querySelectorAll('rtept, trkpt')].map((p) => [+p.getAttribute('lon')!, +p.getAttribute('lat')!]), txt(r.querySelector('name'))));
+    [...r.querySelectorAll('rtept, trkpt')].map((p) => [attr(p, 'lon'), attr(p, 'lat')]), txt(r.querySelector('name'))));
   // KML
   doc.querySelectorAll('Placemark').forEach((pm) => {
     const nm = txt(pm.querySelector('name')), desc = txt(pm.querySelector('description'));
@@ -144,4 +202,29 @@ export function download(name: string, data: string | Blob, type = 'application/
   const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: name });
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+// ---------- Резервная копия проекта ----------
+
+/** Немедленно записать проект (без задержки save). Ошибку записи (квота, запрет хранилища) пробрасывает. */
+export function saveNow(s: State) {
+  try { localStorage.setItem(KEY, JSON.stringify(s)); } catch {
+    throw new Error('Не удалось сохранить проект в браузере: не хватает места или хранилище недоступно');
+  }
+}
+
+/** Удалить сохранённый проект из localStorage. */
+export function clearSaved() {
+  try { localStorage.removeItem(KEY); } catch { /* недоступно */ }
+}
+
+/** Разобрать резервную копию; при ошибке — исключение с понятным текстом. */
+export function restoreProject(text: string): State {
+  let raw: unknown;
+  try { raw = JSON.parse(text); } catch { throw new Error('Файл не похож на копию проекта (не JSON)'); }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Файл не похож на копию проекта');
+  const r = raw as Record<string, unknown>;
+  if (r.marks !== undefined && !Array.isArray(r.marks)) throw new Error('В копии повреждён список меток');
+  if (r.routes !== undefined && !Array.isArray(r.routes)) throw new Error('В копии повреждён список маршрутов');
+  return sanitize(merge(defaults(), raw));
 }

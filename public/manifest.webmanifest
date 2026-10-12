@@ -1,0 +1,11 @@
+{
+  "name": "uavmap — радиовидимость дрона",
+  "short_name": "uavmap",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "background_color": "#10151f",
+  "theme_color": "#10151f",
+  "lang": "ru",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

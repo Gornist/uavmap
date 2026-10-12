@@ -36,6 +36,14 @@ export function getTile(z: number, x: number, y: number): Promise<Float32Array |
   return p;
 }
 
+/** Часть тайлов рельефа не загрузилась: считать по нулям нельзя — вердикт был бы ложным. */
+export class DemMissingError extends Error {
+  constructor(public tiles: number) {
+    super(`Нет данных рельефа (${tiles} тайл.) — проверьте интернет или офлайн-карты`);
+    this.name = 'DemMissingError';
+  }
+}
+
 /** Мозаика высот, склеенная из тайлов: удобно передавать в воркер одним массивом. */
 export interface DemGrid {
   z: number; px0: number; py0: number; // левый верхний угол в глобальных пикселях
@@ -55,14 +63,16 @@ export async function fetchGrid(points: LatLon[], z: number, pad = 2): Promise<D
   const width = cols * TILE, height = rows * TILE;
   const data = new Float32Array(width * height);
   const jobs: Promise<void>[] = [];
+  let missing = 0;
   for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++) {
     jobs.push(getTile(z, tx, ty).then((t) => {
-      if (!t) return;
+      if (!t) { missing++; return; }
       const ox = (tx - tx0) * TILE, oy = (ty - ty0) * TILE;
       for (let r = 0; r < TILE; r++) data.set(t.subarray(r * TILE, r * TILE + TILE), (oy + r) * width + ox);
     }));
   }
   await Promise.all(jobs);
+  if (missing) throw new DemMissingError(missing);
   return { z, px0: tx0 * TILE, py0: ty0 * TILE, width, height, data };
 }
 
@@ -75,10 +85,16 @@ export function sampleGrid(g: DemGrid, gx: number, gy: number): number {
   return (d[i] * (1 - fx) + d[i + 1] * fx) * (1 - fy) + (d[i + g.width] * (1 - fx) + d[i + g.width + 1] * fx) * fy;
 }
 
+/** Высота в точке или null, если рельеф недоступен. */
 export async function elevationAt(p: LatLon, z = 14): Promise<number | null> {
-  const g = await fetchGrid([p], z, 1);
-  const [x, y] = lonLatToPixel(p.lon, p.lat, z);
-  return sampleGrid(g, x, y);
+  try {
+    const g = await fetchGrid([p], z, 1);
+    const [x, y] = lonLatToPixel(p.lon, p.lat, z);
+    return sampleGrid(g, x, y);
+  } catch (e) {
+    if (e instanceof DemMissingError) return null;
+    throw e;
+  }
 }
 
 /** Уровень DEM, при котором шаг пикселя ≈ требуемому шагу выборки. */
@@ -101,12 +117,13 @@ export async function profile(a: LatLon, b: LatLon, n: number, z: number): Promi
       need.set(`${tx}/${ty}`, [tx, ty]);
     }
   }
-  const tiles = new Map<string, Float32Array | null>();
-  await Promise.all([...need].map(([k, [tx, ty]]) => getTile(z, tx, ty).then((t) => { tiles.set(k, t); })));
+  const tiles = new Map<string, Float32Array>();
+  let missing = 0;
+  await Promise.all([...need].map(([k, [tx, ty]]) => getTile(z, tx, ty).then((t) => { if (t) tiles.set(k, t); else missing++; })));
+  if (missing) throw new DemMissingError(missing);
   const at = (ix: number, iy: number) => {
     const tx = Math.floor(ix / TILE), ty = Math.floor(iy / TILE);
-    const t = tiles.get(`${tx}/${ty}`);
-    return t ? t[(iy - ty * TILE) * TILE + (ix - tx * TILE)] : 0;
+    return tiles.get(`${tx}/${ty}`)![(iy - ty * TILE) * TILE + (ix - tx * TILE)];
   };
   const out = new Float32Array(n + 1);
   pix.forEach(([x, y], i) => {

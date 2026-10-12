@@ -20,9 +20,9 @@ export interface RadioPreset { id: string; name: string; note: string; p: Partia
 export const PRESETS: RadioPreset[] = [
   { id: 'elrs24', name: 'ELRS 2.4 ГГц · 250 Гц', note: '100 мВт, диполи', p: { freqMHz: 2440, txPowerDbm: 20, txGainDbi: 2, rxGainDbi: 2, sensDbm: -108 } },
   { id: 'elrs24_50', name: 'ELRS 2.4 ГГц · 50 Гц', note: '250 мВт, дальний режим', p: { freqMHz: 2440, txPowerDbm: 24, txGainDbi: 2, rxGainDbi: 2, sensDbm: -115 } },
-  { id: 'elrs900', name: 'ELRS 868/915 МГц · 100 Гц', note: '250 мВт', p: { freqMHz: 868, txPowerDbm: 24, txGainDbi: 2, rxGainDbi: 2, sensDbm: -117 } },
-  { id: 'crsf', name: 'Crossfire 868 МГц · 50 Гц', note: '250 мВт', p: { freqMHz: 868, txPowerDbm: 24, txGainDbi: 2, rxGainDbi: 2, sensDbm: -130 } },
-  { id: 'lora433', name: 'LoRa 433 МГц · телеметрия', note: '100 мВт', p: { freqMHz: 433, txPowerDbm: 20, txGainDbi: 2, rxGainDbi: 2, sensDbm: -125 } },
+  { id: 'elrs900', name: 'ELRS 868/915 МГц · 100 Гц', note: '250 мВт (в ЕС на 868 — 25 мВт ERP)', p: { freqMHz: 868, txPowerDbm: 24, txGainDbi: 2, rxGainDbi: 2, sensDbm: -117 } },
+  { id: 'crsf', name: 'Crossfire 868 МГц · 50 Гц', note: '250 мВт (в ЕС лимит 25 мВт ERP)', p: { freqMHz: 868, txPowerDbm: 24, txGainDbi: 2, rxGainDbi: 2, sensDbm: -120 } },
+  { id: 'lora433', name: 'LoRa 433 МГц · SF8/125 кГц', note: '100 мВт (в ЕС лимит 10 мВт ERP)', p: { freqMHz: 433, txPowerDbm: 20, txGainDbi: 2, rxGainDbi: 2, sensDbm: -125 } },
   { id: 'vtx58', name: 'Видео 5.8 ГГц аналог', note: '600 мВт, клевер/пэтч', p: { freqMHz: 5800, txPowerDbm: 28, txGainDbi: 2, rxGainDbi: 8, sensDbm: -90 } },
   { id: 'vtx12', name: 'Видео 1.2 ГГц аналог', note: '800 мВт', p: { freqMHz: 1280, txPowerDbm: 29, txGainDbi: 2, rxGainDbi: 3, sensDbm: -90 } },
   { id: 'dig58', name: 'Цифровое видео 5.8 ГГц', note: '~700 мВт, типовой HD-линк', p: { freqMHz: 5800, txPowerDbm: 28, txGainDbi: 2, rxGainDbi: 4, sensDbm: -94 } },
@@ -31,10 +31,16 @@ export const PRESETS: RadioPreset[] = [
 
 export const DEFAULT_RADIO: RadioParams = {
   freqMHz: 2440, txPowerDbm: 20, txGainDbi: 2, rxGainDbi: 2, sensDbm: -108,
-  lossDb: 2, clutterDb: 0, fadeMarginDb: 10, k: 4 / 3,
+  lossDb: 4, clutterDb: 0, fadeMarginDb: 10, k: 4 / 3, // 4 дБ: кабели + поляризация + корпус
 };
 
 export const C = 299792458;
+
+/** k < 0.5 физически бессмыслен и ломает расчёт (k ≤ 0 → NaN); очень большой k — плоская Земля. */
+export const clampK = (k: number) => (Number.isFinite(k) ? Math.min(1e9, Math.max(0.5, k)) : 4 / 3);
+
+/** Множитель вторичных клиньев Дейгу (ITU-R P.526): мал при слабом главном препятствии. */
+export const deygoutT = (mainLoss: number) => 1 - Math.exp(-mainLoss / 6);
 
 export function fspl(distM: number, fMHz: number): number {
   return 32.45 + 20 * Math.log10(Math.max(distM, 1) / 1000) + 20 * Math.log10(fMHz);
@@ -64,7 +70,7 @@ export function freeSpaceRange(p: RadioParams, margin = p.fadeMarginDb): number 
 
 /** Дальность радиогоризонта (обе высоты над рельефом/уровнем), м. */
 export function radioHorizon(h1: number, h2: number, k = 4 / 3): number {
-  const Re = k * R_EARTH;
+  const Re = clampK(k) * R_EARTH;
   return Math.sqrt(2 * Re * Math.max(h1, 0)) + Math.sqrt(2 * Re * Math.max(h2, 0));
 }
 
@@ -79,6 +85,7 @@ export interface LinkResult {
   margin: number;
   status: LinkStatus;
   los: boolean;                 // геометрическая прямая видимость
+  belowGround: boolean;         // антенна А или Б ниже рельефа в своей точке
   minClearance: number;         // min (зазор / радиус Френеля); ≥0.6 — зона «чистая»
   fresnelBlocked: number;       // доля перекрытия первой зоны в худшей точке, 0..1+
   edges: number[];              // индексы препятствий, вошедших в расчёт дифракции
@@ -93,7 +100,7 @@ export interface LinkResult {
 export function analyzeLink(elev: ArrayLike<number>, dist: number, hA: number, hB: number, p: RadioParams): LinkResult {
   const n = elev.length - 1;
   const lambda = C / (p.freqMHz * 1e6);
-  const Re = p.k * R_EARTH;
+  const Re = clampK(p.k) * R_EARTH;
   const d = new Float64Array(n + 1), ground = new Float64Array(n + 1), losH = new Float64Array(n + 1), fz = new Float64Array(n + 1);
   let los = true, minClr = Infinity, worstBlock = 0;
   for (let i = 0; i <= n; i++) {
@@ -113,6 +120,8 @@ export function analyzeLink(elev: ArrayLike<number>, dist: number, hA: number, h
   }
 
   // Дейгу: главное препятствие, затем по одному на каждой половине (до 3 клиньев).
+  // Вторичные клинья берутся с множителем T = 1 − exp(−Lp/6) (ITU-R P.526, метод для трёх клиньев):
+  // без него на гладком рельефе соседние с вершиной отсчёты дают ложные +5…10 дБ.
   const edges: number[] = [];
   const deygout = (a: number, b: number, depth: number): number => {
     if (b - a < 2) return 0;
@@ -128,17 +137,19 @@ export function analyzeLink(elev: ArrayLike<number>, dist: number, hA: number, h
     edges.push(bi);
     const L = knifeEdge(best);
     if (depth >= 1) return L;
-    return L + deygout(a, bi, depth + 1) + deygout(bi, b, depth + 1);
+    return L + deygoutT(L) * (deygout(a, bi, depth + 1) + deygout(bi, b, depth + 1));
   };
   const diffraction = n >= 2 ? deygout(0, n, 0) : 0;
 
   const fs = fspl(dist, p.freqMHz);
   const totalLoss = fs + diffraction;
   const prx = p.txPowerDbm + p.txGainDbi + p.rxGainDbi - p.lossDb - p.clutterDb - totalLoss;
-  const margin = prx - p.sensDbm;
+  // Антенна ниже рельефа в своей точке (дрон «в склоне» в режиме над взлётом) — связи нет.
+  const belowGround = hA < elev[0] - 0.05 || hB < elev[n] - 0.05; // допуск на округление Float32
+  const margin = belowGround ? Math.min(prx - p.sensDbm, -99) : prx - p.sensDbm;
   const status: LinkStatus = margin >= p.fadeMarginDb ? 'ok' : margin >= 0 ? 'weak' : 'none';
   return {
-    dist, fspl: fs, diffraction, totalLoss, prx, margin, status, los,
+    dist, fspl: fs, diffraction, totalLoss, prx, margin, status, los: los && !belowGround, belowGround,
     minClearance: Number.isFinite(minClr) ? minClr : 1, fresnelBlocked: Math.max(0, worstBlock), edges,
     d, ground, los_h: losH, fz,
   };

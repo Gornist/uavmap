@@ -1,0 +1,307 @@
+import { describe, expect, it } from 'vitest';
+import {
+  analyzeLink, budget, C, DEFAULT_RADIO, freeSpaceRange, fresnelR, fspl, knifeEdge, minHeightForLink, PRESETS,
+  radioHorizon, RadioParams,
+} from './radio';
+import { R_EARTH } from './geo';
+
+const P: RadioParams = { ...DEFAULT_RADIO };
+/** Почти плоская Земля (k огромен): кривизна не влияет — для проверок «чистой» геометрии. */
+const FLAT: RadioParams = { ...P, k: 1e9 };
+
+/** Равномерный профиль из n+1 точек: base + (опционально) клинья {индекс: высота}. */
+function profile(n: number, base = 0, spikes: Record<number, number> = {}): Float64Array {
+  const e = new Float64Array(n + 1).fill(base);
+  for (const [i, h] of Object.entries(spikes)) e[+i] = h;
+  return e;
+}
+
+describe('fspl (ITU-R P.525: L = 32.45 + 20·lg f[МГц] + 20·lg d[км])', () => {
+  it('1 км / 2400 МГц ≈ 100.05 дБ', () => expect(fspl(1000, 2400)).toBeCloseTo(100.05, 1));
+  it('10 км / 868 МГц ≈ 111.2 дБ', () => expect(fspl(10000, 868)).toBeCloseTo(111.22, 1));
+  it('1 км / 433 МГц ≈ 85.2 дБ, 10 км ≈ 105.2 дБ', () => {
+    expect(fspl(1000, 433)).toBeCloseTo(85.18, 1);
+    expect(fspl(10000, 433)).toBeCloseTo(105.18, 1);
+  });
+  it('+6.02 дБ при удвоении расстояния и частоты', () => {
+    expect(fspl(2000, 868) - fspl(1000, 868)).toBeCloseTo(6.02, 2);
+    expect(fspl(1000, 1736) - fspl(1000, 868)).toBeCloseTo(6.02, 2);
+  });
+  it('расстояние <1 м ограничено 1 м (нет −∞ и NaN)', () => {
+    expect(Number.isFinite(fspl(0, 2400))).toBe(true);
+    expect(fspl(0, 2400)).toBe(fspl(1, 2400));
+  });
+});
+
+describe('knifeEdge (ITU-R P.526, ур. 31)', () => {
+  it('v=0 → ≈6.03 дБ', () => expect(knifeEdge(0)).toBeCloseTo(6.03, 1));
+  it('v ≤ −0.78 → 0, на границе ≈0', () => {
+    expect(knifeEdge(-0.78)).toBe(0);
+    expect(knifeEdge(-5)).toBe(0);
+    expect(knifeEdge(-0.7799)).toBeLessThan(0.05);
+    expect(knifeEdge(-0.7799)).toBeGreaterThanOrEqual(0);
+  });
+  it('v=1 → ≈13.9; v=2.4 → ≈20.5', () => {
+    expect(knifeEdge(1)).toBeCloseTo(13.92, 1);
+    expect(knifeEdge(2.4)).toBeCloseTo(20.5, 0);
+  });
+  it('асимптотика J ≈ 13 + 20·lg v при v ≫ 1 (P.526)', () => {
+    expect(Math.abs(knifeEdge(10) - (13 + 20 * Math.log10(10)))).toBeLessThan(0.5);
+  });
+  it('строго возрастает при v > −0.78', () => {
+    let prev = knifeEdge(-0.78);
+    for (let v = -0.7; v <= 10; v += 0.1) {
+      const j = knifeEdge(v);
+      expect(j).toBeGreaterThan(prev);
+      prev = j;
+    }
+  });
+});
+
+describe('fresnelR', () => {
+  it('середина 10 км, 2.4 ГГц ≈ 17.7 м (17.32·√(d1·d2/(f·D)))', () => {
+    const ref = 17.32 * Math.sqrt((5 * 5) / (2.4 * 10));
+    expect(fresnelR(5000, 5000, C / 2.4e9)).toBeCloseTo(ref, 0);
+    expect(fresnelR(5000, 5000, C / 2.4e9)).toBeGreaterThan(17.5);
+    expect(fresnelR(5000, 5000, C / 2.4e9)).toBeLessThan(17.9);
+  });
+  it('симметрична и максимальна в середине', () => {
+    const l = C / 868e6;
+    expect(fresnelR(2000, 8000, l)).toBeCloseTo(fresnelR(8000, 2000, l), 9);
+    expect(fresnelR(5000, 5000, l)).toBeGreaterThan(fresnelR(2000, 8000, l));
+  });
+  it('у конца трассы → 0', () => expect(fresnelR(0, 1000, 0.12)).toBe(0));
+});
+
+describe('radioHorizon', () => {
+  it('k=4/3: 2 м ≈ 5.8 км, 100 м ≈ 41.2 км (4.12·√h)', () => {
+    expect(radioHorizon(2, 0) / 1000).toBeCloseTo(5.83, 1);
+    expect(radioHorizon(100, 0) / 1000).toBeCloseTo(41.24, 1);
+    expect(radioHorizon(2, 100) / 1000).toBeCloseTo(5.83 + 41.24, 1);
+  });
+  it('k=1 (геометрический) короче, отрицательная высота = 0', () => {
+    expect(radioHorizon(100, 0, 1)).toBeLessThan(radioHorizon(100, 0, 4 / 3));
+    expect(radioHorizon(-5, 0)).toBe(0);
+  });
+});
+
+describe('budget / freeSpaceRange', () => {
+  it('budget = Pt+Gt+Gr−потери−клаттер−чувствительность', () => {
+    expect(budget(P)).toBe(20 + 2 + 2 - 4 - 0 + 108);
+  });
+  it('fspl(freeSpaceRange) == budget − запас (по умолчанию fadeMargin и явный)', () => {
+    expect(fspl(freeSpaceRange(P), P.freqMHz)).toBeCloseTo(budget(P) - P.fadeMarginDb, 6);
+    expect(fspl(freeSpaceRange(P, 0), P.freqMHz)).toBeCloseTo(budget(P), 6);
+    expect(fspl(freeSpaceRange(P, 20), P.freqMHz)).toBeCloseTo(budget(P) - 20, 6);
+  });
+  it('то же для всех пресетов; дальность растёт при падении частоты и росте запаса мощности', () => {
+    for (const pr of PRESETS) {
+      const p = { ...DEFAULT_RADIO, ...pr.p };
+      expect(fspl(freeSpaceRange(p), p.freqMHz)).toBeCloseTo(budget(p) - p.fadeMarginDb, 6);
+      expect(freeSpaceRange(p)).toBeGreaterThan(100);
+    }
+    expect(freeSpaceRange({ ...P, freqMHz: 868 })).toBeGreaterThan(freeSpaceRange(P));
+    expect(freeSpaceRange({ ...P, txPowerDbm: P.txPowerDbm + 20 * Math.log10(2) })).toBeCloseTo(2 * freeSpaceRange(P), 3);
+  });
+  it('ELRS 2.4 (потери 4 дБ): ≈7.8 км в свободном пространстве при запасе 10 дБ', () => {
+    expect(freeSpaceRange(P) / 1000).toBeCloseTo(7.8, 0);
+  });
+});
+
+describe('analyzeLink: синтетические трассы', () => {
+  const N = 100, D = 10000;
+
+  it('ровная земля + высокие мачты: LOS, дифракция 0, margin = budget − fspl', () => {
+    const r = analyzeLink(profile(N), D, 100, 100, FLAT);
+    expect(r.los).toBe(true);
+    expect(r.diffraction).toBe(0);
+    expect(r.edges).toEqual([]);
+    expect(r.fspl).toBeCloseTo(fspl(D, P.freqMHz), 9);
+    expect(r.margin).toBeCloseTo(budget(P) - fspl(D, P.freqMHz), 6);
+    expect(r.minClearance).toBeGreaterThan(1);
+    expect(r.fresnelBlocked).toBe(0);
+    expect(r.d.length).toBe(N + 1);
+    expect(r.los_h[0]).toBe(100);
+    expect(r.los_h[N]).toBe(100);
+    expect(r.d[N]).toBeCloseTo(D, 9);
+  });
+
+  it('prx и totalLoss согласованы с margin', () => {
+    const r = analyzeLink(profile(N), D, 100, 120, P);
+    expect(r.totalLoss).toBeCloseTo(r.fspl + r.diffraction, 9);
+    expect(r.margin).toBeCloseTo(r.prx - P.sensDbm, 9);
+  });
+
+  it('клин ровно на линии визирования → дифракция ≈ 6.03 дБ', () => {
+    const r = analyzeLink(profile(N, 0, { 50: 100 }), D, 100, 100, FLAT);
+    expect(r.diffraction).toBeCloseTo(6.03, 1);
+    expect(r.edges).toEqual([50]);
+    expect(r.margin).toBeCloseTo(budget(P) - fspl(D, P.freqMHz) - 6.03, 1);
+    expect(r.fresnelBlocked).toBeCloseTo(0.5, 2);
+    expect(r.minClearance).toBeCloseTo(0, 6);
+  });
+
+  it('клин выше линии → los=false, потери = J(v) и растут с высотой', () => {
+    const lambda = C / (P.freqMHz * 1e6);
+    const r20 = analyzeLink(profile(N, 0, { 50: 120 }), D, 100, 100, FLAT);
+    const v = 20 * Math.sqrt((2 * D) / (lambda * 5000 * 5000));
+    expect(r20.los).toBe(false);
+    expect(r20.diffraction).toBeCloseTo(knifeEdge(v), 6);
+    let prev = r20.diffraction;
+    for (const h of [140, 180, 250]) {
+      const r = analyzeLink(profile(N, 0, { 50: h }), D, 100, 100, FLAT);
+      expect(r.diffraction).toBeGreaterThan(prev);
+      expect(r.margin).toBeLessThan(budget(P) - fspl(D, P.freqMHz));
+      prev = r.diffraction;
+    }
+  });
+
+  it('клин в 0.6 радиуса Френеля под линией: LOS есть, дифракции нет, minClearance ≈ 0.6', () => {
+    const f = analyzeLink(profile(N), D, 100, 100, FLAT).fz[50];
+    const r = analyzeLink(profile(N, 0, { 50: 100 - 0.6 * f }), D, 100, 100, FLAT);
+    expect(r.los).toBe(true);
+    expect(r.diffraction).toBe(0);
+    expect(r.minClearance).toBeCloseTo(0.6, 2);
+  });
+
+  it('два клина на линии: Lp + T·Ls, T = 1 − exp(−Lp/6) (P.526), 2 препятствия', () => {
+    const one = analyzeLink(profile(N, 0, { 33: 100 }), D, 100, 100, FLAT);
+    const two = analyzeLink(profile(N, 0, { 33: 100, 66: 100 }), D, 100, 100, FLAT);
+    expect(two.diffraction).toBeGreaterThanOrEqual(one.diffraction);
+    expect(two.diffraction).toBeCloseTo(6.03 + (1 - Math.exp(-6.03 / 6)) * 6.03, 1);
+    expect(two.edges.length).toBe(2);
+  });
+
+  it('три клина: потери не убывают с добавлением препятствий', () => {
+    const two = analyzeLink(profile(N, 0, { 25: 100, 75: 100 }), D, 100, 100, FLAT);
+    const three = analyzeLink(profile(N, 0, { 25: 100, 50: 100, 75: 100 }), D, 100, 100, FLAT);
+    expect(three.diffraction).toBeGreaterThanOrEqual(two.diffraction);
+  });
+
+  it('несимметричные высоты: линия визирования линейна, клин на линии даёт ≈6 дБ', () => {
+    // A=50 м, B=150 м → в середине линия на 100 м
+    const r = analyzeLink(profile(N, 0, { 50: 100 }), D, 50, 150, FLAT);
+    expect(r.los_h[50]).toBeCloseTo(100, 9);
+    expect(r.diffraction).toBeCloseTo(6.03, 1);
+  });
+
+  it('кривизна Земли: 30 км над ровной землёй при антеннах 2 м → за радиогоризонтом, los=false', () => {
+    const r = analyzeLink(profile(200), 30000, 2, 2, P);
+    expect(radioHorizon(2, 2)).toBeLessThan(30000);
+    expect(r.los).toBe(false);
+    expect(r.diffraction).toBeGreaterThan(10);
+    expect(r.margin).toBeLessThan(budget(P) - fspl(30000, P.freqMHz) - 10);
+    // сопоставимая плоская Земля — LOS и без дифракции
+    const flat = analyzeLink(profile(200), 30000, 2, 2, FLAT);
+    expect(flat.los).toBe(true);
+  });
+
+  it('кривизна Земли: граница LOS совпадает с radioHorizon (±2%)', () => {
+    const hz = radioHorizon(2, 2);
+    expect(analyzeLink(profile(200), hz * 0.98, 2, 2, P).los).toBe(true);
+    expect(analyzeLink(profile(200), hz * 1.02, 2, 2, P).los).toBe(false);
+    // Re = k·R_EARTH учтён: при k=1 горизонт короче
+    const hz1 = radioHorizon(2, 2, 1);
+    expect(analyzeLink(profile(200), hz1 * 1.02, 2, 2, { ...P, k: 1 }).los).toBe(false);
+    expect(hz1).toBeCloseTo(2 * Math.sqrt(2 * R_EARTH * 2), 3);
+  });
+
+  it('кривизна Земли: высокие мачты (200 м) на 30 км — LOS, дифракции нет', () => {
+    const r = analyzeLink(profile(200), 30000, 200, 200, P);
+    expect(r.los).toBe(true);
+    expect(r.diffraction).toBe(0);
+    expect(r.margin).toBeCloseTo(budget(P) - fspl(30000, P.freqMHz), 6);
+  });
+
+  it('статусы ok / weak / none по порогам запаса', () => {
+    const base = analyzeLink(profile(N), D, 100, 100, FLAT);
+    const withMargin = (target: number) =>
+      analyzeLink(profile(N), D, 100, 100, { ...FLAT, sensDbm: FLAT.sensDbm + (base.margin - target) });
+    const ok = withMargin(P.fadeMarginDb + 5), edgeOk = withMargin(P.fadeMarginDb);
+    const weak = withMargin(P.fadeMarginDb - 5), edgeWeak = withMargin(0.001), none = withMargin(-5);
+    expect(ok.margin).toBeCloseTo(P.fadeMarginDb + 5, 6);
+    expect(ok.status).toBe('ok');
+    expect(edgeOk.status).toBe('ok');
+    expect(weak.status).toBe('weak');
+    expect(edgeWeak.status).toBe('weak');
+    expect(none.status).toBe('none');
+  });
+
+  it('клаттер и потери на кабелях уменьшают запас 1:1', () => {
+    const a = analyzeLink(profile(N), D, 100, 100, FLAT);
+    const b = analyzeLink(profile(N), D, 100, 100, { ...FLAT, clutterDb: 7, lossDb: FLAT.lossDb + 3 });
+    expect(a.margin - b.margin).toBeCloseTo(10, 9);
+  });
+
+  it('вырожденные профили (n=1, n=2) не падают', () => {
+    const r1 = analyzeLink(profile(1), 500, 10, 10, P);
+    expect(r1.diffraction).toBe(0);
+    expect(r1.minClearance).toBe(1);
+    expect(Number.isFinite(analyzeLink(profile(2), 500, 10, 10, P).margin)).toBe(true);
+  });
+});
+
+describe('minHeightForLink', () => {
+  const N = 100, D = 5000; // fspl ≈114.2 дБ → запас 15.8 дБ, допустимая дифракция ≲5.8 дБ
+  const ridge = (h: number) => profile(N, 0, { 50: h });
+  const fn = (h: number) => h;
+
+  it('на найденной высоте запас ≥ fade, на 3 м ниже — меньше', () => {
+    const e = ridge(60);
+    const h = minHeightForLink(e, D, 2, fn, P)!;
+    expect(h).not.toBeNull();
+    expect(h).toBeGreaterThan(0);
+    expect(analyzeLink(e, D, 2, fn(h), P).margin).toBeGreaterThanOrEqual(P.fadeMarginDb);
+    expect(analyzeLink(e, D, 2, fn(h - 3), P).margin).toBeLessThan(P.fadeMarginDb);
+  });
+
+  it('ровная земля, дрон на 100 м: достаточно малой высоты, и она ≥ 0', () => {
+    const h = minHeightForLink(profile(N), D, 100, fn, P)!;
+    expect(h).toBeGreaterThanOrEqual(0);
+    expect(analyzeLink(profile(N), D, 100, fn(h), P).margin).toBeGreaterThanOrEqual(P.fadeMarginDb);
+  });
+
+  it('монотонность: выше хребет → не ниже требуемая высота', () => {
+    let prev = -1;
+    for (const r of [0, 20, 40, 60, 80, 120]) {
+      const h = minHeightForLink(ridge(r), D, 2, fn, P);
+      expect(h).not.toBeNull();
+      expect(h!).toBeGreaterThanOrEqual(prev);
+      prev = h!;
+    }
+  });
+
+  it('null, если не хватает и на maxH', () => {
+    expect(minHeightForLink(ridge(60), D, 2, fn, P, 5)).toBeNull();
+    expect(minHeightForLink(ridge(60), 400000, 2, fn, P)).toBeNull();
+  });
+});
+
+describe('аудит радиомодели (2A): регрессии', () => {
+  it('гладкая Земля 30 км, 2.44 ГГц, дрон 120 м: без ложного скачка Дейгу (≤ 6 дБ, было 12.5)', () => {
+    const r = analyzeLink(profile(600), 30000, 2, 120, P);
+    expect(r.diffraction).toBeLessThan(6);
+  });
+  it('дифракция на гладкой Земле растёт плавно с расстоянием (нет скачка > 5 дБ между соседними 100 м)', () => {
+    const p868 = { ...P, freqMHz: 868 };
+    let prev = 0;
+    for (let D = 2000; D <= 8000; D += 100) {
+      const n = Math.round(D / 15);
+      const dl = analyzeLink(profile(n), D, 2, 50, p868).diffraction;
+      expect(dl - prev).toBeLessThan(5);
+      prev = dl;
+    }
+  });
+  it('дрон ниже рельефа в своей точке → связи нет, belowGround', () => {
+    const e = profile(100, 0, { 100: 100 });
+    const r = analyzeLink(e, 2000, 2, 30, P);
+    expect(r.belowGround).toBe(true);
+    expect(r.los).toBe(false);
+    expect(r.status).toBe('none');
+  });
+  it('k ≤ 0 не даёт NaN', () => {
+    const r = analyzeLink(profile(100), 10000, 30, 100, { ...P, k: 0 });
+    expect(Number.isFinite(r.margin)).toBe(true);
+    expect(Number.isFinite(radioHorizon(10, 10, -1))).toBe(true);
+  });
+});
