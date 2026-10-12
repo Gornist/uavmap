@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <meta name="theme-color" content="#10151f" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <title>Радиус — радиовидимость дрона</title>
+</head>
+<body>
+  <div id="map"></div>
+
+  <!-- прицел -->
+  <div id="cross" aria-hidden="true">
+    <svg viewBox="0 0 48 48" width="48" height="48">
+      <circle cx="24" cy="24" r="11" fill="none" stroke="currentColor" stroke-width="2"/>
+      <path d="M24 4v12M24 32v12M4 24h12M32 24h12" stroke="currentColor" stroke-width="2"/>
+      <circle cx="24" cy="24" r="1.6" fill="currentColor"/>
+    </svg>
+  </div>
+  <div id="crossLabel"></div>
+
+  <header id="topLeft">
+    <button class="round" id="btnMenuTop" title="Меню">☰</button>
+    <div class="logo">РАДИУС</div>
+  </header>
+
+  <section id="infoCard" class="card">
+    <div class="ic-head">
+      <span>Высота здесь</span>
+      <b id="hereH">—</b><small>м</small>
+      <button id="infoToggle" class="mini" title="Свернуть">−</button>
+    </div>
+    <div id="infoBody">
+      <div class="ic-coords" id="hereCoords"></div>
+      <div id="hereLink" class="ic-link" hidden></div>
+      <button class="ic-more" id="btnPoint">Все данные точки…</button>
+    </div>
+  </section>
+
+  <div id="rightBar">
+    <button class="round" id="zIn" title="Приблизить">+</button>
+    <button class="round" id="zOut" title="Отдалить">−</button>
+    <button class="round" id="btnGps" title="Где я">⌖</button>
+    <button class="round" id="btnHome" title="К пульту">⌂</button>
+  </div>
+
+  <!-- строка «связь до креста» -->
+  <div id="linkStrip" hidden>
+    <div class="ls-tabs">
+      <button data-ls="link" class="on">Связь до креста</button>
+      <button data-ls="zone">Зона покрытия</button>
+      <button data-ls="best">Где встать</button>
+      <button id="lsClose" class="ls-x" title="Скрыть">×</button>
+    </div>
+    <div class="ls-status" id="lsStatus">Двигайте карту — прицел покажет связь</div>
+    <div class="ls-inputs">
+      <label><span>А · антенна пульта</span><input id="inAnt" type="number" inputmode="decimal" min="0" step="0.5"/><i>м</i></label>
+      <label><span>Б · дрон <em id="altModeLbl"></em></span><input id="inDrone" type="number" inputmode="decimal" min="0" step="5"/><i>м</i></label>
+      <button id="btnProfile" class="primary">Профиль</button>
+    </div>
+  </div>
+
+  <nav id="bottomBar">
+    <button id="btnMark" class="accent" title="Метка в прицел">✚⚑</button>
+    <button id="btnLink">Проверить связь</button>
+    <button id="btnRuler">📏 Линейка</button>
+    <button id="btnLabels">🏷 Подписи</button>
+    <button id="btnFull">⛶ Во весь экран</button>
+    <button id="btnMenu" class="right">☰ Меню</button>
+  </nav>
+
+  <div id="rulerBar" hidden>
+    <span id="rulerText">Линейка: ставьте точки прицелом</span>
+    <button id="rulerAdd" class="primary">+ точка</button>
+    <button id="rulerUndo">↶</button>
+    <button id="rulerSave">В маршрут</button>
+    <button id="rulerDone">Готово</button>
+  </div>
+
+  <div id="progress" hidden><div></div><span></span></div>
+
+  <aside id="drawer" aria-hidden="true">
+    <div class="dr-head">
+      <div>
+        <div class="logo big">РАДИУС</div>
+        <div class="dr-sub">Радиовидимость дрона · рельеф · зона Френеля · радиогоризонт</div>
+      </div>
+      <button class="mini" id="drClose">✕</button>
+    </div>
+    <div id="drBody"></div>
+  </aside>
+  <div id="scrim"></div>
+
+  <section id="sheet" hidden>
+    <div class="sh-head"><h3 id="shTitle"></h3><button class="mini" id="shClose">✕</button></div>
+    <div id="shBody"></div>
+  </section>
+
+  <div id="toast"></div>
+  <input type="file" id="fileIn" accept=".geojson,.json,.gpx,.kml" hidden />
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
