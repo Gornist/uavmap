@@ -1,5 +1,5 @@
 // Состояние проекта в localStorage + экспорт/импорт. Всё хранится только на устройстве.
-import { DEFAULT_RADIO, RadioParams } from './radio';
+import { DEFAULT_RADIO, DEFAULT_VIDEO, DEFAULT_VIDEO_PRESET, RadioParams } from './radio';
 import type { CoordFormat } from './coords';
 import type { ClutterClass } from './clutter';
 
@@ -17,7 +17,9 @@ export interface State {
   altMode: 'takeoff' | 'terrain';
   radio: RadioParams;
   presetId: string;
-  coverage: { radius: number; heights: number[]; show: 'margin' | 'minh'; heightIdx: number; opacity: number };
+  /** Вторая линия — видео. radio/presetId выше — линия «Управление» (формат прежних проектов). */
+  video: { enabled: boolean; radio: RadioParams; presetId: string };
+  coverage: { radius: number; heights: number[]; show: 'margin' | 'minh'; heightIdx: number; opacity: number; line: 'rc' | 'video' | 'both' };
   map: { base: string; labels: boolean; hillshade: boolean; contours: boolean; dim: number; center: [number, number]; zoom: number };
   coordFormat: CoordFormat;
   clutter: ClutterClass;   // местность у пульта
@@ -34,7 +36,8 @@ export const defaults = (): State => ({
   altMode: 'takeoff',
   radio: { ...DEFAULT_RADIO },
   presetId: 'elrs24',
-  coverage: { radius: 15000, heights: [30, 60, 100, 150, 250, 400], show: 'margin', heightIdx: 2, opacity: 0.6 },
+  video: { enabled: true, radio: { ...DEFAULT_VIDEO }, presetId: DEFAULT_VIDEO_PRESET },
+  coverage: { radius: 15000, heights: [30, 60, 100, 150, 250, 400], show: 'margin', heightIdx: 2, opacity: 0.6, line: 'both' },
   map: { base: 'sat', labels: true, hillshade: false, contours: true, dim: 0.35, center: [40.2045, 43.6805], zoom: 12 },
   coordFormat: 'sk42',
   clutter: 'open',
@@ -63,6 +66,16 @@ const okLL = (lat: unknown, lon: unknown) => typeof lat === 'number' && typeof l
 const oneOf = <T extends string>(v: unknown, allowed: readonly T[], def: T): T => (allowed.includes(v as T) ? (v as T) : def);
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 
+/** Радиопараметры из недоверенного источника: каждое поле — число в разумных пределах, иначе значение по умолчанию. */
+function sanitizeRadio(src: unknown, def: RadioParams): RadioParams {
+  const r: Record<string, unknown> = isObj(src) ? src : {};
+  const out = { ...def };
+  for (const k of Object.keys(def) as (keyof RadioParams)[]) out[k] = fin(r[k], -1e4, 1e6, def[k]);
+  if (out.freqMHz <= 0) out.freqMHz = def.freqMHz;
+  if (out.k <= 0) out.k = def.k;
+  return out;
+}
+
 /** Привести состояние из недоверенного источника (localStorage, файл копии) к корректному виду. */
 export function sanitize(s: State): State {
   const d = defaults();
@@ -85,12 +98,14 @@ export function sanitize(s: State): State {
     : null;
   out.droneH = fin(s.droneH, 0, 10000, d.droneH);
   out.altMode = oneOf(s.altMode, ['takeoff', 'terrain'] as const, d.altMode);
-  const r: Record<string, unknown> = isObj(s.radio) ? s.radio : {};
-  out.radio = { ...d.radio };
-  for (const k of Object.keys(d.radio) as (keyof RadioParams)[]) out.radio[k] = fin(r[k], -1e4, 1e6, d.radio[k]);
-  if (out.radio.freqMHz <= 0) out.radio.freqMHz = d.radio.freqMHz;
-  if (out.radio.k <= 0) out.radio.k = d.radio.k;
+  out.radio = sanitizeRadio(s.radio, d.radio);
   out.presetId = typeof s.presetId === 'string' ? s.presetId.slice(0, 40) : d.presetId;
+  const v: Record<string, unknown> = isObj(s.video) ? s.video : {};
+  out.video = {
+    enabled: typeof v.enabled === 'boolean' ? v.enabled : d.video.enabled,
+    radio: sanitizeRadio(v.radio, d.video.radio),
+    presetId: typeof v.presetId === 'string' ? v.presetId.slice(0, 40) : d.video.presetId,
+  };
   const c: Record<string, unknown> = isObj(s.coverage) ? s.coverage : {};
   const heights = (Array.isArray(c.heights) ? c.heights : []).filter((x): x is number => typeof x === 'number' && Number.isFinite(x) && x >= 0 && x <= 10000);
   const sortedH = [...new Set(heights)].sort((a, b) => a - b).slice(0, 12); // «мин. высота» требует возрастания
@@ -100,6 +115,7 @@ export function sanitize(s: State): State {
     show: oneOf(c.show, ['margin', 'minh'] as const, d.coverage.show),
     heightIdx: Math.round(fin(c.heightIdx, 0, 11, d.coverage.heightIdx)),
     opacity: fin(c.opacity, 0, 1, d.coverage.opacity),
+    line: oneOf(c.line, ['rc', 'video', 'both'] as const, d.coverage.line),
   };
   const m: Record<string, unknown> = isObj(s.map) ? s.map : {};
   const ctr = Array.isArray(m.center) && okLL(m.center[1], m.center[0]) ? [m.center[0], m.center[1]] as [number, number] : d.map.center;
@@ -137,7 +153,7 @@ export function toGeoJSON(s: State) {
     type: 'Feature', geometry: { type: 'Point', coordinates: [s.station.lon, s.station.lat] },
     properties: { kind: 'station', name: s.station.name, antH: s.station.antH },
   });
-  return { type: 'FeatureCollection', features, properties: { app: 'radius', droneH: s.droneH, altMode: s.altMode, radio: s.radio } };
+  return { type: 'FeatureCollection', features, properties: { app: 'radius', droneH: s.droneH, altMode: s.altMode, radio: s.radio, video: s.video } };
 }
 
 const esc = (t: string) => t.replace(/[<>&"']/g, (c) => `&#${c.charCodeAt(0)};`);

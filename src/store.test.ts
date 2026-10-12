@@ -267,3 +267,42 @@ describe('sanitize / restoreProject (ревью Codex)', () => {
     expect(st.coordFormat).toBe('sk42');
   });
 });
+
+describe('вторая линия (видео) в состоянии', () => {
+  it('по умолчанию: видео включено, аналог 5.8 ГГц; управление — прежнее', async () => {
+    const { defaults } = await import('./store');
+    const d = defaults();
+    expect(d.video.enabled).toBe(true);
+    expect(d.video.presetId).toBe('vtx58');
+    expect(d.video.radio.freqMHz).toBe(5800);
+    expect(d.video.radio).not.toBe(d.radio);
+    expect(d.radio).toEqual(DEFAULT_RADIO);
+  });
+
+  it('старый проект без video: управление сохранено, видео — по умолчанию', async () => {
+    const { restoreProject, defaults } = await import('./store');
+    const st = restoreProject(JSON.stringify({ radio: { freqMHz: 868, txPowerDbm: 24 }, presetId: 'crsf', coverage: { radius: 5000 } }));
+    expect(st.radio.freqMHz).toBe(868);
+    expect(st.presetId).toBe('crsf');
+    expect(st.video).toEqual(defaults().video);
+    expect(st.coverage.line).toBe('both');
+  });
+
+  it('video из недоверенных данных: числа проверяются, мусор заменяется значениями по умолчанию', async () => {
+    const { restoreProject } = await import('./store');
+    const st = restoreProject(JSON.stringify({
+      video: { enabled: 'yes', presetId: 5, radio: { freqMHz: 0, txPowerDbm: 'x', k: -1, sensDbm: -95, lossDb: 1e12 } },
+      coverage: { line: 'evil' },
+    }));
+    expect(st.video.enabled).toBe(true);
+    expect(st.video.presetId).toBe('vtx58');
+    expect(st.video.radio.freqMHz).toBe(5800);
+    expect(st.video.radio.txPowerDbm).toBe(28);
+    expect(st.video.radio.k).toBeCloseTo(4 / 3);
+    expect(st.video.radio.sensDbm).toBe(-95);
+    expect(st.video.radio.lossDb).toBe(4);
+    expect(st.coverage.line).toBe('both');
+    expect(restoreProject(JSON.stringify({ video: 'junk' })).video.radio.freqMHz).toBe(5800);
+    expect(restoreProject(JSON.stringify({ video: { enabled: false } })).video.enabled).toBe(false);
+  });
+});

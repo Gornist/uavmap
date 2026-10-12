@@ -5,3 +5,4 @@
 .cov-add input { width: 90px; text-align: right; }
 .cov-opacity { width: 100%; }
 .chips button.x { padding: 4px 8px; }
+.rt td small { display: block; color: var(--muted); font-size: 11px; }

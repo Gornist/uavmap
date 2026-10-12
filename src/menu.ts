@@ -3,7 +3,7 @@
 import { S, $, h, map, center, toast, emit, on, field, BASES, applyMapStyle } from './app';
 import { applyContours } from './contours';
 import { saveNow, clearSaved, restoreProject, importText, toGeoJSON, toGPX, toKML, download } from './store';
-import { PRESETS, RadioParams, budget, freeSpaceRange, radioHorizon } from './radio';
+import { presetsFor, RadioParams, LineId, RadioPreset, budget, freeSpaceRange, radioHorizon } from './radio';
 import { applyPreset, setStation, removeStation, stationGround, altModeText } from './link';
 import { parseCoords, formatCoords, CoordFormat } from './coords';
 import { distance, fmtDist } from './geo';
@@ -226,47 +226,104 @@ const RADIO_FIELDS: { key: keyof RadioParams; label: string; min: number; max: n
   { key: 'k', label: 'Коэффициент рефракции k', min: 0.5, max: 3, step: '0.01' },
 ];
 
-function calc(el: HTMLElement) {
-  section(el, 'Аппаратура');
-  const pl = h('<div class="list"></div>');
-  for (const p of PRESETS) {
-    const li = h(`<div class="li"${p.id === S.presetId ? ' style="border-color:var(--accent)"' : ''}><span class="t"></span><small></small></div>`);
-    li.querySelector('.t')!.textContent = p.name;
-    li.querySelector('small')!.textContent = p.note;
-    li.addEventListener('click', () => { applyPreset(p.id); render(); });
-    pl.appendChild(li);
-  }
-  el.appendChild(pl);
-  if (S.presetId === 'custom') el.appendChild(h('<p class="hint">Параметры изменены вручную.</p>'));
-  el.appendChild(h('<p class="hint">Пресеты ориентировочные — подставьте паспортные данные своей аппаратуры.</p>'));
+let calcTab: LineId = 'rc';
+const lineRadio = (line: LineId) => (line === 'rc' ? S.radio : S.video.radio);
+const linePreset = (line: LineId) => (line === 'rc' ? S.presetId : S.video.presetId);
+/** Подписи полей для видео: передатчик — на дроне, приёмник — на земле. */
+const VIDEO_LABELS: Partial<Record<keyof RadioParams, string>> = {
+  txPowerDbm: 'Мощность видеопередатчика, дБм',
+  txGainDbi: 'Усиление антенны дрона (VTX), дБи',
+  rxGainDbi: 'Усиление антенны приёма на земле, дБи',
+};
 
-  section(el, 'Параметры линии связи');
+function presetList(el: HTMLElement, line: LineId) {
+  const group = (title: string | null, list: RadioPreset[]) => {
+    if (!list.length) return;
+    if (title) el.appendChild(h(`<p class="hint" style="margin:8px 0 2px"></p>`)).textContent = title;
+    const pl = h('<div class="list"></div>');
+    for (const p of list) {
+      const li = h(`<div class="li"${p.id === linePreset(line) ? ' style="border-color:var(--accent)"' : ''}><span class="t"></span><small></small></div>`);
+      li.querySelector('.t')!.textContent = p.name;
+      li.querySelector('small')!.textContent = p.note;
+      li.addEventListener('click', () => { applyPreset(p.id, line); render(); });
+      pl.appendChild(li);
+    }
+    el.appendChild(pl);
+  };
+  const all = presetsFor(line);
+  if (line === 'video') group(null, all);
+  else {
+    group(null, all.filter((p) => p.kind === 'rc'));
+    group('Телеметрия и общий канал (Wi-Fi)', all.filter((p) => p.kind !== 'rc'));
+  }
+}
+
+function lineParams(el: HTMLElement, line: LineId, upd: () => void) {
+  const R = lineRadio(line);
+  for (const f of RADIO_FIELDS) {
+    const label = (line === 'video' && VIDEO_LABELS[f.key]) || f.label;
+    const row = h(field(label, `<input type="number" inputmode="decimal" step="${f.step}">`));
+    const inp = row.querySelector('input') as HTMLInputElement;
+    inp.value = String(R[f.key]);
+    const hint = h('<p class="hint" style="margin:-4px 0 4px;text-align:right"></p>');
+    const showHint = () => { hint.textContent = f.hint ? f.hint(R[f.key]) : ''; hint.hidden = !f.hint; };
+    showHint();
+    inp.addEventListener('change', () => {
+      const v = num(inp.value);
+      if (!Number.isFinite(v) || v < f.min || v > f.max) { inp.value = String(R[f.key]); toast(`${label}: от ${f.min} до ${f.max}`); return; }
+      R[f.key] = v;
+      if (line === 'rc') S.presetId = 'custom'; else S.video.presetId = 'custom';
+      fire('radio'); showHint(); upd();
+    });
+    el.append(row, hint);
+  }
+}
+
+function calc(el: HTMLElement) {
+  section(el, 'Радиолинии');
+  const tabs = h('<div class="seg"></div>');
+  for (const [id, t] of [['rc', 'Управление'], ['video', S.video.enabled ? 'Видео' : 'Видео (выкл.)']] as const) {
+    tabs.appendChild(button(t, calcTab === id ? 'on' : '', () => { calcTab = id; render(); }));
+  }
+  el.appendChild(tabs);
+  el.appendChild(h('<p class="hint">Пилот теряет видео раньше управления, поэтому считаются обе линии; дальность ограничивает слабейшая.</p>'));
+
   const summary = h('<div class="kv"></div>');
   const upd = () => {
     const antH = S.station?.antH ?? 2;
-    const eff = withClutter(S.radio, S.clutter);
-    const bud = budget(eff), fs = freeSpaceRange(eff), hz = radioHorizon(antH, S.droneH, S.radio.k);
+    const rc = withClutter(S.radio, S.clutter), vd = S.video.enabled ? withClutter(S.video.radio, S.clutter) : null;
+    const hz = radioHorizon(antH, S.droneH, S.radio.k);
+    const rng = (p: typeof rc) => { const fs = freeSpaceRange(p); return Number.isFinite(fs) ? fmtDist(fs) : '—'; };
+    const rows: [string, string][] = vd
+      ? [['Потенциал, упр. / видео', `${budget(rc).toFixed(1)} / ${budget(vd).toFixed(1)} дБ`],
+         ['Дальность в своб. пр-ве, упр. / видео', `${rng(rc)} / ${rng(vd)}`],
+         ['Дальность ограничивает', freeSpaceRange(vd) < freeSpaceRange(rc) ? 'видео' : 'управление'],
+         ['Радиогоризонт', fmtDist(hz)]]
+      : [['Энергетический потенциал', `${budget(rc).toFixed(1)} дБ`], ['Дальность в своб. пространстве', rng(rc)], ['Радиогоризонт', fmtDist(hz)]];
     summary.innerHTML = '';
-    for (const [k, v] of [['Энергетический потенциал', `${bud.toFixed(1)} дБ`], ['Дальность в своб. пространстве', Number.isFinite(fs) ? fmtDist(fs) : '—'], ['Радиогоризонт', fmtDist(hz)]]) {
+    for (const [k, v] of rows) {
       const d = h('<div><small></small><b></b></div>');
       d.querySelector('small')!.textContent = k; d.querySelector('b')!.textContent = v;
       summary.appendChild(d);
     }
   };
-  for (const f of RADIO_FIELDS) {
-    const row = h(field(f.label, `<input type="number" inputmode="decimal" step="${f.step}">`));
-    const inp = row.querySelector('input') as HTMLInputElement;
-    inp.value = String(S.radio[f.key]);
-    const hint = h('<p class="hint" style="margin:-4px 0 4px;text-align:right"></p>');
-    const showHint = () => { hint.textContent = f.hint ? f.hint(S.radio[f.key]) : ''; hint.hidden = !f.hint; };
-    showHint();
-    inp.addEventListener('change', () => {
-      const v = num(inp.value);
-      if (!Number.isFinite(v) || v < f.min || v > f.max) { inp.value = String(S.radio[f.key]); toast(`${f.label}: от ${f.min} до ${f.max}`); return; }
-      S.radio[f.key] = v; S.presetId = 'custom';
-      fire('radio'); showHint(); upd();
-    });
-    el.append(row, hint);
+
+  if (calcTab === 'video') {
+    const c = h('<label class="chk"><input type="checkbox"><span>Учитывать видео</span></label>');
+    const ci = c.querySelector('input') as HTMLInputElement;
+    ci.checked = S.video.enabled;
+    ci.addEventListener('change', () => { S.video.enabled = ci.checked; emit('radio'); render(); });
+    el.appendChild(c);
+  }
+  if (calcTab === 'video' && !S.video.enabled) {
+    el.appendChild(h('<p class="hint">Видео выключено: связь, профиль и зона считаются только по управлению.</p>'));
+  } else {
+    section(el, calcTab === 'rc' ? 'Аппаратура управления' : 'Аппаратура видео');
+    presetList(el, calcTab);
+    if (linePreset(calcTab) === 'custom') el.appendChild(h('<p class="hint">Параметры изменены вручную.</p>'));
+    el.appendChild(h('<p class="hint">Пресеты ориентировочные — подставьте паспортные данные своей аппаратуры.</p>'));
+    section(el, calcTab === 'rc' ? 'Параметры линии управления' : 'Параметры линии видео');
+    lineParams(el, calcTab, upd);
   }
 
   section(el, 'Местность у пульта');
@@ -279,7 +336,7 @@ function calc(el: HTMLElement) {
   el.appendChild(cseg);
   const cur = CLUTTER.find((c) => c.id === S.clutter)!;
   const ch = h('<p class="hint"></p>');
-  ch.textContent = `${cur.hint}: +${clutterLoss(S.clutter, S.radio.freqMHz).toFixed(1)} дБ на ${S.radio.freqMHz} МГц (по ITU-R P.833/P.2108; на низких частотах меньше). Складывается с ручными «потерями на местности».`;
+  ch.textContent = `${cur.hint}: +${clutterLoss(S.clutter, S.radio.freqMHz).toFixed(1)} дБ на ${S.radio.freqMHz} МГц${S.video.enabled ? ` (видео: +${clutterLoss(S.clutter, S.video.radio.freqMHz).toFixed(1)} дБ на ${S.video.radio.freqMHz} МГц)` : ''} (по ITU-R P.833/P.2108; на низких частотах меньше). Общая для обеих линий, складывается с ручными «потерями на местности».`;
   el.appendChild(ch);
 
   section(el, 'Высоты');
@@ -438,7 +495,7 @@ function help(el: HTMLElement) {
       '4. «Зона покрытия» (раздел «Расчёт») закрашивает карту по запасу связи.',
     ]],
     ['Запас в дБ', [
-      'Запас — на сколько дБ принимаемый сигнал выше чувствительности приёмника.',
+      'Запас — на сколько дБ принимаемый сигнал выше чувствительности приёмника. Линий две: управление и видео, у каждой свой запас; общий статус и цвет линии на карте — по худшей.',
       'Не меньше желаемого запаса — связь уверенная. От 0 до желаемого — на грани, возможны срывы. Меньше 0 — связи нет.',
     ]],
     ['Зона Френеля', [

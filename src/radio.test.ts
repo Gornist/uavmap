@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  analyzeLink, budget, C, DEFAULT_RADIO, diffractionDeygout, freeSpaceRange, fresnelR, fspl, knifeEdge, minHeightForLink, PRESETS,
+  analyzeLink, analyzePair, RANK, budget, DEFAULT_VIDEO, minHeightForPair, minHeightsForPair, presetsFor, C, DEFAULT_RADIO, diffractionDeygout, freeSpaceRange, fresnelR, fspl, knifeEdge, minHeightForLink, PRESETS,
   radioHorizon, RadioParams,
 } from './radio';
 import { bullingtonTaper } from './diffraction';
@@ -348,5 +348,94 @@ describe('дельта-Буллингтон: поведение analyzeLink', ()
         prev = dl;
       }
     }
+  });
+});
+
+describe('две линии: управление и видео', () => {
+  const rc: RadioParams = { ...DEFAULT_RADIO, freqMHz: 868, txPowerDbm: 24, sensDbm: -117 }; // сильная линия
+  const vd: RadioParams = { ...DEFAULT_VIDEO };                                                // слабее: 5.8 ГГц
+  const n = 100, dist = 20000;
+  const flat = profile(n, 100);
+  const ridge = profile(n, 100, { 50: 160 });
+
+  it('PRESETS: у каждого есть kind; ELRS/Crossfire — rc, 5.8/1.2 ГГц — video, LoRa — telemetry', () => {
+    for (const p of PRESETS) expect(['rc', 'video', 'telemetry']).toContain(p.kind);
+    const k = (id: string) => PRESETS.find((p) => p.id === id)!.kind;
+    expect([k('elrs24'), k('elrs900'), k('crsf')]).toEqual(['rc', 'rc', 'rc']);
+    expect([k('vtx58'), k('vtx12'), k('dig58'), k('wifi24')]).toEqual(['video', 'video', 'video', 'video']);
+    expect(k('lora433')).toBe('telemetry');
+    expect(presetsFor('video').every((p) => p.kind === 'video')).toBe(true);
+    expect(presetsFor('rc').some((p) => p.id === 'lora433')).toBe(true);
+    expect(presetsFor('rc').some((p) => p.id === 'vtx58')).toBe(false);
+  });
+
+  it('video = null → результат как у одиночной линии', () => {
+    const p = analyzePair(flat, dist, 102, 300, rc, null);
+    const one = analyzeLink(flat, dist, 102, 300, rc);
+    expect(p.video).toBeNull();
+    expect(p.worst).toBe('rc');
+    expect(p.status).toBe(one.status);
+    expect(p.rc.margin).toBe(one.margin);
+    expect(p.score).toBeCloseTo(one.margin - rc.fadeMarginDb, 9);
+  });
+
+  it('худшая линия — видео, когда оно слабее; управление — когда слабее оно', () => {
+    const p = analyzePair(flat, dist, 102, 300, rc, vd);
+    expect(p.video!.margin).toBeLessThan(p.rc.margin);
+    expect(p.worst).toBe('video');
+    expect(p.status).toBe(p.video!.status);
+    const weakRc = { ...rc, txPowerDbm: -10 }; // управление практически без мощности
+    const q = analyzePair(flat, dist, 102, 300, weakRc, vd);
+    expect(q.worst).toBe('rc');
+    expect(q.status).toBe(q.rc.status);
+  });
+
+  it('статус пары — по худшей линии; при равных статусах — по запасу сверх желаемого', () => {
+    // видео «ok» с большим порогом хуже, чем управление «ok» с малым: запас сверх порога меньше
+    const a = { ...rc, fadeMarginDb: 3 }, b = { ...vd, fadeMarginDb: 30 };
+    const p = analyzePair(flat, 3000, 102, 130, a, b);
+    expect(p.rc.status).toBe('ok');
+    if (p.video!.status === 'ok') {
+      expect(p.video!.margin - 30).toBeLessThan(p.rc.margin - 3);
+      expect(p.worst).toBe('video');
+    }
+    // дрон под рельефом — обе none, статус none
+    expect(analyzePair(flat, dist, 102, 50, rc, vd).status).toBe('none');
+  });
+
+  it('минимальная высота пары ≥ каждой из одиночных; с video = null совпадает с одиночной', () => {
+    for (const e of [flat, ridge]) {
+      const hf = (hh: number) => 100 + hh;
+      const m = minHeightsForPair(e, dist, 102, hf, rc, vd);
+      const single = (p: RadioParams) => minHeightForLink(e, dist, 102, hf, p);
+      expect(m.rc).toBe(single(rc));
+      expect(m.video).toBe(single(vd));
+      if (m.pair !== null) {
+        expect(m.pair).toBeGreaterThanOrEqual(m.rc!);
+        expect(m.pair).toBeGreaterThanOrEqual(m.video!);
+        // на найденной высоте обе линии держат запас
+        const pr = analyzePair(e, dist, 102, hf(m.pair), rc, vd);
+        expect(pr.rc.margin).toBeGreaterThanOrEqual(rc.fadeMarginDb);
+        expect(pr.video!.margin).toBeGreaterThanOrEqual(vd.fadeMarginDb);
+      }
+      expect(minHeightForPair(e, dist, 102, hf, rc, null)).toBe(single(rc));
+    }
+  });
+
+  it('минимальная высота пары: null, если одна из линий не тянет даже на 1500 м', () => {
+    const dead = { ...vd, txPowerDbm: -30 };
+    expect(minHeightForPair(ridge, 60000, 102, (hh) => 100 + hh, rc, dead)).toBeNull();
+  });
+});
+
+describe('ранжирование пар по статусу (ревью Codex)', () => {
+  it('пара «на грани» выше пары без связи, даже если score у неё ниже', () => {
+    const rc = { ...DEFAULT_RADIO, fadeMarginDb: 0 }, video = { ...DEFAULT_RADIO, fadeMarginDb: 60 };
+    const flat = profile(100);
+    // подбираем высоты так, чтобы получить статусы none и weak
+    const a = analyzePair(flat, 40000, 2, 2, rc, video);
+    const b = analyzePair(flat, 1000, 2, 30, rc, video);
+    const sorted = [a, b].sort((x, y) => RANK[y.status] - RANK[x.status] || y.score - x.score);
+    expect(RANK[sorted[0].status]).toBeGreaterThanOrEqual(RANK[sorted[1].status]);
   });
 });

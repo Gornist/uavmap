@@ -16,25 +16,39 @@ export interface RadioParams {
   k: number;           // коэффициент рефракции (4/3 — стандартная атмосфера)
 }
 
-export interface RadioPreset { id: string; name: string; note: string; p: Partial<RadioParams> }
+/** rc — управление; video — видео; telemetry — телеметрия/LoRa. both — один канал и для управления, и для видео (Wi-Fi). */
+export type PresetKind = 'rc' | 'video' | 'telemetry';
+export interface RadioPreset { id: string; name: string; note: string; kind: PresetKind; both?: boolean; p: Partial<RadioParams> }
+/** Радиолиния: управление (rc) или видео. */
+export type LineId = 'rc' | 'video';
 
 // Значения ориентировочные: подставьте паспортные данные своей аппаратуры.
 export const PRESETS: RadioPreset[] = [
-  { id: 'elrs24', name: 'ELRS 2.4 ГГц · 250 Гц', note: '100 мВт, диполи', p: { freqMHz: 2440, txPowerDbm: 20, txGainDbi: 2, rxGainDbi: 2, sensDbm: -108 } },
-  { id: 'elrs24_50', name: 'ELRS 2.4 ГГц · 50 Гц', note: '250 мВт, дальний режим', p: { freqMHz: 2440, txPowerDbm: 24, txGainDbi: 2, rxGainDbi: 2, sensDbm: -115 } },
-  { id: 'elrs900', name: 'ELRS 868/915 МГц · 100 Гц', note: '250 мВт (в ЕС на 868 — 25 мВт ERP)', p: { freqMHz: 868, txPowerDbm: 24, txGainDbi: 2, rxGainDbi: 2, sensDbm: -117 } },
-  { id: 'crsf', name: 'Crossfire 868 МГц · 50 Гц', note: '250 мВт (в ЕС лимит 25 мВт ERP)', p: { freqMHz: 868, txPowerDbm: 24, txGainDbi: 2, rxGainDbi: 2, sensDbm: -120 } },
-  { id: 'lora433', name: 'LoRa 433 МГц · SF8/125 кГц', note: '100 мВт (в ЕС лимит 10 мВт ERP)', p: { freqMHz: 433, txPowerDbm: 20, txGainDbi: 2, rxGainDbi: 2, sensDbm: -125 } },
-  { id: 'vtx58', name: 'Видео 5.8 ГГц аналог', note: '600 мВт, клевер/пэтч', p: { freqMHz: 5800, txPowerDbm: 28, txGainDbi: 2, rxGainDbi: 8, sensDbm: -90 } },
-  { id: 'vtx12', name: 'Видео 1.2 ГГц аналог', note: '800 мВт', p: { freqMHz: 1280, txPowerDbm: 29, txGainDbi: 2, rxGainDbi: 3, sensDbm: -90 } },
-  { id: 'dig58', name: 'Цифровое видео 5.8 ГГц', note: '~700 мВт, типовой HD-линк', p: { freqMHz: 5800, txPowerDbm: 28, txGainDbi: 2, rxGainDbi: 4, sensDbm: -94 } },
-  { id: 'wifi24', name: 'Wi-Fi 2.4 ГГц (бытовой дрон)', note: '100 мВт', p: { freqMHz: 2440, txPowerDbm: 20, txGainDbi: 2, rxGainDbi: 2, sensDbm: -88 } },
+  { id: 'elrs24', kind: 'rc', name: 'ELRS 2.4 ГГц · 250 Гц', note: '100 мВт, диполи', p: { freqMHz: 2440, txPowerDbm: 20, txGainDbi: 2, rxGainDbi: 2, sensDbm: -108 } },
+  { id: 'elrs24_50', kind: 'rc', name: 'ELRS 2.4 ГГц · 50 Гц', note: '250 мВт, дальний режим', p: { freqMHz: 2440, txPowerDbm: 24, txGainDbi: 2, rxGainDbi: 2, sensDbm: -115 } },
+  { id: 'elrs900', kind: 'rc', name: 'ELRS 868/915 МГц · 100 Гц', note: '250 мВт (в ЕС на 868 — 25 мВт ERP)', p: { freqMHz: 868, txPowerDbm: 24, txGainDbi: 2, rxGainDbi: 2, sensDbm: -117 } },
+  { id: 'crsf', kind: 'rc', name: 'Crossfire 868 МГц · 50 Гц', note: '250 мВт (в ЕС лимит 25 мВт ERP)', p: { freqMHz: 868, txPowerDbm: 24, txGainDbi: 2, rxGainDbi: 2, sensDbm: -120 } },
+  { id: 'lora433', kind: 'telemetry', name: 'LoRa 433 МГц · SF8/125 кГц', note: '100 мВт (в ЕС лимит 10 мВт ERP)', p: { freqMHz: 433, txPowerDbm: 20, txGainDbi: 2, rxGainDbi: 2, sensDbm: -125 } },
+  { id: 'vtx58', kind: 'video', name: 'Видео 5.8 ГГц аналог', note: '600 мВт, клевер/пэтч', p: { freqMHz: 5800, txPowerDbm: 28, txGainDbi: 2, rxGainDbi: 8, sensDbm: -90 } },
+  { id: 'vtx12', kind: 'video', name: 'Видео 1.2 ГГц аналог', note: '800 мВт', p: { freqMHz: 1280, txPowerDbm: 29, txGainDbi: 2, rxGainDbi: 3, sensDbm: -90 } },
+  { id: 'dig58', kind: 'video', name: 'Цифровое видео 5.8 ГГц', note: '~700 мВт, типовой HD-линк', p: { freqMHz: 5800, txPowerDbm: 28, txGainDbi: 2, rxGainDbi: 4, sensDbm: -94 } },
+  { id: 'wifi24', kind: 'video', name: 'Wi-Fi 2.4 ГГц (бытовой дрон)', note: '100 мВт; один канал и для управления, и для видео — выберите его в обеих линиях', both: true, p: { freqMHz: 2440, txPowerDbm: 20, txGainDbi: 2, rxGainDbi: 2, sensDbm: -88 } },
 ];
 
 export const DEFAULT_RADIO: RadioParams = {
   freqMHz: 2440, txPowerDbm: 20, txGainDbi: 2, rxGainDbi: 2, sensDbm: -108,
   lossDb: 4, clutterDb: 0, fadeMarginDb: 10, k: 4 / 3, // 4 дБ: кабели + поляризация + корпус
 };
+
+/** Видео по умолчанию: аналог 5.8 ГГц (пресет vtx58); потери и запас — как у управления. */
+export const DEFAULT_VIDEO: RadioParams = {
+  ...DEFAULT_RADIO, freqMHz: 5800, txPowerDbm: 28, txGainDbi: 2, rxGainDbi: 8, sensDbm: -90,
+};
+export const DEFAULT_VIDEO_PRESET = 'vtx58';
+
+/** Пресеты для линии: управление — rc, телеметрия и «общие» (Wi-Fi); видео — video. */
+export const presetsFor = (line: LineId): RadioPreset[] =>
+  PRESETS.filter((p) => (line === 'video' ? p.kind === 'video' : p.kind !== 'video' || p.both));
 
 export const C = 299792458;
 
@@ -183,3 +197,56 @@ export function minHeightForLink(elev: ArrayLike<number>, dist: number, hA: numb
   while (hi - lo > 2) { const m = (lo + hi) / 2; if (ok(m)) hi = m; else lo = m; }
   return Math.ceil(hi);
 }
+
+// ---------- Две линии: управление и видео ----------
+
+export interface PairResult {
+  rc: LinkResult;
+  video: LinkResult | null;
+  worst: LineId;          // линия, ограничивающая связь (при равенстве — управление)
+  status: LinkStatus;     // статус худшей линии
+  score: number;          // запас худшей линии относительно её желаемого запаса, дБ (для ранжирования)
+}
+
+export const RANK: Record<LinkStatus, number> = { none: 0, weak: 1, ok: 2 };
+
+/** Худшая из двух линий: сначала по статусу, при равных — по запасу сверх желаемого. */
+export function worstOf(rc: LinkResult, rcP: RadioParams, video: LinkResult | null, vP: RadioParams | null): LineId {
+  if (!video || !vP) return 'rc';
+  if (RANK[video.status] !== RANK[rc.status]) return RANK[video.status] < RANK[rc.status] ? 'video' : 'rc';
+  return video.margin - vP.fadeMarginDb < rc.margin - rcP.fadeMarginDb ? 'video' : 'rc';
+}
+
+/** Трасса для двух линий сразу (video = null — как раньше, одна линия). Геометрия общая, частоты разные. */
+export function analyzePair(elev: ArrayLike<number>, dist: number, hA: number, hB: number, rc: RadioParams, video: RadioParams | null): PairResult {
+  const r = analyzeLink(elev, dist, hA, hB, rc);
+  const v = video ? analyzeLink(elev, dist, hA, hB, video) : null;
+  const worst = worstOf(r, rc, v, video);
+  const w = worst === 'video' && v && video ? { res: v, p: video } : { res: r, p: rc };
+  return { rc: r, video: v, worst, status: w.res.status, score: w.res.margin - w.p.fadeMarginDb };
+}
+
+/**
+ * Минимальная высота дрона, при которой связь держат ОБЕ линии (каждая — со своим желаемым запасом),
+ * и по отдельности. null — не хватает и на maxH. pair ≥ max(rc, video) гарантировано.
+ */
+export function minHeightsForPair(elev: ArrayLike<number>, dist: number, hA: number, heightFn: (h: number) => number, rc: RadioParams, video: RadioParams | null, maxH = 1500): { pair: number | null; rc: number | null; video: number | null } {
+  const mRc = minHeightForLink(elev, dist, hA, heightFn, rc, maxH);
+  const mV = video ? minHeightForLink(elev, dist, hA, heightFn, video, maxH) : null;
+  if (!video) return { pair: mRc, rc: mRc, video: null };
+  if (mRc === null || mV === null) return { pair: null, rc: mRc, video: mV };
+  const ok = (h: number) => {
+    const b = heightFn(h);
+    return analyzeLink(elev, dist, hA, b, rc).margin >= rc.fadeMarginDb && analyzeLink(elev, dist, hA, b, video).margin >= video.fadeMarginDb;
+  };
+  let lo = Math.max(mRc, mV) - 1, hi = maxH;
+  if (!ok(maxH)) return { pair: null, rc: mRc, video: mV };
+  if (ok(Math.max(0, lo))) return { pair: Math.max(mRc, mV), rc: mRc, video: mV };
+  lo = Math.max(0, lo);
+  while (hi - lo > 2) { const m = (lo + hi) / 2; if (ok(m)) hi = m; else lo = m; }
+  return { pair: Math.max(Math.ceil(hi), mRc, mV), rc: mRc, video: mV };
+}
+
+/** Минимальная высота, при которой обе линии (или одна, если video = null) держат свой запас. */
+export const minHeightForPair = (elev: ArrayLike<number>, dist: number, hA: number, heightFn: (h: number) => number, rc: RadioParams, video: RadioParams | null, maxH = 1500) =>
+  minHeightsForPair(elev, dist, hA, heightFn, rc, video, maxH).pair;

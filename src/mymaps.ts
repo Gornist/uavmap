@@ -135,6 +135,9 @@ function refreshDem() {
 // ---------- Восстановление ----------
 export async function initMyMaps(): Promise<void> {
   loadMeta();
+  // Провайдер высот ставим синхронно, до первого await: main.ts сразу после initMyMaps() считает высоту под прицелом,
+  // и без этого она уходила в сеть (офлайн — «—»). Файлы провайдер читает лениво; недоступный файл → null → сеть.
+  refreshDem();
   const bad: MyMapItem[] = [];
   for (const it of items) {
     try {
@@ -155,6 +158,8 @@ export async function initMyMaps(): Promise<void> {
 }
 
 // ---------- Импорт ----------
+// В accept есть octet-stream: пикер Android фильтрует по MIME и иначе затемняет «неизвестные» .pmtiles/.hgt.
+// Содержимое всё равно проверяется после выбора (сигнатура, размер).
 function pick(accept: string, multiple: boolean): Promise<File[]> {
   return new Promise((res) => {
     const i = document.createElement('input');
@@ -235,8 +240,8 @@ export function openMyMapsSheet(): void {
     root.innerHTML = '';
     const add = h('<div class="row"></div>');
     add.append(
-      btn('Добавить карту (PMTiles)', 'primary', () => void run(async () => { for (const f of await pick('.pmtiles', false)) await importPmtiles(f); })),
-      btn('Добавить рельеф (HGT)', 'ghost', () => void run(async () => { for (const f of await pick('.hgt', true)) await importHgt(f); })),
+      btn('Добавить карту (PMTiles)', 'primary', () => void run(async () => { for (const f of await pick('.pmtiles,application/octet-stream,application/vnd.pmtiles', false)) await importPmtiles(f); })),
+      btn('Добавить рельеф (HGT)', 'ghost', () => void run(async () => { for (const f of await pick('.hgt,application/octet-stream', true)) await importHgt(f); })),
     );
     root.appendChild(add);
     root.appendChild(h('<p class="hint mm-hint"></p>')).textContent = 'PMTiles — только растровые (png/jpg/webp), до 2 ГБ. Сделать из MBTiles: утилита `pmtiles convert` (github.com/protomaps/go-pmtiles). HGT — ячейки SRTM 1″/3″ с именем вида N55E037.hgt (например, с viewfinderpanoramas.org или USGS EarthExplorer), до 30 МБ каждая.';

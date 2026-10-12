@@ -101,12 +101,22 @@ async function scenario() {
   await step('поставить пульт (Проверить связь)', async () => {
     await ev(`document.getElementById('btnLink').click(); true`);
     await waitFor(`!document.getElementById('linkStrip').hidden`);
-    await waitFor(`/запас|рельеф|Прицел на пульте/.test(document.getElementById('lsStatus').textContent)`);
+    await waitFor(`/Упр\\.|запас|рельеф|Прицел на пульте/.test(document.getElementById('lsStatus').textContent)`);
   });
   await step('связь до креста после сдвига 3 км на северо-восток', async () => {
     await ev(`(() => { const m = window.__map, c = m.getCenter(); m.jumpTo({ center: [c.lng + 0.03, c.lat + 0.02] }); return true; })()`);
-    await waitFor(`/запас/.test(document.getElementById('lsStatus').textContent)`);
+    await waitFor(`/Упр\\.|запас/.test(document.getElementById('lsStatus').textContent)`);
     return ev(`document.getElementById('lsStatus').textContent`);
+  });
+  await step('строка связи показывает обе линии', async () => {
+    // На этой трассе дрон на 100 м оказывается ниже рельефа (прочерки) — поднимаем его, чтобы увидеть запасы.
+    await ev(`(() => { const i = document.getElementById('inDrone'); i.value = '1500'; i.dispatchEvent(new Event('input')); return true; })()`);
+    await waitFor(`/Упр\\.\\s*[+−]\\d/.test(document.getElementById('lsStatus').textContent)`);
+    const t = await ev(`document.getElementById('lsStatus').textContent`);
+    if (!/Упр\.\s*[+−]\d/.test(t) || !/Видео\s*[+−]\d/.test(t)) throw new Error('нет обеих линий: ' + t);
+    const hl = await ev(`document.getElementById('hereLink').textContent`);
+    if (!/упр\..*видео/i.test(hl)) throw new Error('плашка «До пульта» без обеих линий: ' + hl);
+    return t;
   });
   await shot('2-link');
 
@@ -117,13 +127,23 @@ async function scenario() {
   });
   await shot('3-profile');
 
+  await step('профиль: вердикт и таблицы по обеим линиям', async () => {
+    const v = await ev(`document.querySelector('#shBody .verdict')?.textContent || ''`);
+    if (!/Управление/.test(v) || !/видео/.test(v)) throw new Error('вердикт без двух линий: ' + v);
+    if (!(await ev(`!!document.getElementById('tblPV') && [...document.querySelectorAll('#tblH th')].some(t => /Видео/.test(t.textContent))`))) throw new Error('нет колонки/таблицы видео');
+    return v;
+  });
+  await ev(`(() => { const i = document.getElementById('inDrone'); i.value = '100'; i.dispatchEvent(new Event('input')); return true; })()`);
   await step('зона покрытия 10 км', async () => {
     await ev(`document.querySelector('[data-ls="zone"]').click(); true`);
     await sleep(300);
     await ev(`(() => { const b = [...document.querySelectorAll('#shBody button')]; b.find(x => x.textContent.trim() === '10 км')?.click(); b.find(x => /Рассчитать/.test(x.textContent))?.click(); return true; })()`);
     const t0 = Date.now();
     await waitFor(`!!window.__map.getLayer('cov-raster')`, 60000);
-    return `${((Date.now() - t0) / 1000).toFixed(1)} с, строк в таблице: ${await ev(`document.querySelectorAll('#shBody table.rt tr').length - 1`)}`;
+    const sec = ((Date.now() - t0) / 1000).toFixed(1);
+    const hdr = await ev(`[...document.querySelectorAll('#shBody table.rt th')].map(t => t.textContent).join('|')`);
+    if (!/Видео/.test(hdr)) throw new Error('в таблице зоны нет колонки «Видео»: ' + hdr);
+    return `${sec} с, строк в таблице: ${await ev(`document.querySelectorAll('#shBody table.rt tr').length - 1`)}, колонки: ${hdr}`;
   });
   await sleep(800);
   await shot('4-coverage');
