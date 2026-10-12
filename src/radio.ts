@@ -1,6 +1,8 @@
-// Радиорасчёт трассы: свободное пространство + дифракция на рельефе (ITU-R P.526, метод Дейгу),
-// кривизна Земли с эквивалентным радиусом k·R, первая зона Френеля.
+// Радиорасчёт трассы: свободное пространство + дифракция на рельефе (ITU-R P.526-15 § 4.5, «дельта-Буллингтон»,
+// см. diffraction.ts), кривизна Земли с эквивалентным радиусом k·R, первая зона Френеля.
+// Старый метод Дейгу оставлен как diffractionDeygout — для сравнения.
 import { R_EARTH } from './geo';
+import { deltaBullington, knifeEdgeJ } from './diffraction';
 
 export interface RadioParams {
   freqMHz: number;
@@ -48,8 +50,7 @@ export function fspl(distM: number, fMHz: number): number {
 
 /** Потери на одиночном клиновидном препятствии, ITU-R P.526 (формула 31). */
 export function knifeEdge(v: number): number {
-  if (v <= -0.78) return 0;
-  return 6.9 + 20 * Math.log10(Math.sqrt((v - 0.1) ** 2 + 1) + v - 0.1);
+  return knifeEdgeJ(v);
 }
 
 /** Радиус первой зоны Френеля, м. */
@@ -88,7 +89,7 @@ export interface LinkResult {
   belowGround: boolean;         // антенна А или Б ниже рельефа в своей точке
   minClearance: number;         // min (зазор / радиус Френеля); ≥0.6 — зона «чистая»
   fresnelBlocked: number;       // доля перекрытия первой зоны в худшей точке, 0..1+
-  edges: number[];              // индексы препятствий, вошедших в расчёт дифракции
+  edges: number[];              // индексы точек Буллингтона: νmax (прямая видимость) или горизонты от A и от Б
   // для графика
   d: Float64Array; ground: Float64Array; los_h: Float64Array; fz: Float64Array;
 }
@@ -119,9 +120,37 @@ export function analyzeLink(elev: ArrayLike<number>, dist: number, hA: number, h
     }
   }
 
-  // Дейгу: главное препятствие, затем по одному на каждой половине (до 3 клиньев).
-  // Вторичные клинья берутся с множителем T = 1 − exp(−Lp/6) (ITU-R P.526, метод для трёх клиньев):
-  // без него на гладком рельефе соседние с вершиной отсчёты дают ложные +5…10 дБ.
+  const db = deltaBullington(elev, dist, hA, hB, Re, p.freqMHz, lambda);
+  const diffraction = db.loss, edges = db.edges;
+
+  const fs = fspl(dist, p.freqMHz);
+  const totalLoss = fs + diffraction;
+  const prx = p.txPowerDbm + p.txGainDbi + p.rxGainDbi - p.lossDb - p.clutterDb - totalLoss;
+  // Антенна ниже рельефа в своей точке (дрон «в склоне» в режиме над взлётом) — связи нет.
+  const belowGround = hA < elev[0] - 0.05 || hB < elev[n] - 0.05; // допуск на округление Float32
+  const margin = belowGround ? Math.min(prx - p.sensDbm, -99) : prx - p.sensDbm;
+  const status: LinkStatus = margin >= p.fadeMarginDb ? 'ok' : margin >= 0 ? 'weak' : 'none';
+  return {
+    dist, fspl: fs, diffraction, totalLoss, prx, margin, status, los: los && !belowGround, belowGround,
+    minClearance: Number.isFinite(minClr) ? minClr : 1, fresnelBlocked: Math.max(0, worstBlock), edges,
+    d, ground, los_h: losH, fz,
+  };
+}
+
+/**
+ * Метод Дейгу (из ранних редакций ITU-R P.526; в P.526-15 его нет — заменён § 4.5): главный клин и по одному
+ * на каждой половине, вторичные — с множителем T = 1 − exp(−Lp/6). Оставлен для сравнения с дельта-Буллингтоном.
+ * Аргументы — как у analyzeLink. Возвращает потери, дБ, и индексы клиньев.
+ */
+export function diffractionDeygout(elev: ArrayLike<number>, dist: number, hA: number, hB: number, p: RadioParams): { loss: number; edges: number[] } {
+  const n = elev.length - 1;
+  const lambda = C / (p.freqMHz * 1e6);
+  const Re = clampK(p.k) * R_EARTH;
+  const d = new Float64Array(n + 1), ground = new Float64Array(n + 1);
+  for (let i = 0; i <= n; i++) {
+    d[i] = (dist * i) / n;
+    ground[i] = elev[i] + (d[i] * (dist - d[i])) / (2 * Re);
+  }
   const edges: number[] = [];
   const deygout = (a: number, b: number, depth: number): number => {
     if (b - a < 2) return 0;
@@ -139,20 +168,7 @@ export function analyzeLink(elev: ArrayLike<number>, dist: number, hA: number, h
     if (depth >= 1) return L;
     return L + deygoutT(L) * (deygout(a, bi, depth + 1) + deygout(bi, b, depth + 1));
   };
-  const diffraction = n >= 2 ? deygout(0, n, 0) : 0;
-
-  const fs = fspl(dist, p.freqMHz);
-  const totalLoss = fs + diffraction;
-  const prx = p.txPowerDbm + p.txGainDbi + p.rxGainDbi - p.lossDb - p.clutterDb - totalLoss;
-  // Антенна ниже рельефа в своей точке (дрон «в склоне» в режиме над взлётом) — связи нет.
-  const belowGround = hA < elev[0] - 0.05 || hB < elev[n] - 0.05; // допуск на округление Float32
-  const margin = belowGround ? Math.min(prx - p.sensDbm, -99) : prx - p.sensDbm;
-  const status: LinkStatus = margin >= p.fadeMarginDb ? 'ok' : margin >= 0 ? 'weak' : 'none';
-  return {
-    dist, fspl: fs, diffraction, totalLoss, prx, margin, status, los: los && !belowGround, belowGround,
-    minClearance: Number.isFinite(minClr) ? minClr : 1, fresnelBlocked: Math.max(0, worstBlock), edges,
-    d, ground, los_h: losH, fz,
-  };
+  return { loss: n >= 2 ? deygout(0, n, 0) : 0, edges };
 }
 
 /**

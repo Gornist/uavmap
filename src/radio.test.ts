@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  analyzeLink, budget, C, DEFAULT_RADIO, freeSpaceRange, fresnelR, fspl, knifeEdge, minHeightForLink, PRESETS,
+  analyzeLink, budget, C, DEFAULT_RADIO, diffractionDeygout, freeSpaceRange, fresnelR, fspl, knifeEdge, minHeightForLink, PRESETS,
   radioHorizon, RadioParams,
 } from './radio';
+import { bullingtonTaper } from './diffraction';
 import { R_EARTH } from './geo';
 
 const P: RadioParams = { ...DEFAULT_RADIO };
@@ -132,21 +133,28 @@ describe('analyzeLink: синтетические трассы', () => {
     expect(r.margin).toBeCloseTo(r.prx - P.sensDbm, 9);
   });
 
-  it('клин ровно на линии визирования → дифракция ≈ 6.03 дБ', () => {
+  // Дельта-Буллингтон (P.526-15 § 4.5): к J(ν) точки Буллингтона добавляется коническая поправка (57)
+  // [1 − exp(−J/6)]·(10 + 0.02·d[км]); при J = 6.03 дБ на 10 км это ещё ≈6.5 дБ (Дейгу давал чистые 6.03).
+  const LB0 = bullingtonTaper(knifeEdge(0), D); // ≈12.50 дБ
+
+  it('клин ровно на линии визирования → J(0) = 6.03 дБ + поправка (57) ≈ 12.5 дБ; Дейгу — 6.03', () => {
     const r = analyzeLink(profile(N, 0, { 50: 100 }), D, 100, 100, FLAT);
-    expect(r.diffraction).toBeCloseTo(6.03, 1);
+    expect(r.diffraction).toBeCloseTo(LB0, 1);
+    expect(LB0).toBeCloseTo(12.5, 1);
+    expect(diffractionDeygout(profile(N, 0, { 50: 100 }), D, 100, 100, FLAT).loss).toBeCloseTo(6.03, 1);
     expect(r.edges).toEqual([50]);
-    expect(r.margin).toBeCloseTo(budget(P) - fspl(D, P.freqMHz) - 6.03, 1);
+    expect(r.margin).toBeCloseTo(budget(P) - fspl(D, P.freqMHz) - LB0, 1);
     expect(r.fresnelBlocked).toBeCloseTo(0.5, 2);
     expect(r.minClearance).toBeCloseTo(0, 6);
   });
 
-  it('клин выше линии → los=false, потери = J(v) и растут с высотой', () => {
+  it('клин выше линии → los=false, потери = Lb(J(v)) (ур. 57) и растут с высотой', () => {
     const lambda = C / (P.freqMHz * 1e6);
     const r20 = analyzeLink(profile(N, 0, { 50: 120 }), D, 100, 100, FLAT);
     const v = 20 * Math.sqrt((2 * D) / (lambda * 5000 * 5000));
     expect(r20.los).toBe(false);
-    expect(r20.diffraction).toBeCloseTo(knifeEdge(v), 6);
+    expect(r20.diffraction).toBeCloseTo(bullingtonTaper(knifeEdge(v), D), 6);
+    expect(diffractionDeygout(profile(N, 0, { 50: 120 }), D, 100, 100, FLAT).loss).toBeCloseTo(knifeEdge(v), 6);
     let prev = r20.diffraction;
     for (const h of [140, 180, 250]) {
       const r = analyzeLink(profile(N, 0, { 50: h }), D, 100, 100, FLAT);
@@ -164,12 +172,16 @@ describe('analyzeLink: синтетические трассы', () => {
     expect(r.minClearance).toBeCloseTo(0.6, 2);
   });
 
-  it('два клина на линии: Lp + T·Ls, T = 1 − exp(−Lp/6) (P.526), 2 препятствия', () => {
+  it('два клина на линии: Буллингтон сводит их к одной кромке (= одному клину); Дейгу — Lp + T·Ls', () => {
     const one = analyzeLink(profile(N, 0, { 33: 100 }), D, 100, 100, FLAT);
     const two = analyzeLink(profile(N, 0, { 33: 100, 66: 100 }), D, 100, 100, FLAT);
-    expect(two.diffraction).toBeGreaterThanOrEqual(one.diffraction);
-    expect(two.diffraction).toBeCloseTo(6.03 + (1 - Math.exp(-6.03 / 6)) * 6.03, 1);
-    expect(two.edges.length).toBe(2);
+    expect(two.diffraction).toBeGreaterThanOrEqual(one.diffraction - 1e-6);
+    expect(two.diffraction).toBeCloseTo(LB0, 1);
+    expect(two.edges.length).toBeGreaterThanOrEqual(1);
+    // старый метод, для сравнения (T = 1 − exp(−Lp/6)): 9.85 дБ
+    const dg = diffractionDeygout(profile(N, 0, { 33: 100, 66: 100 }), D, 100, 100, FLAT);
+    expect(dg.loss).toBeCloseTo(6.03 + (1 - Math.exp(-6.03 / 6)) * 6.03, 1);
+    expect(dg.edges.length).toBe(2);
   });
 
   it('три клина: потери не убывают с добавлением препятствий', () => {
@@ -178,11 +190,11 @@ describe('analyzeLink: синтетические трассы', () => {
     expect(three.diffraction).toBeGreaterThanOrEqual(two.diffraction);
   });
 
-  it('несимметричные высоты: линия визирования линейна, клин на линии даёт ≈6 дБ', () => {
+  it('несимметричные высоты: линия визирования линейна, клин на линии даёт J(0) + поправка', () => {
     // A=50 м, B=150 м → в середине линия на 100 м
     const r = analyzeLink(profile(N, 0, { 50: 100 }), D, 50, 150, FLAT);
     expect(r.los_h[50]).toBeCloseTo(100, 9);
-    expect(r.diffraction).toBeCloseTo(6.03, 1);
+    expect(r.diffraction).toBeCloseTo(LB0, 1);
   });
 
   it('кривизна Земли: 30 км над ровной землёй при антеннах 2 м → за радиогоризонтом, los=false', () => {
@@ -279,8 +291,10 @@ describe('minHeightForLink', () => {
 
 describe('аудит радиомодели (2A): регрессии', () => {
   it('гладкая Земля 30 км, 2.44 ГГц, дрон 120 м: без ложного скачка Дейгу (≤ 6 дБ, было 12.5)', () => {
+    // Дельта-Буллингтон на гладкой Земле = max(Буллингтон, сфера § 3.2) = 5.98 дБ (сфера, интерполяция (25)).
     const r = analyzeLink(profile(600), 30000, 2, 120, P);
     expect(r.diffraction).toBeLessThan(6);
+    expect(r.diffraction).toBeGreaterThan(5);
   });
   it('дифракция на гладкой Земле растёт плавно с расстоянием (нет скачка > 5 дБ между соседними 100 м)', () => {
     const p868 = { ...P, freqMHz: 868 };
@@ -303,5 +317,36 @@ describe('аудит радиомодели (2A): регрессии', () => {
     const r = analyzeLink(profile(100), 10000, 30, 100, { ...P, k: 0 });
     expect(Number.isFinite(r.margin)).toBe(true);
     expect(Number.isFinite(radioHorizon(10, 10, -1))).toBe(true);
+  });
+});
+
+describe('дельта-Буллингтон: поведение analyzeLink', () => {
+  it('(5) монотонность: запас не убывает с высотой дрона (хребет, холмы, гладкая Земля)', () => {
+    const D = 6000, n = 200;
+    const terrains = [
+      Float64Array.from({ length: n + 1 }, (_, i) => Math.max(0, 120 * (1 - Math.abs((D * i) / n - 2500) / 300))),
+      Float64Array.from({ length: n + 1 }, (_, i) => 40 * Math.max(0, Math.sin((D * i) / n / 400)) ** 2),
+      profile(n),
+    ];
+    for (const e of terrains) {
+      let prev = -Infinity;
+      for (let h = 0; h <= 400; h += 5) {
+        const m = analyzeLink(e, D, 2, e[n] + h, P).margin;
+        expect(m).toBeGreaterThanOrEqual(prev - 1e-9);
+        prev = m;
+      }
+    }
+  });
+
+  it('(6) непрерывность по расстоянию на гладкой Земле: нет скачков > 3 дБ между соседними 100 м', () => {
+    for (const [hA, hB, f] of [[2, 30, 2440], [2, 100, 2440], [2, 2, 868], [10, 50, 433], [2, 120, 5800]]) {
+      const p = { ...P, freqMHz: f };
+      let prev = analyzeLink(profile(10), 1000, hA, hB, p).diffraction;
+      for (let D = 1100; D <= 40000; D += 100) {
+        const dl = analyzeLink(profile(Math.max(10, Math.round(D / 30))), D, hA, hB, p).diffraction;
+        expect(Math.abs(dl - prev)).toBeLessThan(3);
+        prev = dl;
+      }
+    }
   });
 });

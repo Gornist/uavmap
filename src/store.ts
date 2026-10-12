@@ -1,6 +1,7 @@
 // Состояние проекта в localStorage + экспорт/импорт. Всё хранится только на устройстве.
 import { DEFAULT_RADIO, RadioParams } from './radio';
 import type { CoordFormat } from './coords';
+import type { ClutterClass } from './clutter';
 
 export interface Mark { id: string; name: string; note: string; lat: number; lon: number; color: string; folder: string; created: number }
 export interface Route { id: string; name: string; pts: [number, number][] } // [lon, lat]
@@ -19,6 +20,7 @@ export interface State {
   coverage: { radius: number; heights: number[]; show: 'margin' | 'minh'; heightIdx: number; opacity: number };
   map: { base: string; labels: boolean; hillshade: boolean; contours: boolean; dim: number; center: [number, number]; zoom: number };
   coordFormat: CoordFormat;
+  clutter: ClutterClass;   // местность у пульта
 }
 
 const KEY = 'radius.project.v1';
@@ -35,6 +37,7 @@ export const defaults = (): State => ({
   coverage: { radius: 15000, heights: [30, 60, 100, 150, 250, 400], show: 'margin', heightIdx: 2, opacity: 0.6 },
   map: { base: 'sat', labels: true, hillshade: false, contours: true, dim: 0.35, center: [40.2045, 43.6805], zoom: 12 },
   coordFormat: 'sk42',
+  clutter: 'open',
 });
 
 function merge<T>(base: T, over: unknown): T {
@@ -108,6 +111,7 @@ export function sanitize(s: State): State {
     dim: fin(m.dim, 0, 0.9, d.map.dim), center: ctr, zoom: fin(m.zoom, 0, 22, d.map.zoom),
   };
   out.coordFormat = oneOf(s.coordFormat, ['sk42', 'dd', 'dms'] as const, d.coordFormat);
+  out.clutter = oneOf(s.clutter, ['open', 'sparse', 'village', 'forest'] as const, d.clutter);
   return out;
 }
 

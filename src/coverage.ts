@@ -4,13 +4,13 @@ import './styles/coverage.css';
 import type { ImageSource } from 'maplibre-gl';
 import { S, h, map, setGeo, fc, line, toast, openSheet, closeSheet, progress, on, persist } from './app';
 import { destination, distance, bearing, lonLatToPixel, pixelToLonLat, fmtDist, LatLon } from './geo';
-import { fetchGrid, zoomForStep, DemMissingError } from './elevation';
+import { fetchGrid, demPlan, demPixelM, demQualityHint, DemMissingError } from './elevation';
 import { budget, freeSpaceRange } from './radio';
-import { setStation, altModeText } from './link';
+import { setStation, altModeText, effRadio } from './link';
 import type { CoverageJob, CoverageResult } from './coverageCore';
 
 const RADII = [5, 10, 15, 25, 40];
-const MAX_TILES = 100;
+const MAX_TILES = 256; // ≈ 64 МБ Float32
 const CANVAS = 768;
 const RZ = 20; // «виртуальный» зум для равномерных меркаторских пикселей растра
 const PALETTE = ['#b8e986', '#7ed957', '#2fbf8f', '#22a3b8', '#3b7fd6', '#5a5bd0', '#7b3fbf', '#9c27a0'];
@@ -188,7 +188,6 @@ async function start() {
   const center: LatLon = { lat: st.lat, lon: st.lon };
   const heights = [...S.coverage.heights];
   const radius = S.coverage.radius;
-  const step = Math.max(radius / 400, 25);
   const n = destination(center, 0, radius), s = destination(center, 180, radius);
   const e = destination(center, 90, radius), w = destination(center, 270, radius);
   const box = { w: w.lon, e: e.lon, n: n.lat, s: s.lat };
@@ -197,13 +196,13 @@ async function start() {
     toast('Зона через меридиан 180° или у полюса пока не поддерживается');
     return;
   }
-  let z = zoomForStep(center.lat, step);
-  while (z > 8 && tilesFor(box, z) > MAX_TILES) z--;
+  const { z, step } = demPlan(center.lat, radius, (zz) => tilesFor(box, zz), MAX_TILES);
+  const pad = Math.ceil(step / demPixelM(center.lat, z)) + 2; // окно максимума выходит за радиус на step/2
 
   const id = ++runId;
   const rev = inputsRev;
   // Снимок радиопараметров до await: иначе старый пульт смешается с новыми настройками.
-  const radio = { ...S.radio }, mode = S.altMode;
+  const radio = { ...effRadio() }, mode = S.altMode; // копия: effRadio() может вернуть сам S.radio
   running = true;
   progress(0, 'Загрузка рельефа…');
   rerender?.();
@@ -211,7 +210,7 @@ async function start() {
     const grid = await fetchGrid([
       { lat: box.n, lon: box.w }, { lat: box.n, lon: box.e },
       { lat: box.s, lon: box.e }, { lat: box.s, lon: box.w },
-    ], z);
+    ], z, pad);
     if (id !== runId) return;
     const rays = heights.length <= 2 ? 720 : 360;
     const job: CoverageJob = {
@@ -392,7 +391,9 @@ function render() {
   }
   body.appendChild(row);
 
-  body.appendChild(hint(`Дальность в свободном пространстве без рельефа: ${fmtDist(freeSpaceRange(S.radio))}`));
+  const q = demQualityHint(S.station.lat);
+  if (q) body.appendChild(hint(q));
+  body.appendChild(hint(`Дальность в свободном пространстве без рельефа: ${fmtDist(freeSpaceRange(effRadio()))}`));
   if (shown && stale) body.appendChild(hint('Пульт или радиопараметры изменились — результат устарел, пересчитайте.', 'cov-stale'));
   if (shown) renderResult(body, shown);
   const done = h('<div class="row"><button type="button" class="ghost">Закрыть</button></div>');

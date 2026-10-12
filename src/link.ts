@@ -1,10 +1,15 @@
 // Пульт (точка А), «связь до креста», профиль трассы и подбор места для пилота.
 import maplibregl from 'maplibre-gl';
 import { S, $, h, map, center, setGeo, fc, line, toast, openSheet, emit, on, progress, escapeHtml } from './app';
-import { LatLon, distance, bearing, fmtDist, interpolate, lonLatToPixel, destination } from './geo';
-import { elevationAt, profile, zoomForStep, fetchGrid, sampleGrid, DemMissingError, DemGrid } from './elevation';
+import { LatLon, distance, bearing, fmtDist, lonLatToPixel, destination } from './geo';
+import { elevationAt, profile, demPlan, demPixelM, demQualityHint, fetchGrid, sampleGrid, sampleRay, DemMissingError, DemGrid } from './elevation';
 import { analyzeLink, minHeightForLink, LinkResult, PRESETS, RadioParams, radioHorizon, freeSpaceRange } from './radio';
 import { drawProfile } from './profileChart';
+import { CLUTTER, withClutter } from './clutter';
+
+/** Радиопараметры с учётом местности у пульта — их и нужно передавать в расчёт. */
+export const effRadio = () => withClutter(S.radio, S.clutter);
+const CLUTTER_NAME = () => (CLUTTER.find((c) => c.id === S.clutter)?.name ?? '—').toLowerCase();
 import { formatCoords } from './coords';
 
 export let stationGround: number | null = null;
@@ -108,16 +113,15 @@ export interface LinkCalc {
  * Расчёт трассы пульт → target. null — пульта нет, его высота не загружена, точки совпадают
  * или пульт успели перенести, пока грузился профиль. При нехватке рельефа — DemMissingError.
  */
-export async function calcLink(target: LatLon, radio: RadioParams = S.radio): Promise<LinkCalc | null> {
+export async function calcLink(target: LatLon, radio: RadioParams = effRadio()): Promise<LinkCalc | null> {
   if (!S.station || stationGround === null) return null;
   // Снимок входных данных: после await глобальное состояние могло измениться.
   const rev = stationRev, groundA = stationGround, antH = S.station.antH;
   const a = { lat: S.station.lat, lon: S.station.lon };
   const dist = distance(a, target);
   if (dist < 5) return null;
-  const step = Math.max(dist / 600, 15);
+  const { z, step } = demPlan(a.lat, dist);
   const n = Math.max(16, Math.min(600, Math.round(dist / step)));
-  const z = zoomForStep(a.lat, step);
   const elev = await profile(a, target, n, z);
   if (rev !== stationRev) return null;
   elev[0] = groundA;
@@ -184,7 +188,8 @@ function renderProfileSheet(r: LinkCalc) {
   const st = { antH: r.antH };
   const absB = droneAbs(r.groundB, S.droneH, r.groundA);
   const heightFn = (hh: number) => droneAbs(r.groundB, hh, r.groundA);
-  const minH = minHeightForLink(r.elev, r.dist, hA, heightFn, S.radio);
+  const radioEff = effRadio();
+  const minH = minHeightForLink(r.elev, r.dist, hA, heightFn, radioEff);
   const verdict = {
     ok: `Связь уверенная: запас ${res.margin.toFixed(1)} дБ при требуемых ${S.radio.fadeMarginDb} дБ`,
     weak: `На грани: запас ${res.margin.toFixed(1)} дБ — меньше желаемых ${S.radio.fadeMarginDb} дБ, возможны срывы`,
@@ -194,17 +199,19 @@ function renderProfileSheet(r: LinkCalc) {
 
   const heights = [...new Set([...S.coverage.heights, S.droneH])].sort((a, b) => a - b);
   const hRows = heights.map((hh) => {
-    const m = analyzeLink(r.elev, r.dist, hA, heightFn(hh), S.radio);
+    const m = analyzeLink(r.elev, r.dist, hA, heightFn(hh), radioEff);
     return `<tr data-h="${hh}" class="${hh === S.droneH ? 'sel' : ''}"><td>${hh} м</td><td>${Math.round(heightFn(hh))} м</td><td>${m.los ? 'да' : 'нет'}</td><td>${m.diffraction.toFixed(1)}</td><td style="color:${STATUS_COL[m.status]}">${m.margin.toFixed(1)}</td></tr>`;
   }).join('');
 
   const pRows = PRESETS.map((p) => {
-    const radio = { ...S.radio, ...p.p };
+    const radio = withClutter({ ...S.radio, ...p.p }, S.clutter);
     const m = analyzeLink(r.elev, r.dist, hA, absB, radio);
     const mh = minHeightForLink(r.elev, r.dist, hA, heightFn, radio);
     return `<tr data-p="${p.id}" class="${p.id === S.presetId ? 'sel' : ''}"><td>${p.name}</td><td>${radio.freqMHz}</td><td style="color:${STATUS_COL[m.status]}">${m.margin.toFixed(1)}</td><td>${mh === null ? '&gt;1500' : mh}</td></tr>`;
   }).join('');
 
+  const q = demQualityHint(S.station?.lat ?? r.target.lat, r.target.lat);
+  const hintHtml = q ? `<p class="hint">${escapeHtml(q)}</p>` : '';
   const hz = radioHorizon(st.antH, absB - r.groundB, S.radio.k);
   const b = openSheet(`Профиль: пульт → прицел · ${fmtDist(r.dist)}`, `
     <div class="verdict ${res.status}">${verdictText}</div>
@@ -220,13 +227,13 @@ function renderProfileSheet(r: LinkCalc) {
       <div><small>Мин. зазор / Френель</small><b>${res.belowGround ? '—' : Math.round(res.minClearance * 100) + ' %'}</b></div>
       <div><small>Радиогоризонт</small><b>${fmtDist(hz)}</b></div>
       <div><small>Мин. высота для связи</small><b>${minH === null ? '&gt;1500 м' : minH + ' м'}</b></div>
-      <div><small>Дальность без рельефа</small><b>${fmtDist(freeSpaceRange(S.radio))}</b></div>
+      <div><small>Дальность без рельефа</small><b>${fmtDist(freeSpaceRange(radioEff))}</b></div>
     </div>
     <h4 class="hint">Высоты дрона (${altModeText()}) — нажмите строку, чтобы выбрать</h4>
     <table class="rt" id="tblH"><tr><th>Высота</th><th>Абс.</th><th>Видимость</th><th>Дифр., дБ</th><th>Запас, дБ</th></tr>${hRows}</table>
     <h4 class="hint">Аппаратура и частоты на высоте ${S.droneH} м — нажмите, чтобы применить</h4>
     <table class="rt" id="tblP"><tr><th>Пресет</th><th>МГц</th><th>Запас, дБ</th><th>Мин. высота, м</th></tr>${pRows}</table>
-    <p class="hint">Расчёт: свободное пространство + дифракция на рельефе по ITU-R P.526 (метод Дейгу), k = ${S.radio.k.toFixed(2)}. Лес, здания, помехи и диаграммы антенн не моделируются — для них задайте «потери на местности» в разделе «Расчёт».</p>
+    ${hintHtml}<p class="hint">Расчёт: свободное пространство + дифракция на рельефе по ITU-R P.526 (дельта-Буллингтон, P.526-15 §4.5), k = ${S.radio.k.toFixed(2)}. Местность у пульта: ${CLUTTER_NAME()}. Помехи и диаграммы антенн не моделируются.</p>
   `);
   drawProfile(b.querySelector('#profileCanvas')!, res, { a: `А ${st.antH} м`, b: `Б ${Math.round(absB - r.groundB)} м` });
   b.querySelector('#tblH')!.addEventListener('click', (e) => {
@@ -271,31 +278,32 @@ export async function findBestSpot(radius: number) {
   const base = S.station ? { lat: S.station.lat, lon: S.station.lon } : target;
   const around = cand.map((p) => destination(base, bearing(target, p), distance(target, p)));
   const far = Math.max(...around.map((p) => distance(p, target)));
-  let z = zoomForStep(target.lat, Math.max(far / 250, 20));
   const tilesFor = (zz: number) => {
     const pts = [...around, target].map((p) => lonLatToPixel(p.lon, p.lat, zz));
     const xs = pts.map((p) => p[0] / 256), ys = pts.map((p) => p[1] / 256);
     return (Math.floor(Math.max(...xs)) - Math.floor(Math.min(...xs)) + 1) * (Math.floor(Math.max(...ys)) - Math.floor(Math.min(...ys)) + 1);
   };
-  while (z > 9 && tilesFor(z) > 49) z--;
+  const { z, step } = demPlan(target.lat, far, tilesFor, 100);
+  const pad = Math.ceil(step / demPixelM(target.lat, z)) + 2;
   progress(0.2, 'Загружаю рельеф…');
   let grid: DemGrid;
-  try { grid = await fetchGrid([...around, target], z); } catch (e) {
+  try { grid = await fetchGrid([...around, target], z, pad); } catch (e) {
     progress(null);
     if (e instanceof DemMissingError) { toast(e.message); return; }
     throw e;
   }
   progress(0.6, 'Перебираю точки…');
-  const at = (p: LatLon) => { const [x, y] = lonLatToPixel(p.lon, p.lat, z); return sampleGrid(grid, x, y); };
-  const gT = at(target);
+  const [tx, ty] = lonLatToPixel(target.lon, target.lat, z);
+  const gT = sampleGrid(grid, tx, ty);
   const scored = around.map((p) => {
     const dist = distance(p, target);
-    const n = Math.max(16, Math.min(250, Math.round(dist / 30)));
-    const elev = new Float32Array(n + 1);
-    for (let i = 0; i <= n; i++) elev[i] = at(interpolate(p, target, i / n));
+    const n = Math.max(16, Math.min(400, Math.round(dist / step)));
+    const ray = new Float64Array(n + 1), elev = new Float32Array(n + 1);
+    sampleRay(grid, p.lat, p.lon, bearing(p, target), dist / n, n + 1, ray);
+    elev.set(ray);
     elev[n] = gT;
     const gA = elev[0];
-    const res = analyzeLink(elev, Math.max(dist, 1), gA + antH, droneAbs(gT, S.droneH, gA), S.radio);
+    const res = analyzeLink(elev, Math.max(dist, 1), gA + antH, droneAbs(gT, S.droneH, gA), effRadio());
     return { p, res, gA, dist };
   }).sort((a, b) => b.res.margin - a.res.margin);
   const top: typeof scored = [];

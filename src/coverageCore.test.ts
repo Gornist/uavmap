@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { computeCoverage, CoverageJob } from './coverageCore';
-import { DemGrid, sampleGrid } from './elevation';
+import { DemGrid, sampleGrid, sampleRay } from './elevation';
 import { destination, lonLatToPixel } from './geo';
 import { analyzeLink, budget, DEFAULT_RADIO, freeSpaceRange, fspl } from './radio';
 
@@ -29,16 +29,20 @@ function job(g: DemGrid, over: Partial<CoverageJob> = {}): CoverageJob {
 }
 
 /** Профиль рельефа вдоль луча — тот же способ выборки, что в ядре. */
+/** Билинейная высота в точке на луче (как конец профиля в calcLink). */
+function pointAt(g: DemGrid, az: number, dist: number): number {
+  const p = destination({ lat: LAT, lon: LON }, az, dist);
+  const [x, y] = lonLatToPixel(p.lon, p.lat, Z);
+  return sampleGrid(g, x, y);
+}
+
 function rayProfile(g: DemGrid, az: number, upTo: number, step: number): Float64Array {
+  // Та же выборка, что в computeCoverage: максимум в окне ±step/2, точка пульта — билинейно.
   const n = Math.floor(upTo / step);
   const out = new Float64Array(n + 1);
+  sampleRay(g, LAT, LON, az, step, n + 1, out);
   const [x0, y0] = lonLatToPixel(LON, LAT, Z);
   out[0] = sampleGrid(g, x0, y0);
-  for (let s = 1; s <= n; s++) {
-    const p = destination({ lat: LAT, lon: LON }, az, s * step);
-    const [x, y] = lonLatToPixel(p.lon, p.lat, Z);
-    out[s] = sampleGrid(g, x, y);
-  }
   return out;
 }
 
@@ -156,8 +160,9 @@ describe('computeCoverage: режимы terrain / takeoff', () => {
   });
 });
 
-describe('Зона и профиль: ДВА препятствия (оба — Дейгу, до 3 клиньев)', () => {
-  // Два узких хребта на севере (1.1 и 2.8 км). Раньше зона брала только главный клин и была оптимистичнее до ~29 дБ.
+describe('Зона и профиль: ДВА препятствия (оба — дельта-Буллингтон, P.526-15 § 4.5)', () => {
+  // Два узких хребта на севере (1.1 и 2.8 км). Когда-то зона брала только главный клин и была оптимистичнее до ~29 дБ.
+  // При 120 м оба хребта — горизонты от пульта и от дрона (edges = 2 точки Буллингтона).
   const twoRidges = (h: number) => {
     const g = grid((dx, dy) => ridgeAt(50, 4, h)(dx, dy) + ridgeAt(128, 4, h)(dx, dy));
     const res = computeCoverage(job(g, { heights: [30], rays: 4 }));
@@ -191,4 +196,31 @@ describe('аудит (2A): дрон под землёй и море', () => {
     const res = computeCoverage(job(sea, { radius: 2000, step: 50, rays: 4, heights: [50], mode: 'terrain', antH: 2 }));
     expect(M(res, 0, 0, 4, 20)).toBeGreaterThan(-99);
   });
+});
+
+describe('Зона и профиль: холмистый рельеф, все высоты и оба режима (±0.5 дБ)', () => {
+  const hills = (dx: number, dy: number) => 150 + 60 * Math.sin(dx / 37) * Math.cos(dy / 53) + 20 * Math.sin((dx + dy) / 11);
+  const g = grid(hills);
+  const heights = [5, 30, 120, 400];
+  for (const mode of ['takeoff', 'terrain'] as const) {
+    it(`режим ${mode}`, () => {
+      const rays = 8;
+      const res = computeCoverage(job(g, { heights, rays, mode, radius: 8000, step: 50 }));
+      for (const r of [0, 3, 5]) {
+        const prof = rayProfile(g, (360 * r) / rays, 8000, 50);
+        for (const s of [1, 2, 7, 40, 99, 160]) {
+          for (let h = 0; h < heights.length; h++) {
+            // Конец профиля — высота в самой точке дрона (как в calcLink), промежуточные — максимум окна.
+            const sub = prof.slice(0, s + 1);
+            sub[s] = pointAt(g, (360 * r) / rays, s * 50);
+            const hB = (mode === 'takeoff' ? sub[0] : sub[s]) + heights[h];
+            const a = analyzeLink(sub, s * 50, sub[0] + 2, hB, P);
+            const z = M(res, h, r, rays, s);
+            if (a.belowGround) expect(z).toBe(-99);
+            else expect(Math.abs(z - a.margin)).toBeLessThan(0.5);
+          }
+        }
+      }
+    });
+  }
 });

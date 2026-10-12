@@ -9,6 +9,7 @@ import { parseCoords, formatCoords, CoordFormat } from './coords';
 import { distance, fmtDist } from './geo';
 import { openMark } from './marks';
 import { openCoverageSheet } from './coverage';
+import { CLUTTER, clutterLoss, withClutter } from './clutter';
 
 export type MenuSection = 'situation' | 'map' | 'calc' | 'files' | 'settings' | 'help';
 
@@ -241,7 +242,8 @@ function calc(el: HTMLElement) {
   const summary = h('<div class="kv"></div>');
   const upd = () => {
     const antH = S.station?.antH ?? 2;
-    const bud = budget(S.radio), fs = freeSpaceRange(S.radio), hz = radioHorizon(antH, S.droneH, S.radio.k);
+    const eff = withClutter(S.radio, S.clutter);
+    const bud = budget(eff), fs = freeSpaceRange(eff), hz = radioHorizon(antH, S.droneH, S.radio.k);
     summary.innerHTML = '';
     for (const [k, v] of [['Энергетический потенциал', `${bud.toFixed(1)} дБ`], ['Дальность в своб. пространстве', Number.isFinite(fs) ? fmtDist(fs) : '—'], ['Радиогоризонт', fmtDist(hz)]]) {
       const d = h('<div><small></small><b></b></div>');
@@ -264,6 +266,19 @@ function calc(el: HTMLElement) {
     });
     el.append(row, hint);
   }
+
+  section(el, 'Местность у пульта');
+  const cseg = h('<div class="seg"></div>');
+  for (const c of CLUTTER) {
+    const b = button(c.name, S.clutter === c.id ? 'on' : '', () => { S.clutter = c.id; emit('radio'); render(); });
+    b.title = c.hint;
+    cseg.appendChild(b);
+  }
+  el.appendChild(cseg);
+  const cur = CLUTTER.find((c) => c.id === S.clutter)!;
+  const ch = h('<p class="hint"></p>');
+  ch.textContent = `${cur.hint}: +${clutterLoss(S.clutter, S.radio.freqMHz).toFixed(1)} дБ на ${S.radio.freqMHz} МГц (по ITU-R P.833/P.2108; на низких частотах меньше). Складывается с ручными «потерями на местности».`;
+  el.appendChild(ch);
 
   section(el, 'Высоты');
   const seg = h('<div class="seg"></div>');

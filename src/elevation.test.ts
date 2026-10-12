@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { DEM_MAX_Z, DemGrid, DemMissingError, sampleGrid, zoomForStep } from './elevation';
+import { DEM_MAX_Z, DemGrid, DemMissingError, sampleGrid, zoomForStep, sampleRay, demPlan, demPixelM, demQualityHint } from './elevation';
+import { lonLatToPixel, R_EARTH } from './geo';
 
 /** Сетка 4×3 с линейным полем f(x, y) = 10·x + 100·y (x,y — индексы ячеек): билинейная интерполяция точна. */
 function linGrid(): DemGrid {
@@ -81,5 +82,70 @@ describe('DemMissingError', () => {
     try { throw new DemMissingError(3); } catch (x) { caught = x; }
     expect(caught instanceof DemMissingError).toBe(true);
     expect(caught instanceof Error).toBe(true);
+  });
+});
+
+/** Сетка вокруг точки (lat 0, lon 10): пульт в узле (20, 20) мозаики 80×40. */
+function rayGrid(fill: (x: number, y: number) => number) {
+  const z = 12, lat = 0, lon = 10;
+  const [ox, oy] = lonLatToPixel(lon, lat, z);
+  const g: DemGrid = { z, px0: Math.floor(ox) - 20, py0: Math.floor(oy) - 20, width: 80, height: 40, data: new Float32Array(80 * 40) };
+  for (let y = 0; y < 40; y++) for (let x = 0; x < 80; x++) g.data[y * 80 + x] = fill(x, y);
+  const mpp = (2 * Math.PI * R_EARTH) / (256 * 2 ** z);
+  return { g, lat, lon, mpp, ox, oy };
+}
+
+describe('sampleRay (максимум в окне)', () => {
+  it('узкий хребет в 1 пиксель между отсчётами не теряется (билинейка занизила бы)', () => {
+    const { g, lat, lon, mpp, ox, oy } = rayGrid((x) => (x === 20 + 5 ? 500 : 100));
+    const out = new Float64Array(6);
+    sampleRay(g, lat, lon, 90, 4 * mpp, 6, out);
+    expect(out[1]).toBe(500);
+    for (const k of [1, 2]) expect(sampleGrid(g, ox + 4 * k, oy)).toBeLessThan(400);
+  });
+  it('ровная поверхность: везде та же высота, концы точные', () => {
+    const { g, lat, lon, mpp } = rayGrid(() => 123.5);
+    const out = new Float64Array(10);
+    sampleRay(g, lat, lon, 45, 2 * mpp, 10, out);
+    for (const v of out) expect(v).toBeCloseTo(123.5, 4);
+  });
+  it('out[0] — билинейно в точке пульта, а не максимум соседей', () => {
+    const { g, lat, lon, ox, oy, mpp } = rayGrid((x, y) => 10 * x + 100 * y);
+    const out = new Float64Array(4);
+    sampleRay(g, lat, lon, 90, 3 * mpp, 4, out);
+    expect(out[0]).toBeCloseTo(sampleGrid(g, ox, oy), 6);
+    expect(out[1]).toBeGreaterThan(out[0]); // на восток рельеф растёт: окно даёт максимум, не среднее
+  });
+  it('у края мозаики без NaN', () => {
+    const { g, lat, lon, mpp } = rayGrid((x) => x);
+    const out = new Float64Array(200);
+    sampleRay(g, lat, lon, 270, 5 * mpp, 200, out);
+    for (const v of out) expect(Number.isFinite(v)).toBe(true);
+  });
+});
+
+describe('demPlan', () => {
+  it('пиксель 9–26 м, шаг не меньше пикселя и не меньше D/400', () => {
+    for (const lat of [0, 30, 55, 65]) {
+      const { z, step } = demPlan(lat, 30000);
+      const px = demPixelM(lat, z);
+      expect(px).toBeGreaterThan(9);
+      expect(px).toBeLessThan(26);
+      expect(step).toBeGreaterThanOrEqual(px);
+      expect(step).toBeGreaterThanOrEqual(30000 / 400);
+    }
+  });
+  it('лимит тайлов понижает z, шаг не меньше нового пикселя', () => {
+    const a = demPlan(55, 5000), b = demPlan(55, 5000, (z) => 4 ** (z - 6), 256);
+    expect(b.z).toBeLessThan(a.z);
+    expect(b.step).toBeGreaterThanOrEqual(demPixelM(55, b.z));
+  });
+});
+
+describe('demQualityHint', () => {
+  it('только севернее 60° и южнее 56°', () => {
+    expect(demQualityHint(55, 59)).toBeNull();
+    expect(demQualityHint(55, 61)).toContain('60°');
+    expect(demQualityHint(-57)).not.toBeNull();
   });
 });
