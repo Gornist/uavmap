@@ -1,12 +1,18 @@
 // Дымовой тест в headless Chrome через DevTools Protocol (без зависимостей).
-// Запуск: node scripts/smoke.mjs [url] [outDir]. Нужен запущенный dev-сервер.
+// Запуск: node scripts/smoke.mjs [url] [outDir] [--desktop|--mobile]. Нужен запущенный dev-сервер.
+// По умолчанию два прогона подряд: десктоп и телефон (390×844, касания).
 import { spawn } from 'node:child_process';
 import { writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const URL_ = process.argv[2] || 'http://localhost:5174/';
-const OUT = process.argv[3] || process.env.TMPDIR || '/tmp';
+const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+const flags = process.argv.slice(2).filter((a) => a.startsWith('--'));
+const URL_ = args[0] || 'http://localhost:5174/';
+const OUT = args[1] || process.env.TMPDIR || '/tmp';
+const MODES = flags.includes('--mobile') ? ['mobile'] : flags.includes('--desktop') ? ['desktop'] : ['desktop', 'mobile'];
+let mode = 'desktop';
+const LAND = flags.includes('--landscape'); // мобильный прогон 844×390
 const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const port = 9300 + Math.floor(Math.random() * 500);
 const profile = mkdtempSync(join(tmpdir(), 'uavmap-chrome-'));
@@ -31,7 +37,7 @@ const ev = async (expr) => {
 };
 const shot = async (name) => {
   const { data } = await send('Page.captureScreenshot', { format: 'png' });
-  const f = join(OUT, `smoke-${name}.png`);
+  const f = join(OUT, `smoke-${mode === 'mobile' ? 'm-' : ''}${name}.png`);
   writeFileSync(f, Buffer.from(data, 'base64'));
   return f;
 };
@@ -41,28 +47,47 @@ const waitFor = async (expr, ms = 20000) => {
   throw new Error(`timeout: ${expr}`);
 };
 
-const results = [];
-const step = async (name, fn) => {
-  try { const v = await fn(); results.push(`✓ ${name}${v ? ` — ${v}` : ''}`); }
-  catch (e) { results.push(`✗ ${name} — ${e.message}`); }
+
+const touch = (type, x, y) => send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y, id: 1 }] });
+const rectsCheck = `(() => {
+  const vw = innerWidth, vh = innerHeight, bad = [];
+  for (const b of document.querySelectorAll('button')) {
+    const r = b.getBoundingClientRect(), cs = getComputedStyle(b);
+    if (!r.width || !r.height || cs.visibility === 'hidden' || cs.display === 'none') continue;
+    if (r.right <= 0 || r.bottom <= 0 || r.left >= vw || r.top >= vh) continue;
+    if (r.width < 43.5 || r.height < 43.5) bad.push((b.id || b.className || b.textContent.trim()).toString().slice(0, 18) + ' ' + Math.round(r.width) + 'x' + Math.round(r.height));
+  }
+  return bad;
+})()`;
+const noScroll = `(() => document.documentElement.scrollWidth <= innerWidth && document.body.scrollWidth <= innerWidth ? '' : 'scrollWidth ' + document.documentElement.scrollWidth + ' > ' + innerWidth)()`;
+const overlapCheck = `(() => {
+  const ids = ['topLeft', 'infoCard', 'rightBar', 'linkStrip', 'bottomBar', 'cross'];
+  const r = ids.map((id) => { const e = document.getElementById(id); if (!e || e.hidden) return null; const q = e.getBoundingClientRect(); return q.width ? [id, q] : null; }).filter(Boolean);
+  const bad = [];
+  for (let i = 0; i < r.length; i++) for (let j = i + 1; j < r.length; j++) {
+    const [n1, a] = r[i], [n2, b] = r[j];
+    if (a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1) bad.push(n1 + '×' + n2);
+  }
+  return bad;
+})()`;
+
+const checkLayout = async (where) => {
+  const sw = await ev(noScroll);
+  if (sw) throw new Error(`${where}: горизонтальная прокрутка (${sw})`);
+  if (mode === 'mobile') {
+    const small = await ev(rectsCheck);
+    if (small.length) throw new Error(`${where}: кнопки < 44 px: ${small.slice(0, 8).join(', ')}`);
+  }
+  return mode === 'mobile' ? 'без гор. прокрутки, кнопки ≥ 44 px' : 'без гор. прокрутки';
 };
 
-try {
-  let target;
-  for (let i = 0; i < 40 && !target; i++) {
-    await sleep(250);
-    try { target = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).find((t) => t.type === 'page'); } catch { /* ждём */ }
-  }
-  ws = new WebSocket(target.webSocketDebuggerUrl);
-  await new Promise((r) => (ws.onopen = r));
-  ws.onmessage = (m) => {
-    const d = JSON.parse(m.data);
-    if (d.id && pending.has(d.id)) { pending.get(d.id).res(d.result || {}); pending.delete(d.id); }
-    if (d.method === 'Runtime.exceptionThrown') errors.push(d.params.exceptionDetails.exception?.description?.split('\n')[0]);
-    if (d.method === 'Runtime.consoleAPICalled' && d.params.type === 'error') errors.push(d.params.args.map((a) => a.value ?? a.description).join(' '));
-  };
-  await send('Runtime.enable');
-  await send('Page.enable');
+const results = [];
+const step = async (name, fn) => {
+  try { const v = await fn(); results.push(`✓ [${mode}] ${name}${v ? ` — ${v}` : ''}`); }
+  catch (e) { results.push(`✗ [${mode}] ${name} — ${e.message}`); }
+};
+
+async function scenario() {
   // Чистый проект и район с рельефом (Красная Поляна).
   await send('Page.navigate', { url: URL_ });
   await sleep(500);
@@ -107,6 +132,13 @@ try {
   await sleep(2500);
   await shot('4b-coverage-map');
 
+  await step('нет перекрытий и размеры нажатия (строка связи открыта)', async () => {
+    await ev(`document.getElementById('shClose').click(); true`);
+    await ev(`document.getElementById('linkStrip').hidden || true`);
+    const ov = mode === 'mobile' ? await ev(overlapCheck) : [];
+    if (ov.length) throw new Error('перекрытия: ' + ov.join(', '));
+    return checkLayout('карта');
+  });
   await step('метка и меню', async () => {
     await ev(`document.getElementById('btnMark').click(); true`);
     await waitFor(`document.querySelectorAll('.mk').length > 0`);
@@ -115,13 +147,71 @@ try {
     await ev(`[...document.querySelectorAll('.dr-item')].find(b => /Расчёт/.test(b.textContent)).click(); true`);
     return `пунктов в «Расчёт»: ${await ev(`document.querySelectorAll('#drBody input, #drBody .li').length`)}`;
   });
+  await step('меню: нет прокрутки и кнопки ≥ 44 px', () => checkLayout('меню'));
   await shot('5-menu');
+
+  if (mode === 'mobile') {
+    await ev(`document.getElementById('drClose').click(); true`);
+    await sleep(400);
+    await step('долгое нажатие открывает шторку «Точка»', async () => {
+      await ev(`document.getElementById('shClose').click(); true`);
+      const px = await ev(`innerWidth / 2`);
+      await touch('touchStart', px, 110);
+      await sleep(900);
+      await touch('touchEnd');
+      await waitFor(`!document.getElementById('sheet').hidden && document.getElementById('shTitle').textContent === 'Точка'`, 3000);
+      await sleep(400);
+      await shot('6-point');
+      return checkLayout('шторка');
+    });
+    if (!LAND) await step('свайп вниз по ручке закрывает шторку', async () => {
+      const g = await ev(`(() => { const r = document.getElementById('shGrip').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()`);
+      await touch('touchStart', g[0], g[1]);
+      for (let i = 1; i <= 8; i++) { await touch('touchMove', g[0], g[1] + i * 25); await sleep(20); }
+      await touch('touchEnd');
+      await waitFor(`document.getElementById('sheet').hidden`, 3000);
+    });
+    if (LAND) await ev(`document.getElementById('shClose').click(); true`);
+    await step('короткое нажатие не открывает шторку', async () => {
+      await touch('touchStart', await ev(`innerWidth / 2`), 110); await sleep(150); await touch('touchEnd'); await sleep(900);
+      if (await ev(`!document.getElementById('sheet').hidden`)) throw new Error('шторка открылась');
+    });
+  }
   await step('сохранение после перезагрузки', async () => {
     await sleep(500);
     await send('Page.reload');
     await waitFor(`!!window.__map && window.__map.isStyleLoaded()`);
     await waitFor(`document.querySelectorAll('.mk').length > 0 && !!document.querySelector('.station')`);
   });
+}
+
+try {
+  let target;
+  for (let i = 0; i < 40 && !target; i++) {
+    await sleep(250);
+    try { target = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).find((t) => t.type === 'page'); } catch { /* ждём */ }
+  }
+  ws = new WebSocket(target.webSocketDebuggerUrl);
+  await new Promise((r) => (ws.onopen = r));
+  ws.onmessage = (m) => {
+    const d = JSON.parse(m.data);
+    if (d.id && pending.has(d.id)) { pending.get(d.id).res(d.result || {}); pending.delete(d.id); }
+    if (d.method === 'Runtime.exceptionThrown') errors.push(d.params.exceptionDetails.exception?.description?.split('\n')[0]);
+    if (d.method === 'Runtime.consoleAPICalled' && d.params.type === 'error') errors.push(d.params.args.map((a) => a.value ?? a.description).join(' '));
+  };
+  await send('Runtime.enable');
+  await send('Page.enable');
+  for (const m of MODES) {
+    mode = m;
+    if (m === 'mobile') {
+      await send('Emulation.setDeviceMetricsOverride', { width: LAND ? 844 : 390, height: LAND ? 390 : 844, deviceScaleFactor: 2, mobile: true });
+      await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+    } else {
+      await send('Emulation.setDeviceMetricsOverride', { width: 1200, height: 800, deviceScaleFactor: 1, mobile: false });
+      await send('Emulation.setTouchEmulationEnabled', { enabled: false });
+    }
+    await scenario();
+  }
 } catch (e) {
   results.push(`✗ сбой сценария — ${e.message}`);
 } finally {

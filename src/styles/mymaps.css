@@ -1,0 +1,11 @@
+/* Шторка «Свои карты» */
+.mm-hint { font-size: 12px; margin: 8px 0; }
+.mm-warn { color: var(--accent); }
+.mm-list { display: grid; gap: 8px; margin-top: 10px; }
+.mm-item { border: 1px solid var(--line); border-radius: var(--r); background: var(--panel-2); padding: 10px; }
+.mm-title { font-weight: 600; overflow-wrap: anywhere; }
+.mm-meta { color: var(--muted); font-size: 12px; margin: 2px 0 8px; overflow-wrap: anywhere; }
+.mm-acts { display: flex; flex-wrap: wrap; gap: 6px; }
+.mm-acts button { padding: 6px 10px; }
+.mm-acts button.on { border-color: var(--accent); color: var(--accent); }
+.mm-acts button.danger { color: var(--bad); }

@@ -10,9 +10,12 @@ import { initRuler, toggleRuler } from './ruler';
 import { initCoverage, openCoverageSheet } from './coverage';
 import { initMenu } from './menu';
 import { initContours } from './contours';
+import { initPwa } from './pwa';
+import { initMyMaps } from './mymaps';
+import { initMobile } from './mobile';
 import { formatCoords } from './coords';
 import { elevationAt } from './elevation';
-import { distance, bearing, fmtDist } from './geo';
+import { distance, bearing, fmtDist, type LatLon } from './geo';
 import { uid } from './store';
 
 // Для отладки в консоли браузера (только dev-сборка).
@@ -105,8 +108,12 @@ function openBestSheet() {
 }
 
 // ---------- Карточка «Точка» ----------
-function openPointSheet() {
-  const p = center();
+let pointPin: maplibregl.Marker | null = null;
+const clearPin = () => { pointPin?.remove(); pointPin = null; };
+
+/** Шторка «Точка»: для прицела или (долгое нажатие / правый клик) для места нажатия. */
+function openPointSheet(at?: LatLon) {
+  const p = at ?? center();
   const body = h('<div></div>');
   let html = `<div class="kv"><div><small>Рельеф</small><b id="ptH">…</b></div>`;
   for (const f of ['sk42', 'dd', 'dms'] as const) {
@@ -132,7 +139,9 @@ function openPointSheet() {
     const text = formatCoords(p.lat, p.lon, S.coordFormat).short.replace(/<\/?em>/g, '');
     navigator.clipboard.writeText(text).then(() => toast('Координаты скопированы'), () => toast('Не удалось скопировать'));
   });
-  openSheet('Точка', body);
+  openSheet('Точка', body, clearPin);
+  clearPin();
+  if (at) pointPin = new maplibregl.Marker({ element: h('<div class="pt-pin"></div>') }).setLngLat([p.lon, p.lat]).addTo(map);
 }
 
 // ---------- GPS ----------
@@ -158,6 +167,7 @@ function addLinkLayers() {
 }
 
 initMenu();
+initPwa();
 
 // Стиль задан объектом, поэтому не ждём 'load' (он ждёт и тайлы).
 function start() {
@@ -167,6 +177,7 @@ function start() {
   initCoverage();
   initStation();
   initContours();
+  initMyMaps();
   applyMapStyle();
   refreshHeight();
 }
@@ -192,7 +203,8 @@ $('infoToggle').addEventListener('click', () => {
   const c = $('infoCard').classList.toggle('collapsed');
   $('infoToggle').textContent = c ? '+' : '−';
 });
-$('btnPoint').addEventListener('click', openPointSheet);
+$('btnPoint').addEventListener('click', () => openPointSheet());
+initMobile({ onPointPress: openPointSheet });
 
 $('zIn').addEventListener('click', () => map.zoomIn());
 $('zOut').addEventListener('click', () => map.zoomOut());

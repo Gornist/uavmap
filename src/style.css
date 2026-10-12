@@ -19,10 +19,19 @@
   --terrain-line: #b9b07a;
   --r: 10px;
   --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 14px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 14px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; -webkit-tap-highlight-color: transparent; touch-action: manipulation; overscroll-behavior: none; }
+button, label, .card, #bottomBar, #sheet, #drawer { touch-action: manipulation; -webkit-user-select: none; user-select: none; }
+input, textarea { -webkit-user-select: text; user-select: text; }
+#map { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+button .tx-s, .l-s { display: none; }
+.sh-grip { display: none; }
+.pt-pin { width: 20px; height: 20px; border-radius: 50%; border: 3px solid var(--accent); background: #e3a94855; box-shadow: 0 0 0 3px #000a; }
 button { font: inherit; color: inherit; cursor: pointer; }
 input, select { font: inherit; color: var(--text); background: #0d1119; border: 1px solid var(--line); border-radius: 7px; padding: 6px 8px; min-width: 0; }
 input:focus, select:focus { outline: 1px solid var(--accent); border-color: var(--accent); }

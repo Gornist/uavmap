@@ -10,6 +10,8 @@ import { distance, fmtDist } from './geo';
 import { openMark } from './marks';
 import { openCoverageSheet } from './coverage';
 import { CLUTTER, clutterLoss, withClutter } from './clutter';
+import { openOfflineSheet } from './offline';
+import { openMyMapsSheet } from './mymaps';
 
 export type MenuSection = 'situation' | 'map' | 'calc' | 'files' | 'settings' | 'help';
 
@@ -337,6 +339,15 @@ function calc(el: HTMLElement) {
 // ---------- Файлы ----------
 
 function files(el: HTMLElement) {
+  section(el, 'Офлайн');
+  el.appendChild(h('<p class="hint">Рельеф района можно скачать заранее — профиль, зона и горизонтали будут считаться без сети. Подложки офлайн — только из своих файлов (PMTiles): провайдеры спутника и OSM запрещают массовое скачивание.</p>'));
+  const offRow = h('<div class="row"></div>');
+  offRow.append(
+    button('Офлайн-районы…', 'ghost', () => { close(); openOfflineSheet(); }),
+    button('Свои карты…', 'ghost', () => { close(); openMyMapsSheet(); }),
+  );
+  el.appendChild(offRow);
+
   section(el, 'Импорт');
   el.appendChild(h('<p class="hint">GeoJSON, GPX или KML (до 20 МБ): метки и маршруты добавятся к текущим.</p>'));
   el.appendChild(button('Импортировать файл…', 'primary', () => $('fileIn').click()));

@@ -4,8 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
   <meta name="theme-color" content="#10151f" />
-  <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <title>Радиус — радиовидимость дрона</title>
 </head>
 <body>
@@ -56,19 +56,19 @@
     </div>
     <div class="ls-status" id="lsStatus">Двигайте карту — прицел покажет связь</div>
     <div class="ls-inputs">
-      <label><span>А · антенна пульта</span><input id="inAnt" type="number" inputmode="decimal" min="0" step="0.5"/><i>м</i></label>
-      <label><span>Б · дрон <em id="altModeLbl"></em></span><input id="inDrone" type="number" inputmode="decimal" min="0" step="5"/><i>м</i></label>
+      <label><span><b class="l-s">А · пульт</b><b class="l-l">А · антенна пульта</b></span><input id="inAnt" type="number" inputmode="decimal" min="0" step="0.5"/><i>м</i></label>
+      <label><span><b class="l-s">Б · дрон</b><b class="l-l">Б · дрон</b> <em id="altModeLbl"></em></span><input id="inDrone" type="number" inputmode="decimal" min="0" step="5"/><i>м</i></label>
       <button id="btnProfile" class="primary">Профиль</button>
     </div>
   </div>
 
   <nav id="bottomBar">
     <button id="btnMark" class="accent" title="Метка в прицел">✚⚑</button>
-    <button id="btnLink">Проверить связь</button>
-    <button id="btnRuler">📏 Линейка</button>
-    <button id="btnLabels">🏷 Подписи</button>
-    <button id="btnFull">⛶ Во весь экран</button>
-    <button id="btnMenu" class="right">☰ Меню</button>
+    <button id="btnLink"><span class="tx-l">Проверить связь</span><span class="tx-s">Связь</span></button>
+    <button id="btnRuler" title="Линейка"><span class="ico">📏</span><span class="tx-l"> Линейка</span></button>
+    <button id="btnLabels" title="Подписи"><span class="ico">🏷</span><span class="tx-l"> Подписи</span></button>
+    <button id="btnFull" title="Во весь экран"><span class="ico">⛶</span><span class="tx-l"> Во весь экран</span></button>
+    <button id="btnMenu" class="right" title="Меню"><span class="ico">☰</span> Меню</button>
   </nav>
 
   <div id="rulerBar" hidden>
@@ -94,6 +94,7 @@
   <div id="scrim"></div>
 
   <section id="sheet" hidden>
+    <div class="sh-grip" id="shGrip" aria-hidden="true"></div>
     <div class="sh-head"><h3 id="shTitle"></h3><button class="mini" id="shClose">✕</button></div>
     <div id="shBody"></div>
   </section>

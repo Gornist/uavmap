@@ -1,5 +1,5 @@
 // Общее ядро: состояние, карта, мелкие помощники интерфейса.
-import maplibregl, { Map as MLMap, StyleSpecification } from 'maplibre-gl';
+import maplibregl, { Map as MLMap, StyleSpecification, RasterSourceSpecification } from 'maplibre-gl';
 import { load, save, State } from './store';
 import { DEM_URL } from './elevation';
 import type { LatLon } from './geo';
@@ -12,7 +12,8 @@ export const h = (html: string) => { const t = document.createElement('template'
 export const escapeHtml = (t: string) => t.replace(/[<>&"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 // ---------- Подложки ----------
-export const BASES: Record<string, { name: string; tiles: string[]; max: number; attr: string }> = {
+export interface BaseDef { name: string; tiles: string[]; max: number; attr: string }
+export const BASES: Record<string, BaseDef> = {
   sat: { name: 'Спутник (Esri)', tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'], max: 19, attr: 'Снимки © Esri, Maxar, Earthstar Geographics' },
   topo: { name: 'Топо (OpenTopoMap)', tiles: ['https://a.tile.opentopomap.org/{z}/{x}/{y}.png', 'https://b.tile.opentopomap.org/{z}/{x}/{y}.png', 'https://c.tile.opentopomap.org/{z}/{x}/{y}.png'], max: 17, attr: '© OpenStreetMap, SRTM · стиль © OpenTopoMap (CC-BY-SA)' },
   osm: { name: 'Схема (OSM)', tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'], max: 19, attr: '© участники OpenStreetMap' },
@@ -20,7 +21,8 @@ export const BASES: Record<string, { name: string; tiles: string[]; max: number;
 
 function style(): StyleSpecification {
   const sources: StyleSpecification['sources'] = {
-    dem: { type: 'raster-dem', tiles: [DEM_URL], tileSize: 256, maxzoom: 15, encoding: 'terrarium', attribution: 'Рельеф: Mapzen Terrain Tiles (AWS Open Data)' },
+    // maxzoom 13 — как у офлайн-районов и горизонталей; на крупных масштабах MapLibre растягивает z13.
+    dem: { type: 'raster-dem', tiles: [DEM_URL], tileSize: 256, maxzoom: 13, encoding: 'terrarium', attribution: 'Рельеф: Mapzen Terrain Tiles (AWS Open Data)' },
     roads: { type: 'raster', tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}'], tileSize: 256, maxzoom: 19 },
     places: { type: 'raster', tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'], tileSize: 256, maxzoom: 19 },
   };
@@ -50,8 +52,37 @@ export const map: MLMap = new maplibregl.Map({
 map.touchZoomRotate.disableRotation();
 map.addControl(new maplibregl.ScaleControl({ maxWidth: 140, unit: 'metric' }), 'bottom-left');
 
+/** Добавить подложку «на лету» (свои карты). Слой встаёт сразу над фоном — ниже отмывки, горизонталей и дорог. */
+export function addBase(id: string, def: BaseDef, sourceSpec: Partial<RasterSourceSpecification> = {}) {
+  if (map.getLayer(`base-${id}`)) removeBase(id, false);
+  BASES[id] = def;
+  const spec = { type: 'raster', tiles: def.tiles, tileSize: 256, maxzoom: def.max, attribution: def.attr, ...sourceSpec } as RasterSourceSpecification;
+  map.addSource(id, spec);
+  const layers = map.getStyle().layers;
+  const bg = layers.findIndex((l) => l.id === 'bg');
+  map.addLayer(
+    { id: `base-${id}`, type: 'raster', source: id, layout: { visibility: id === S.map.base ? 'visible' : 'none' }, paint: { 'raster-brightness-max': 1 - S.map.dim } },
+    layers[bg + 1]?.id,
+  );
+}
+
+/** Убрать подложку; если она была выбрана — откат на 'sat'. */
+export function removeBase(id: string, apply = true) {
+  if (map.getLayer(`base-${id}`)) map.removeLayer(`base-${id}`);
+  if (map.getSource(id)) map.removeSource(id);
+  delete BASES[id];
+  if (apply) ensureBase();
+}
+
+/** Выбранной подложки нет (удалена/недоступна) — вернуть 'sat' и обновить стиль. */
+export function ensureBase() {
+  if (!BASES[S.map.base]) S.map.base = 'sat';
+  applyMapStyle();
+}
+
 export function applyMapStyle() {
   for (const id of Object.keys(BASES)) {
+    if (!map.getLayer(`base-${id}`)) continue;
     map.setLayoutProperty(`base-${id}`, 'visibility', id === S.map.base ? 'visible' : 'none');
     map.setPaintProperty(`base-${id}`, 'raster-brightness-max', 1 - S.map.dim);
   }

@@ -8,6 +8,27 @@ const TILE = 256;
 
 const cache = new Map<string, Promise<Float32Array | null>>();
 
+/** Свой источник высот тайла (например, из HGT пользователя). null — нет покрытия, идём в сеть. */
+export type LocalDemProvider = (z: number, x: number, y: number) => Promise<Float32Array | null> | Float32Array | null;
+let localDem: LocalDemProvider | null = null;
+
+/** Сбросить кеш тайлов (после смены своих данных рельефа). */
+export function clearDemCache() { cache.clear(); }
+
+/** Подключить/отключить провайдера локальных высот; кеш сбрасывается. */
+export function setLocalDemProvider(fn: LocalDemProvider | null) {
+  localDem = fn;
+  clearDemCache();
+}
+
+function fromNetwork(z: number, x: number, y: number): Promise<Float32Array | null> {
+  return fetch(DEM_URL.replace('{z}', String(z)).replace('{x}', String(x)).replace('{y}', String(y)))
+    .then((r) => (r.ok ? r.blob() : Promise.reject(r.status)))
+    .then((b) => createImageBitmap(b))
+    .then(decode)
+    .catch(() => null);
+}
+
 function decode(img: ImageBitmap): Float32Array {
   const c = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(TILE, TILE) : Object.assign(document.createElement('canvas'), { width: TILE, height: TILE });
   const ctx = c.getContext('2d', { willReadFrequently: true }) as CanvasRenderingContext2D;
@@ -25,11 +46,9 @@ export function getTile(z: number, x: number, y: number): Promise<Float32Array |
   const key = `${z}/${x}/${y}`;
   let p = cache.get(key);
   if (!p) {
-    p = fetch(DEM_URL.replace('{z}', String(z)).replace('{x}', String(x)).replace('{y}', String(y)))
-      .then((r) => (r.ok ? r.blob() : Promise.reject(r.status)))
-      .then((b) => createImageBitmap(b))
-      .then(decode)
-      .catch(() => { cache.delete(key); return null; });
+    const local = localDem ? Promise.resolve().then(() => localDem!(z, x, y)).catch(() => null) : Promise.resolve(null);
+    const q: Promise<Float32Array | null> = local.then((t) => t ?? fromNetwork(z, x, y)).then((t) => { if (!t && cache.get(key) === q) cache.delete(key); return t; });
+    p = q;
     cache.set(key, p);
     if (cache.size > 600) cache.delete(cache.keys().next().value!);
   }
@@ -87,14 +106,17 @@ export function sampleGrid(g: DemGrid, gx: number, gy: number): number {
 
 /** Высота в точке или null, если рельеф недоступен. */
 export async function elevationAt(p: LatLon, z = 14): Promise<number | null> {
-  try {
-    const g = await fetchGrid([p], z, 1);
-    const [x, y] = lonLatToPixel(p.lon, p.lat, z);
-    return sampleGrid(g, x, y);
-  } catch (e) {
-    if (e instanceof DemMissingError) return null;
-    throw e;
+  // Нет тайла на z (например, офлайн: районы качаются до z13–z12) — пробуем уровни грубее.
+  for (let zz = z; zz >= Math.min(z, 11); zz--) {
+    try {
+      const g = await fetchGrid([p], zz, 1);
+      const [x, y] = lonLatToPixel(p.lon, p.lat, zz);
+      return sampleGrid(g, x, y);
+    } catch (e) {
+      if (!(e instanceof DemMissingError)) throw e;
+    }
   }
+  return null;
 }
 
 /** Уровень DEM, при котором шаг пикселя ≈ требуемому шагу выборки. */
