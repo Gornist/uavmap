@@ -56,8 +56,9 @@ describe('темы: CSS совпадает с THEMES (один источник 
   it('все токены — непрозрачные #rrggbb', () => {
     for (const t of Object.values(THEMES)) for (const v of Object.values(t)) expect(v).toMatch(/^#[0-9a-f]{6}$/);
   });
-  it('--map-ok/--map-weak/--map-none в CSS = STATUS_MAP', () => {
-    for (const s of ['ok', 'weak', 'none'] as const) expect(css).toContain(`--map-${s}: ${STATUS_MAP[s]};`);
+  it('theme-color в index.html — фон ночной темы (до загрузки скриптов; дальше ставит theme.ts)', () => {
+    const html: string = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    expect(html).toContain(`<meta name="theme-color" content="${THEMES.night.bg}" />`);
   });
   it('RGB статусов для растра = STATUS_MAP', () => {
     expect(STATUS_RGB.ok).toEqual([0x3f, 0xae, 0x5f]);

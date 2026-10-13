@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
-import { describe, expect, it } from 'vitest';
-import { defaults, importText, Mark, Route, State, toGeoJSON, toGPX, toKML } from './store';
+import { describe, expect, it, vi } from 'vitest';
+import { COV_MAX_HEIGHTS, defaults, importText, Mark, Route, save, State, toGeoJSON, toGPX, toKML } from './store';
 import { DEFAULT_RADIO } from './radio';
 
 const mark = (name: string, lat: number, lon: number, note = ''): Mark =>
@@ -25,7 +25,9 @@ describe('defaults', () => {
     expect(d.station).toBeNull();
     expect(d.droneH).toBeGreaterThan(0);
     expect(d.coverage.heights.length).toBeGreaterThan(0);
-    expect(d.coverage.heightIdx).toBeLessThan(d.coverage.heights.length);
+    expect(d.coverage.heights.length).toBeLessThanOrEqual(COV_MAX_HEIGHTS);
+    expect(d.coverage.compare).toBe(false); // по умолчанию зона считает одну высоту — S.droneH
+    expect('heightIdx' in d.coverage).toBe(false);
     expect(['takeoff', 'terrain']).toContain(d.altMode);
   });
 });
@@ -304,5 +306,68 @@ describe('вторая линия (видео) в состоянии', () => {
     expect(st.coverage.line).toBe('both');
     expect(restoreProject(JSON.stringify({ video: 'junk' })).video.radio.freqMHz).toBe(5800);
     expect(restoreProject(JSON.stringify({ video: { enabled: false } })).video.enabled).toBe(false);
+  });
+});
+
+describe('save: ошибка записи', () => {
+  it('квота → onError (а не тихий провал); успешная запись — без onError', () => {
+    vi.useFakeTimers();
+    let full = true;
+    const setItem = vi.fn(() => { if (full) throw new DOMException('quota', 'QuotaExceededError'); });
+    vi.stubGlobal('localStorage', { setItem });
+    try {
+      const err = vi.fn();
+      save(defaults(), err);
+      vi.advanceTimersByTime(400);
+      expect(err).toHaveBeenCalledTimes(1);
+      full = false;
+      save(defaults(), err);
+      vi.advanceTimersByTime(400);
+      expect(setItem).toHaveBeenCalledTimes(2);
+      expect(err).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('зона: миграция старых проектов (heights/heightIdx → одна высота дрона + «Сравнить высоты»)', () => {
+  it('старый проект: список высот сохранён, сравнение включено, heightIdx убран; droneH не тронут', async () => {
+    const { restoreProject } = await import('./store');
+    const st = restoreProject(JSON.stringify({ droneH: 120, coverage: { radius: 5000, heights: [50, 150, 300], heightIdx: 2, show: 'minh', line: 'rc', opacity: 0.4 } }));
+    expect(st.coverage).toEqual({ radius: 5000, compare: true, heights: [50, 150, 300], show: 'minh', opacity: 0.4, line: 'rc' });
+    expect(st.droneH).toBe(120);
+  });
+  it('старый проект с одной высотой — сравнение выключено; без поля coverage — значения по умолчанию', async () => {
+    const { restoreProject } = await import('./store');
+    expect(restoreProject(JSON.stringify({ coverage: { heights: [80], heightIdx: 0 } })).coverage).toMatchObject({ compare: false, heights: [80] });
+    expect(restoreProject(JSON.stringify({ marks: [] })).coverage).toEqual(defaults().coverage);
+  });
+  it('старый лимит 12 высот → не больше COV_MAX_HEIGHTS, равномерно, с крайними', async () => {
+    const { restoreProject } = await import('./store');
+    const hs = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120];
+    const c = restoreProject(JSON.stringify({ coverage: { heights: hs, heightIdx: 11 } })).coverage;
+    expect(c.heights).toHaveLength(COV_MAX_HEIGHTS);
+    expect(c.heights[0]).toBe(10);
+    expect(c.heights[c.heights.length - 1]).toBe(120);
+    expect([...c.heights].sort((a, b) => a - b)).toEqual(c.heights);
+  });
+  it('новый формат: compare сохраняется как есть, пустой список допустим, мусор отбрасывается', async () => {
+    const { restoreProject, sanitize } = await import('./store');
+    expect(restoreProject(JSON.stringify({ coverage: { compare: true, heights: [] } })).coverage).toMatchObject({ compare: true, heights: [] });
+    expect(restoreProject(JSON.stringify({ coverage: { compare: false, heights: [300, 30, 30, -1, 'x'] } })).coverage).toMatchObject({ compare: false, heights: [30, 300] });
+    expect(restoreProject(JSON.stringify({ coverage: { compare: 'yes', radius: 5000 } })).coverage.compare).toBe(false);
+    // sanitize без migrate (данные уже нового формата): лишний heightIdx не попадает в состояние.
+    const st = sanitize({ ...defaults(), coverage: { ...defaults().coverage, heightIdx: 3 } as State['coverage'] });
+    expect('heightIdx' in st.coverage).toBe(false);
+  });
+  it('load: старый проект из localStorage мигрирует так же', async () => {
+    const { load } = await import('./store');
+    const raw = JSON.stringify({ coverage: { heights: [40, 400], heightIdx: 1 } });
+    vi.stubGlobal('localStorage', { getItem: (k: string) => (k === 'radius.project.v1' ? raw : null) });
+    try {
+      expect(load().coverage).toMatchObject({ compare: true, heights: [40, 400] });
+    } finally { vi.unstubAllGlobals(); }
   });
 });

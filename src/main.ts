@@ -1,23 +1,26 @@
-// Точка входа: собирает модули. Владелец: карточка 1A (docs/PLAN.md).
+// Точка входа: собирает модули; здесь же прицел с плашкой (координаты, высота), GPS и общие кнопки карты.
 import './polyfills'; // первым: старые Chrome/WebView на пультах
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
 import './styles/main.css';
+import './styles/live.css';
 import maplibregl from 'maplibre-gl';
-import { S, $, h, map, center, fc, toast, openSheet, closeSheet, sheetOpen, on, emit, persist, applyMapStyle } from './app';
-import { setStation, initStation, updateLive, liveFollow, showProfile, findBestSpot, km } from './link';
+import { S, $, map, center, toast, closeSheet, sheetOpen, on, persist, applyMapStyle } from './app';
+import { h } from './ui';
+import { initStation } from './station';
+import { addLinkLayers, initLinkStrip, liveMove, liveSettle, liveRecalc, scheduler, locate, offerGpsStation } from './live';
+import { openPointSheet } from './point';
 import { initMarks, addMarkAtCenter } from './marks';
-import { initRuler, toggleRuler } from './ruler';
-import { initCoverage, openCoverageSheet } from './coverage';
-import { initMenu } from './menu';
+import { initRuler } from './ruler';
+import { initCoverage, openCoverageSheet } from './coverageSheet';
+import { findBestSpot } from './bestSpot';
+import { initMenu } from './menu/index';
 import { initContours } from './contours';
 import { initPwa } from './pwa';
 import { initMyMaps } from './mymaps';
 import { initMobile } from './mobile';
 import { formatCoords } from './coords';
 import { elevationAt } from './elevation';
-import { distance, bearing, type LatLon } from './geo';
-import { uid } from './store';
 import { initTheme } from './theme';
 
 initTheme(); // первым делом: тема до отрисовки панелей
@@ -47,140 +50,16 @@ async function refreshHeight() {
   renderHere();
 }
 
-/**
- * Планировщик: fn вызывается через debounceMs после последнего poke() и, пока движение не прекращается,
- * не реже чем раз в maxWaitMs; now() — немедленно (на moveend). Очереди нет: один отложенный вызов.
- */
-function scheduler(fn: () => void, debounceMs: number, maxWaitMs: number) {
-  let tDeb = 0, tMax = 0, last = 0;
-  const run = () => {
-    clearTimeout(tDeb); clearTimeout(tMax); tDeb = tMax = 0;
-    last = performance.now();
-    fn();
-  };
-  return {
-    poke() {
-      clearTimeout(tDeb);
-      tDeb = window.setTimeout(run, debounceMs);
-      if (!tMax) tMax = window.setTimeout(run, Math.max(0, maxWaitMs - (performance.now() - last)));
-    },
-    now: run,
-  };
-}
-
-// ---------- Строка связи ----------
-function initLinkStrip() {
-  const strip = $('linkStrip'), btn = $('btnLink');
-  const inAnt = $<HTMLInputElement>('inAnt'), inDrone = $<HTMLInputElement>('inDrone');
-  const showStrip = (v: boolean) => { strip.hidden = !v; btn.classList.toggle('on', v); };
-
-  btn.addEventListener('click', () => {
-    if (!$('rulerBar').hidden) toggleRuler();
-    if (btn.classList.contains('on') && S.station) { showStrip(false); return; }
-    if (!S.station) {
-      setStation(center());
-      toast('Пульт поставлен в прицел. Двигайте карту — прицел покажет связь');
-    }
-    showStrip(true);
-    updateLive();
-  });
-  $('lsClose').addEventListener('click', () => showStrip(false));
-
-  strip.querySelectorAll<HTMLElement>('[data-ls]').forEach((b) => b.addEventListener('click', () => {
-    if (b.dataset.ls === 'zone') openCoverageSheet();
-    else if (b.dataset.ls === 'best') openBestSheet();
-  }));
-
-  const syncInputs = () => {
-    inAnt.disabled = !S.station;
-    if (document.activeElement !== inAnt) inAnt.value = S.station ? String(S.station.antH) : '';
-    if (document.activeElement !== inDrone) inDrone.value = String(S.droneH);
-    $('altModeLbl').textContent = S.altMode === 'takeoff' ? '(над взлётом)' : '(над рельефом)';
-  };
-  inAnt.addEventListener('input', () => {
-    const v = parseFloat(inAnt.value);
-    if (S.station && Number.isFinite(v) && v >= 0) { S.station.antH = v; emit('station'); }
-  });
-  inDrone.addEventListener('input', () => {
-    const v = parseFloat(inDrone.value);
-    if (Number.isFinite(v) && v >= 0) { S.droneH = v; emit('radio'); }
-  });
-  on('station', syncInputs);
-  on('radio', syncInputs);
-  syncInputs();
-
-  $('btnProfile').addEventListener('click', () => showProfile());
-}
-
-function openBestSheet() {
-  const b = openSheet('Где встать', `
-    <p class="hint">Найду место для пульта, откуда лучше всего связь с точкой в прицеле. Где искать?</p>
-    <div class="chips" id="bestR"></div>`);
-  for (const r of [500, 1000, 2000, 3000]) {
-    const c = document.createElement('button');
-    c.textContent = r < 1000 ? `${r} м` : `${r / 1000} км`;
-    c.addEventListener('click', () => { closeSheet(); findBestSpot(r); });
-    b.querySelector('#bestR')!.appendChild(c);
-  }
-}
-
-// ---------- Карточка «Точка» ----------
-let pointPin: maplibregl.Marker | null = null;
-const clearPin = () => { pointPin?.remove(); pointPin = null; };
-
-/** Шторка «Точка»: для прицела или (долгое нажатие / правый клик) для места нажатия. */
-function openPointSheet(at?: LatLon) {
-  const p = at ?? center();
-  const body = h('<div></div>');
-  let html = `<div class="kv"><div><small>Высота места</small><b id="ptH">…</b></div>`;
-  for (const f of ['sk42', 'dd', 'dms'] as const) {
-    const c = formatCoords(p.lat, p.lon, f);
-    html += `<div><small>${c.label}</small><b>${c.short}</b></div>`;
-  }
-  if (S.station) {
-    const a = { lat: S.station.lat, lon: S.station.lon };
-    html += `<div><small>От пульта</small><b>${km(distance(a, p))}, аз. ${Math.round(bearing(a, p)) % 360}°</b></div>`;
-  }
-  html += `</div>
-    <div class="row"><button class="ghost" id="ptSt">Пульт сюда</button><button class="ghost" id="ptMk">Метка здесь</button><button class="ghost" id="ptPr">Профиль сюда</button><button class="ghost" id="ptCp">Копировать координаты</button></div>`;
-  body.innerHTML = html;
-  const q = (s: string) => body.querySelector(s) as HTMLElement;
-  elevationAt(p).then((e) => { if (body.isConnected) q('#ptH').textContent = e === null ? '—' : `${Math.round(e)} м`; });
-  q('#ptSt').addEventListener('click', () => { setStation(p); closeSheet(); toast('Пульт поставлен'); });
-  q('#ptMk').addEventListener('click', () => {
-    S.marks.push({ id: uid(), name: `Метка ${S.marks.length + 1}`, note: '', lat: p.lat, lon: p.lon, color: '#e3a948', folder: '', created: Date.now() });
-    emit('marks'); toast('Метка добавлена');
-  });
-  q('#ptPr').addEventListener('click', () => showProfile(p));
-  q('#ptCp').addEventListener('click', () => {
-    const text = formatCoords(p.lat, p.lon, S.coordFormat).short.replace(/<\/?em>/g, '');
-    navigator.clipboard.writeText(text).then(() => toast('Координаты скопированы'), () => toast('Не удалось скопировать'));
-  });
-  openSheet('Точка', body, clearPin);
-  clearPin();
-  if (at) pointPin = new maplibregl.Marker({ element: h('<div class="pt-pin"></div>') }).setLngLat([p.lon, p.lat]).addTo(map);
-}
-
 // ---------- GPS ----------
 let gpsMarker: maplibregl.Marker | null = null;
-function locate() {
-  if (!navigator.geolocation) { toast('Геолокация не поддерживается'); return; }
-  navigator.geolocation.getCurrentPosition((pos) => {
-    const ll: [number, number] = [pos.coords.longitude, pos.coords.latitude];
-    if (!gpsMarker) gpsMarker = new maplibregl.Marker({ element: h('<div class="gps-dot"></div>') }).setLngLat(ll).addTo(map);
-    else gpsMarker.setLngLat(ll);
-    map.flyTo({ center: ll, zoom: Math.max(map.getZoom(), 15) });
-  }, (err) => {
-    toast(err.code === 1 ? 'Доступ к геолокации запрещён' : err.code === 3 ? 'Геолокация: время ожидания вышло' : 'Не удалось определить местоположение');
-  }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 });
-}
-
-// ---------- Слои ----------
-function addLinkLayers() {
-  map.addSource('link', { type: 'geojson', data: fc() });
-  map.addLayer({ id: 'ov-link-casing', type: 'line', source: 'link', paint: { 'line-color': '#000', 'line-width': 6, 'line-opacity': 0.45 } });
-  map.addLayer({ id: 'ov-link', type: 'line', source: 'link', filter: ['==', ['get', 'dash'], 0], paint: { 'line-color': ['get', 'color'], 'line-width': 3, 'line-opacity': ['coalesce', ['get', 'op'], 1] } });
-  map.addLayer({ id: 'ov-link-dash', type: 'line', source: 'link', filter: ['==', ['get', 'dash'], 1], paint: { 'line-color': ['get', 'color'], 'line-width': 3, 'line-opacity': ['coalesce', ['get', 'op'], 1], 'line-dasharray': [2, 2] } });
+async function whereAmI() {
+  const g = await locate();
+  if (!g) return;
+  const ll: [number, number] = [g.p.lon, g.p.lat];
+  if (!gpsMarker) gpsMarker = new maplibregl.Marker({ element: h('<div class="gps-dot"></div>') }).setLngLat(ll).addTo(map);
+  else gpsMarker.setLngLat(ll);
+  map.flyTo({ center: ll, zoom: Math.max(map.getZoom(), 15) });
+  offerGpsStation(g.p, g.accuracy);
 }
 
 initMenu();
@@ -201,15 +80,11 @@ function start() {
 if (map.isStyleLoaded()) start(); else map.once('style.load', start);
 
 renderHere();
-// Расчёт связи: после паузы 130 мс и при долгом перетаскивании не чаще 4 раз/с; высота — каждые ≤150 мс.
-const liveCalc = scheduler(() => { if (S.station) updateLive(); }, 130, 250);
+// Высота под прицелом — каждые ≤150 мс; расчёт связи планирует live.ts.
 const heightCalc = scheduler(refreshHeight, 60, 150);
-let followRaf = 0;
 map.on('move', () => {
   renderHere();
-  // Линия и азимут/дальность следуют за крестом на каждом кадре, без расчёта.
-  if (!followRaf) followRaf = requestAnimationFrame(() => { followRaf = 0; liveFollow(); });
-  if (S.station) liveCalc.poke();
+  liveMove();
   heightCalc.poke();
 });
 map.on('moveend', () => {
@@ -217,10 +92,9 @@ map.on('moveend', () => {
   S.map.center = [c.lng, c.lat];
   S.map.zoom = map.getZoom();
   persist();
-  cancelAnimationFrame(followRaf); followRaf = 0;
-  liveFollow();
+  liveSettle();
   heightCalc.now();
-  if (S.station) liveCalc.now();
+  liveRecalc();
 });
 on('coords', renderHere);
 
@@ -237,21 +111,15 @@ renderHere(); // плашка могла свернуться на телефо�
 
 $('zIn').addEventListener('click', () => map.zoomIn());
 $('zOut').addEventListener('click', () => map.zoomOut());
-$('btnGps').addEventListener('click', locate);
+$('btnGps').addEventListener('click', whereAmI);
 $('btnHome').addEventListener('click', () => {
   if (!S.station) { toast('Пульт не поставлен'); return; }
   map.flyTo({ center: [S.station.lon, S.station.lat] });
 });
 
 $('btnMark').addEventListener('click', addMarkAtCenter);
-$('btnRuler').addEventListener('click', toggleRuler);
-$('btnLabels').addEventListener('click', () => { S.map.labels = !S.map.labels; applyMapStyle(); });
-$('btnFull').addEventListener('click', () => {
-  const el = document.documentElement;
-  if (document.fullscreenElement) { document.exitFullscreen(); return; }
-  if (!el.requestFullscreen) { toast('Полноэкранный режим не поддерживается на этом устройстве'); return; }
-  el.requestFullscreen().catch(() => toast('Не удалось включить полный экран'));
-});
+$('btnZone').addEventListener('click', () => openCoverageSheet());
+$('btnBest').addEventListener('click', () => findBestSpot(1000));
 $('shClose').addEventListener('click', closeSheet);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && sheetOpen()) closeSheet(); });
 

@@ -1,5 +1,6 @@
 // Свои карты: чистая логика (проверка PMTiles, метаданные) — без DOM и карты, чтобы тестировать в node.
 import { bytesToHeader, TileType } from 'pmtiles';
+import { inRange } from './validate';
 
 export const PM_MAX_BYTES = 2 * 1024 ** 3;
 export const PM_HEADER_BYTES = 127;
@@ -56,7 +57,7 @@ function finish(tileType: PmInfo['tileType'], bounds: PmInfo['bounds'], z0: numb
   return { ok: true, info: { bounds, minzoom: z0, maxzoom: z1, tileType } };
 }
 
-const num = (v: unknown, lo: number, hi: number): number | null => (typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi ? v : null);
+const num = (v: unknown, lo: number, hi: number): number | null => (inRange(v, lo, hi) ? v : null);
 
 /** Разбор сохранённых метаданных: невалидные записи отбрасываются, формат не доверяется. */
 export function parseMeta(raw: string | null): MyMapItem[] {
@@ -91,10 +92,6 @@ export function parseMeta(raw: string | null): MyMapItem[] {
 }
 
 export const serializeMeta = (items: MyMapItem[]) => JSON.stringify({ v: 1, items });
-
-export function fmtSize(b: number): string {
-  return b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(1)} ГБ` : b >= 1024 ** 2 ? `${(b / 1024 ** 2).toFixed(1)} МБ` : `${Math.max(1, Math.round(b / 1024))} КБ`;
-}
 
 export function fmtBounds(b: [number, number, number, number]): string {
   const f = (v: number) => v.toFixed(2);

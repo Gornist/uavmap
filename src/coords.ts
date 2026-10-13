@@ -1,25 +1,144 @@
 // Форматы координат. СК-42 — прямоугольные координаты Гаусса–Крюгера (как на советских/российских топокартах),
 // параметры перехода WGS-84 → СК-42 по ГОСТ 32453-2017 (7 параметров, эллипсоид Красовского).
-import proj4 from 'proj4';
+// Пересчёт свой, без библиотек: геодезические ↔ геоцентрические, Гельмерт (7 параметров, малые углы),
+// поперечная проекция Меркатора рядами Крюгера по n до n⁶ (Karney 2011, J. Geodesy 85:475) — ошибка
+// < 0.1 мм в пределах ±3° от осевого меридиана. Соглашение знаков поворотов — как у +towgs84 в PROJ/proj4
+// (position vector, параметры СК-42 → WGS-84), результат совпадает с прежней реализацией на proj4.
 
 export type CoordFormat = 'sk42' | 'dd' | 'dms';
 
-const SK42_TOWGS = '23.57,-140.95,-79.8,0,0.35,0.79,-0.22';
+interface Ellipsoid { a: number; es: number }
+const ell = (a: number, rf: number): Ellipsoid => { const f = 1 / rf; return { a, es: f * (2 - f) }; };
+const WGS84 = ell(6378137, 298.257223563);
+const KRASS = ell(6378245, 298.3);
 
-function sk42Def(zone: number) {
-  return `+proj=tmerc +lat_0=0 +lon_0=${zone * 6 - 3} +k=1 +x_0=${zone * 1e6 + 500000} +y_0=0 +ellps=krass +towgs84=${SK42_TOWGS} +units=m +no_defs`;
+const SEC = Math.PI / (180 * 3600);
+/** ГОСТ 32453-2017, СК-42 → WGS-84: dX, dY, dZ (м), ωx, ωy, ωz (″), m (ppm). */
+const SK42_TOWGS = [23.57, -140.95, -79.8, 0, 0.35, 0.79, -0.22] as const;
+const [DX, DY, DZ] = SK42_TOWGS;
+const RX = SK42_TOWGS[3] * SEC, RY = SK42_TOWGS[4] * SEC, RZ = SK42_TOWGS[5] * SEC, M = 1 + SK42_TOWGS[6] * 1e-6;
+
+type Vec3 = [number, number, number];
+const D2R = Math.PI / 180;
+
+function toGeocentric(latDeg: number, lonDeg: number, e: Ellipsoid): Vec3 {
+  const p = latDeg * D2R, l = lonDeg * D2R, s = Math.sin(p), c = Math.cos(p);
+  const n = e.a / Math.sqrt(1 - e.es * s * s);
+  return [n * c * Math.cos(l), n * c * Math.sin(l), n * (1 - e.es) * s];
 }
 
-export function toSK42(lat: number, lon: number): { x: number; y: number; zone: number } {
+/** Геоцентрические → геодезические (итерация по широте, высота отбрасывается). */
+function fromGeocentric([x, y, z]: Vec3, e: Ellipsoid): { lat: number; lon: number } {
+  const p = Math.hypot(x, y);
+  let phi = Math.atan2(z, p * (1 - e.es));
+  for (let i = 0; i < 10; i++) {
+    const s = Math.sin(phi), n = e.a / Math.sqrt(1 - e.es * s * s);
+    const next = Math.atan2(z + e.es * n * s, p);
+    const done = Math.abs(next - phi) < 1e-14;
+    phi = next;
+    if (done) break;
+  }
+  return { lat: phi / D2R, lon: Math.atan2(y, x) / D2R };
+}
+
+/** СК-42 → WGS-84 (геоцентрические), Гельмерт position vector, малые углы. */
+function sk42ToWgs([x, y, z]: Vec3): Vec3 {
+  return [
+    M * (x - RZ * y + RY * z) + DX,
+    M * (RZ * x + y - RX * z) + DY,
+    M * (-RY * x + RX * y + z) + DZ,
+  ];
+}
+
+/** WGS-84 → СК-42: обратное преобразование (транспонированная матрица поворота, как в PROJ/proj4). */
+function wgsToSk42([x, y, z]: Vec3): Vec3 {
+  const u = (x - DX) / M, v = (y - DY) / M, w = (z - DZ) / M;
+  return [u + RZ * v - RY * w, -RZ * u + v + RX * w, RY * u - RX * v + w];
+}
+
+// Поперечная проекция Меркатора на эллипсоиде Красовского, ряды Крюгера (Karney 2011, порядок n⁶).
+const N = (1 - Math.sqrt(1 - KRASS.es)) / (1 + Math.sqrt(1 - KRASS.es)); // n = f/(2−f)
+const N2 = N * N, N3 = N2 * N, N4 = N3 * N, N5 = N4 * N, N6 = N5 * N;
+const E = Math.sqrt(KRASS.es);
+/** Радиус спрямляющей сферы A (k = 1). */
+const A = (KRASS.a / (1 + N)) * (1 + N2 / 4 + N4 / 64 + N6 / 256);
+const ALPHA = [
+  N / 2 - (2 * N2) / 3 + (5 * N3) / 16 + (41 * N4) / 180 - (127 * N5) / 288 + (7891 * N6) / 37800,
+  (13 * N2) / 48 - (3 * N3) / 5 + (557 * N4) / 1440 + (281 * N5) / 630 - (1983433 * N6) / 1935360,
+  (61 * N3) / 240 - (103 * N4) / 140 + (15061 * N5) / 26880 + (167603 * N6) / 181440,
+  (49561 * N4) / 161280 - (179 * N5) / 168 + (6601661 * N6) / 7257600,
+  (34729 * N5) / 80640 - (3418889 * N6) / 1995840,
+  (212378941 * N6) / 319334400,
+];
+const BETA = [
+  N / 2 - (2 * N2) / 3 + (37 * N3) / 96 - N4 / 360 - (81 * N5) / 512 + (96199 * N6) / 604800,
+  N2 / 48 + N3 / 15 - (437 * N4) / 1440 + (46 * N5) / 105 - (1118711 * N6) / 3870720,
+  (17 * N3) / 480 - (37 * N4) / 840 - (209 * N5) / 4480 + (5569 * N6) / 90720,
+  (4397 * N4) / 161280 - (11 * N5) / 504 - (830251 * N6) / 7257600,
+  (4583 * N5) / 161280 - (108847 * N6) / 3991680,
+  (20648693 * N6) / 638668800,
+];
+
+/** τ' = tg конформной широты по τ = tg геодезической. */
+function tauPrime(tau: number): number {
+  const s = Math.sinh(E * Math.atanh((E * tau) / Math.sqrt(1 + tau * tau)));
+  return tau * Math.sqrt(1 + s * s) - s * Math.sqrt(1 + tau * tau);
+}
+
+const zoneMeridian = (zone: number) => zone * 6 - 3;
+const zoneFalseEasting = (zone: number) => zone * 1e6 + 500000;
+
+/** Прямая проекция: геодезические (Красовский) → x (север), y (восток с номером зоны). */
+function gkForward(latDeg: number, lonDeg: number, zone: number): { x: number; y: number } {
+  const l = (lonDeg - zoneMeridian(zone)) * D2R;
+  const tp = tauPrime(Math.tan(latDeg * D2R)), cl = Math.cos(l);
+  const xi0 = Math.atan2(tp, cl), eta0 = Math.asinh(Math.sin(l) / Math.hypot(tp, cl));
+  let xi = xi0, eta = eta0;
+  for (let j = 1; j <= 6; j++) {
+    xi += ALPHA[j - 1] * Math.sin(2 * j * xi0) * Math.cosh(2 * j * eta0);
+    eta += ALPHA[j - 1] * Math.cos(2 * j * xi0) * Math.sinh(2 * j * eta0);
+  }
+  return { x: A * xi, y: A * eta + zoneFalseEasting(zone) };
+}
+
+/** Обратная проекция: x, y зоны → геодезические (Красовский), градусы. */
+function gkInverse(x: number, y: number, zone: number): { lat: number; lon: number } {
+  const xi = x / A, eta = (y - zoneFalseEasting(zone)) / A;
+  let xi0 = xi, eta0 = eta;
+  for (let j = 1; j <= 6; j++) {
+    xi0 -= BETA[j - 1] * Math.sin(2 * j * xi) * Math.cosh(2 * j * eta);
+    eta0 -= BETA[j - 1] * Math.cos(2 * j * xi) * Math.sinh(2 * j * eta);
+  }
+  const se = Math.sinh(eta0), cx = Math.cos(xi0);
+  const tp = Math.sin(xi0) / Math.hypot(se, cx);
+  // τ по τ' — метод Ньютона (Karney 2011, ур. 19–20).
+  let tau = tp;
+  for (let i = 0; i < 10; i++) {
+    const t1 = tauPrime(tau), s1 = Math.sqrt(1 + t1 * t1), st = Math.sqrt(1 + tau * tau);
+    const d = ((tp - t1) / s1) * ((1 + (1 - KRASS.es) * tau * tau) / ((1 - KRASS.es) * st));
+    tau += d;
+    if (Math.abs(d) < 1e-13 * Math.max(1, Math.abs(tau))) break;
+  }
+  return { lat: Math.atan(tau) / D2R, lon: zoneMeridian(zone) + Math.atan2(se, cx) / D2R };
+}
+
+/** WGS-84 → СК-42 без округления (м); зона = ⌊λ/6⌋+1. */
+export function toSK42Exact(lat: number, lon: number): { x: number; y: number; zone: number } {
   const zone = Math.floor(lon / 6) + 1;
-  const [e, n] = proj4('WGS84', sk42Def(zone), [lon, lat]);
-  return { x: Math.round(n), y: Math.round(e), zone };
+  const g = fromGeocentric(wgsToSk42(toGeocentric(lat, lon, WGS84)), KRASS);
+  return { ...gkForward(g.lat, g.lon, zone), zone };
+}
+
+/** WGS-84 → СК-42, X/Y округлены до метра (как на карте). */
+export function toSK42(lat: number, lon: number): { x: number; y: number; zone: number } {
+  const { x, y, zone } = toSK42Exact(lat, lon);
+  return { x: Math.round(x), y: Math.round(y), zone };
 }
 
 export function fromSK42(x: number, y: number): { lat: number; lon: number } {
   const zone = Math.floor(y / 1e6);
-  const [lon, lat] = proj4(sk42Def(zone), 'WGS84', [y, x]);
-  return { lat, lon };
+  const g = gkInverse(x, y, zone);
+  return fromGeocentric(sk42ToWgs(toGeocentric(g.lat, g.lon, KRASS)), WGS84);
 }
 
 function dms(v: number, pos: string, neg: string) {

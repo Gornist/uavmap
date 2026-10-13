@@ -1,7 +1,9 @@
 // Геодезические помощники на сфере (для расстояний до сотен км точности хватает с запасом).
+/** Средний радиус Земли, м. */
 export const R_EARTH = 6371008.8;
-const D2R = Math.PI / 180;
-const R2D = 180 / Math.PI;
+/** Градусы → радианы и обратно. */
+export const D2R = Math.PI / 180;
+export const R2D = 180 / Math.PI;
 
 export interface LatLon { lat: number; lon: number }
 
@@ -50,9 +52,4 @@ export function pixelToLonLat(px: number, py: number, z: number): [number, numbe
   const lon = (px / n) * 360 - 180;
   const lat = Math.atan(Math.sinh(Math.PI * (1 - (2 * py) / n))) * R2D;
   return [lon, lat];
-}
-
-export function fmtDist(m: number): string {
-  if (m < 1000) return `${Math.round(m)} м`;
-  return `${(m / 1000).toFixed(m < 10000 ? 2 : 1)} км`;
 }

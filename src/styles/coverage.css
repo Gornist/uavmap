@@ -1,9 +1,29 @@
 /* Шторка «Зона покрытия» */
-.cov-stale { color: var(--accent-text); font-size: 13px; margin: 6px 0; }
-.cov-prelim { color: var(--muted); font-size: 13px; margin: 6px 0; font-style: italic; }
+.cov-stale { color: var(--accent-text); font-size: 14px; margin: 6px 0; }
+.cov-prelim { color: var(--muted); font-size: 14px; margin: 6px 0; font-style: italic; }
 .cov-sec { color: var(--muted); font-size: 13px; margin: 12px 0 4px; }
+.cov-result { margin: 10px 0 2px; }
+.cov-clear { margin-top: 4px; }
+#sheet .cov-clear > button { flex: 0 1 auto; }
+.cov-err { margin: 8px 0; padding: 8px 10px; border: 1px solid var(--none); border-radius: var(--r); background: var(--none-bg); display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.cov-err-t { color: var(--none); font-weight: 600; flex: 1 1 180px; }
+.cov-check { display: flex; align-items: center; gap: 10px; min-height: 44px; cursor: pointer; }
+.cov-check input { width: 22px; height: 22px; margin: 0; accent-color: var(--accent); }
 .cov-add { display: flex; gap: 6px; margin-top: 6px; }
 .cov-add input { width: 90px; text-align: right; }
-.cov-opacity { width: 100%; }
-.chips button.x { padding: 4px 8px; }
+.cov-opacity { width: 100%; min-height: 44px; }
+.chips button.x { padding: 4px 10px; }
 .rt td small { display: block; color: var(--muted); font-size: 13px; }
+
+/* Плашка зоны поверх карты (шторка закрыта): под карточкой рельефа справа, top задаёт coverageSheet.ts. */
+.cov-pill { position: absolute; top: calc(110px + var(--safe-t)); right: calc(10px + var(--safe-r)); z-index: 5; display: flex; align-items: stretch; max-width: calc(100% - 20px - var(--safe-l) - var(--safe-r)); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 22px; box-shadow: var(--shadow); }
+.cov-pill[hidden] { display: none; }
+.cov-pill button { background: transparent; border: 0; color: var(--text); min-height: 44px; }
+.cov-pill-main { display: flex; align-items: center; gap: 8px; white-space: nowrap; padding: 6px 4px 6px 14px; text-align: left; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 0; }
+.cov-pill-t { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.cov-pill-lg { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 16px; }
+.cov-pill-lg i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25); }
+.cov-pill-n { color: var(--muted); font-weight: 400; font-size: 13px; }
+.cov-pill-x { flex: none; width: 44px; border-left: 1px solid var(--line) !important; border-radius: 0 22px 22px 0; font-size: 16px; }
+.no-flexgap .cov-pill-main > * + *, .no-flexgap .cov-pill-lg > * + * { margin-left: 6px; }
+.no-flexgap .cov-err > * + *, .no-flexgap .cov-check > * + *, .no-flexgap .cov-add > * + * { margin-left: 8px; }

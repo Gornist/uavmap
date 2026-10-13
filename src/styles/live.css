@@ -1,0 +1,119 @@
+/* Нижняя панель (Метка · Зона · Где встать · Меню), строка связи над ней, логотип, ромбы «Где встать»,
+ * кнопки «Применить» в таблицах. Высота панели — --bar-h: от неё отсчитываются строка связи, линейка и контролы карты. */
+:root { --bar-h: 60px; }
+
+/* Логотипа на карте нет (он в шапке меню). Верхний левый угол — атрибуция подложки: внизу её перекрывали бы
+ * строка связи и кнопки зума. Масштаб — над строкой связи (её высоту --strip-h ставит live.ts). */
+.maplibregl-ctrl-bottom-right { top: calc(4px + var(--safe-t)); left: calc(4px + var(--safe-l)); right: auto; bottom: auto !important; }
+.maplibregl-ctrl-bottom-right .maplibregl-ctrl { margin: 6px 0 0 6px; }
+.maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib { max-width: calc(100vw - 290px - var(--safe-l) - var(--safe-r)); }
+.maplibregl-ctrl-attrib-button { background-repeat: no-repeat; background-position: center; } /* кнопка 44 px — значок один */
+.maplibregl-ctrl-bottom-left { bottom: calc(var(--bar-h) + var(--strip-h, 0px) + 14px + var(--safe-b)) !important; left: var(--safe-l); }
+@media (max-width: 640px), (max-height: 520px) and (orientation: landscape) {
+  .maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib { max-width: calc(100vw - 240px - var(--safe-l) - var(--safe-r)); }
+}
+
+/* ---------- Нижняя панель ---------- */
+#bottomBar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 6; display: flex; gap: 8px; height: calc(var(--bar-h) + var(--safe-b)); padding: 8px calc(8px + var(--safe-r)) calc(8px + var(--safe-b)) calc(8px + var(--safe-l)); background: var(--panel); border-top: 1px solid var(--line); box-shadow: var(--shadow); }
+#bottomBar button { flex: none; display: flex; align-items: center; justify-content: center; gap: 8px; height: 44px; min-width: 44px; padding: 0 16px; background: var(--panel-2); color: var(--text); border: 1px solid var(--line-strong); border-radius: 10px; white-space: nowrap; font-weight: 600; }
+#bottomBar button .ico { font-size: 18px; line-height: 1; color: var(--accent-text); }
+#bottomBar #btnMenu { margin-left: auto; }
+.no-flexgap #bottomBar > * + * { margin-left: 8px; }
+.no-flexgap #bottomBar > #btnMenu { margin-left: auto; }
+.no-flexgap #bottomBar button > * + * { margin-left: 8px; }
+
+/* ---------- Строка связи ---------- */
+#linkStrip { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(var(--bar-h) + 8px + var(--safe-b)); z-index: 6; width: min(620px, calc(100% - 16px)); background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow-lg); padding: 8px 10px; }
+/* Ручка линейки (ruler.ts) ставит hidden; открытая шторка закрывает строку целиком — прячем, чтобы не мелькала. */
+#linkStrip[hidden], body.sheet-open #linkStrip { display: none; }
+
+.ls-offer { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 0 0 8px; margin-bottom: 8px; border-bottom: 1px solid var(--line); }
+.ls-offer[hidden] { display: none; }
+.ls-offer > span { flex: 1 1 auto; font-weight: 600; }
+.ls-offer .primary { order: 1; padding: 8px 12px; min-height: 44px; }
+.ls-offer .ls-x { order: 2; }
+/* Пока висит предложение «Поставить пульт сюда», пустое состояние не дублирует его. */
+#linkStrip.offering .ls-empty { display: none; }
+#linkStrip.offering .ls-offer { padding-bottom: 0; margin-bottom: 0; border-bottom: 0; }
+
+.ls-empty p { margin: 2px 2px 8px; font-size: 17px; font-weight: 600; }
+.ls-empty[hidden], #lsMain[hidden] { display: none; }
+.ls-acts { display: flex; gap: 8px; }
+.ls-acts button { flex: 1 1 0; min-height: 44px; }
+
+.ls-status { padding: 2px 2px 8px; }
+.ls-verdict { font-size: 20px; font-weight: 600; line-height: 1.25; }
+.ls-need { margin-top: 2px; font-size: 15px; font-weight: 600; line-height: 1.35; }
+.ls-need span { white-space: nowrap; }
+.ls-sub { margin-top: 2px; font-size: 13px; line-height: 1.35; }
+.ls-msg { font-size: 16px; font-weight: 600; }
+.ls-dl { margin-top: 6px; min-height: 44px; }
+
+.ls-inputs { display: flex; gap: 8px; align-items: stretch; }
+.ls-inputs label { display: flex; align-items: center; gap: 6px; flex: 1 1 0; min-width: 0; min-height: 44px; padding: 0 4px 0 10px; background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: 10px; }
+.ls-inputs label span { flex: 1 1 auto; font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ls-inputs label em { font-weight: 400; color: var(--muted); font-size: 13px; }
+.ls-inputs input { flex: none; width: 76px; min-height: 36px; padding: 4px 6px; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+.ls-inputs button { flex: none; min-height: 44px; }
+.no-flexgap .ls-inputs > * + *, .no-flexgap .ls-acts > * + *, .no-flexgap .ls-offer > * + *, .no-flexgap .ls-inputs label > * + * { margin-left: 8px; }
+
+/* ---------- «Где встать»: ромбы с номерами и цель ---------- */
+/* Позицию маркера задаёт MapLibre (position: absolute + transform) — здесь её не переопределяем. */
+.bs-mk { width: 34px; height: 34px; display: grid; place-items: center; cursor: pointer; }
+.bs-mk::before { content: ""; position: absolute; left: 7px; top: 7px; width: 20px; height: 20px; background: currentColor; border: 2px solid #15130f; border-radius: 3px; transform: rotate(45deg); box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85); }
+.bs-label { position: relative; font: 700 14px/1 var(--font-ui); color: #15130f; pointer-events: none; }
+.bs-target { cursor: default; }
+.bs-target::before { background: transparent; border: 3px solid var(--accent); border-radius: 50%; transform: none; box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.7); }
+.bs-target .bs-label { position: absolute; top: 34px; left: 50%; transform: translateX(-50%); font: 600 13px var(--font-ui); color: #fff; text-shadow: 0 0 3px #000, 0 0 2px #000, 0 0 1px #000; white-space: nowrap; }
+
+/* Кнопка «Применить»/«Встать» в строке таблицы: выбор только явным нажатием. */
+table.rt button.apply { padding: 6px 10px; font-size: 13px; min-height: 36px; white-space: nowrap; }
+table.rt td:last-child { width: 1%; }
+.prof-need { margin: 0 0 10px; font-weight: 600; }
+.prof-need span { white-space: nowrap; }
+
+/* ---------- Портрет телефона: панель — «вкладки» со значком над подписью ---------- */
+@media (max-width: 640px) {
+  :root { --bar-h: 62px; }
+  #bottomBar { gap: 6px; padding: 6px calc(6px + var(--safe-r)) calc(6px + var(--safe-b)) calc(6px + var(--safe-l)); }
+  #bottomBar button { flex: 1 1 0; min-width: 0; flex-direction: column; gap: 2px; height: 50px; padding: 0 2px; font-size: 13px; line-height: 1.1; }
+  #bottomBar button .ico { font-size: 19px; }
+  #bottomBar #btnMenu { margin-left: 0; }
+  .no-flexgap #bottomBar > * + * { margin-left: 6px; }
+  .no-flexgap #bottomBar > #btnMenu { margin-left: 6px; }
+  .no-flexgap #bottomBar button > * + * { margin-left: 0; margin-top: 2px; }
+
+  #linkStrip { width: calc(100% - 12px - var(--safe-l) - var(--safe-r)); bottom: calc(var(--bar-h) + 6px + var(--safe-b)); padding: 8px; }
+  .ls-offer .ls-x { order: 1; }
+  .ls-offer .primary { order: 2; flex: 1 1 100%; }
+  .ls-verdict { font-size: 19px; }
+  .ls-need { font-size: 14px; }
+  .ls-inputs { gap: 6px; }
+  .ls-inputs label { flex: 1 1 auto; padding: 0 2px 0 8px; gap: 4px; }
+  .ls-inputs label span { font-size: 13px; overflow: visible; }
+  .ls-inputs label em { display: none; }
+  .ls-inputs input { width: 54px; padding: 4px; }
+  .ls-inputs button { padding: 0 12px; }
+}
+
+/* ---------- Ландшафт телефона: строка компактная, слева, не заходит на прицел ---------- */
+@media (max-height: 520px) and (orientation: landscape) {
+  #bottomBar { padding-top: 8px; padding-bottom: calc(8px + var(--safe-b)); }
+  #bottomBar button { flex: 1 1 0; padding: 0 8px; }
+  #bottomBar #btnMenu { margin-left: 0; }
+  #linkStrip { left: calc(8px + var(--safe-l)); transform: none; width: min(380px, 44vw); padding: 6px 8px; }
+  .ls-offer .ls-x { order: 1; }
+  .ls-offer .primary { order: 2; flex: 1 1 100%; }
+  #crossLabel { top: auto; bottom: calc(50% + 28px); } /* подпись у прицела — над ним: снизу слева стоит строка связи */
+  .ls-status { padding: 0 2px 6px; }
+  .ls-verdict { font-size: 17px; }
+  .ls-need { font-size: 13px; margin-top: 1px; }
+  .ls-sub { margin-top: 0; }
+  .ls-empty p { font-size: 15px; margin-bottom: 6px; }
+  .ls-inputs { gap: 6px; }
+  .ls-inputs label { flex: 1 1 auto; padding: 0 2px 0 8px; gap: 4px; }
+  .ls-inputs label span { font-size: 13px; overflow: visible; }
+  .ls-inputs label em { display: none; }
+  .ls-inputs input { width: 54px; padding: 4px; }
+  .ls-inputs button { padding: 0 10px; }
+}

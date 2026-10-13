@@ -1,6 +1,7 @@
 /// <reference types="vitest/config" />
 import { defineConfig, loadEnv } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
+import { THEMES } from './src/theme';
 
 // base — путь на GitHub Pages: https://gornist.github.io/uavmap/
 // SW в dev выключен (мешает HMR); включить для отладки: VITE_PWA_DEV=1 npm run dev
@@ -19,13 +20,15 @@ export default defineConfig(({ command, mode }) => {
         filename: 'sw.ts',
         registerType: 'prompt',
         injectRegister: false, // регистрирует src/pwa.ts
+        includeManifestIcons: false, // иконки уже попадают в precache по globPatterns — без дублей
         manifest: {
           name: 'uavmap — радиовидимость дрона',
           short_name: 'uavmap',
           lang: 'ru',
           display: 'standalone',
-          background_color: '#10151f',
-          theme_color: '#10151f',
+          // Манифест статичен: заставка и рамка — цвет фона ночной темы; во время работы theme.ts ставит цвет текущей темы.
+          background_color: THEMES.night.bg,
+          theme_color: THEMES.night.bg,
           start_url: '.',
           scope: '.',
           icons: [

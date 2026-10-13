@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { checkPmtiles, parseMeta, serializeMeta, cleanName, fmtSize, PM_MAX_BYTES } from './mymapsCore';
+import { checkPmtiles, parseMeta, serializeMeta, cleanName, PM_MAX_BYTES } from './mymapsCore';
 
 /** Синтетический заголовок PMTiles v3 (127 байт). */
 function header(o: { magic?: string; ver?: number; type?: number; comp?: number; z0?: number; z1?: number; bounds?: number[]; tileOff?: number; tileLen?: number } = {}) {
@@ -76,6 +76,5 @@ describe('метаданные localStorage', () => {
   it('имя очищается', () => {
     expect(cleanName('  <b>x</b>\u0000\n ')).toBe('bx/b');
     expect(cleanName('a'.repeat(300)).length).toBe(80);
-    expect(fmtSize(3 * 1024 ** 3)).toBe('3.0 ГБ');
   });
 });

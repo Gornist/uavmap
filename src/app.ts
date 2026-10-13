@@ -1,19 +1,23 @@
 // Общее ядро: состояние, карта, мелкие помощники интерфейса.
 import maplibregl, { Map as MLMap, StyleSpecification, RasterSourceSpecification } from 'maplibre-gl';
 import { load, save, State } from './store';
-import { DEM_URL } from './elevation';
+import { DEM_URL } from './demTiles';
 import type { LatLon } from './geo';
-import { initTheme, resolvedTheme, MAP_THEME } from './theme';
+import { initTheme, resolvedTheme, MAP_THEME, THEMES } from './theme';
 
 // Тема должна стоять до создания карты (цвет фона, яркость подложки). Повторный вызов из main.ts безопасен.
 initTheme();
 
 export const S: State = load();
-export const persist = () => save(S);
+// Ошибку записи показываем один раз за сессию — иначе toast повторялся бы при каждом сдвиге карты.
+let saveWarned = false;
+export const persist = () => save(S, () => {
+  if (saveWarned) return;
+  saveWarned = true;
+  toast('Не хватает места в браузере, сделайте резервную копию', 6000);
+});
 
 export const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
-export const h = (html: string) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild as HTMLElement; };
-export const escapeHtml = (t: string) => t.replace(/[<>&"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 // ---------- Подложки ----------
 export interface BaseDef { name: string; tiles: string[]; max: number; attr: string }
@@ -96,19 +100,22 @@ export function applyMapStyle() {
   map.setLayoutProperty('hillshade', 'visibility', S.map.hillshade ? 'visible' : 'none');
   for (const l of ['roads', 'places']) map.setLayoutProperty(l, 'visibility', S.map.labels ? 'visible' : 'none');
   document.body.classList.toggle('no-labels', !S.map.labels);
-  $('btnLabels').classList.toggle('on', S.map.labels);
   persist();
 }
 
 /**
  * Цвета слоёв карты под тему: фон, яркость подложек, обводки линий связи/маршрутов (тёмная обводка —
- * чтобы линия читалась и на светлом топо, и на спутнике). Слои создают другие модули (main.ts, ruler.ts),
+ * чтобы линия читалась и на светлом топо, и на спутнике). Слои создают другие модули (live.ts, ruler.ts),
  * поэтому правим их по id, когда они появятся (styledata), и при смене темы. Ставим свойство, только если
  * значение отличается, — иначе styledata от setPaintProperty зациклился бы.
  */
+/** Акцентный цвет темы (--accent) — для линий линейки и границы зоны на карте. */
+export const accentColor = () => getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || THEMES[resolvedTheme()].accent;
+
 function overlayPaint(): Record<string, Record<string, unknown>> {
   const m = MAP_THEME[resolvedTheme()];
   const casing = { 'line-color': m.casing, 'line-opacity': m.casingOpacity };
+  const accent = accentColor();
   return {
     bg: { 'background-color': m.bg },
     'ov-link-casing': { ...casing, 'line-width': 7 },
@@ -116,10 +123,13 @@ function overlayPaint(): Record<string, Record<string, unknown>> {
     'ov-link-dash': { 'line-width': 4 },
     'ov-routes-casing': { ...casing, 'line-width': 6 },
     'ov-routes': { 'line-color': m.route },
-    'ov-ruler-pts': { 'circle-stroke-color': m.casing },
+    'ov-ruler': { 'line-color': accent },
+    'ov-ruler-live': { 'line-color': accent },
+    'ov-ruler-pts': { 'circle-stroke-color': m.casing, 'circle-color': accent },
+    'cov-edge': { 'line-color': accent },
   };
 }
-export function applyMapTheme() {
+function applyMapTheme() {
   // не isStyleLoaded(): он ложен, пока грузятся тайлы, а смену темы надо применить сразу. До загрузки стиля getLayer пуст.
   const setIf = (id: string, prop: string, v: unknown) => {
     if (JSON.stringify(map.getPaintProperty(id, prop)) !== JSON.stringify(v)) map.setPaintProperty(id, prop, v);
@@ -162,10 +172,12 @@ export function openSheet(title: string, body: HTMLElement | string, onClose?: (
   b.innerHTML = '';
   if (typeof body === 'string') b.innerHTML = body; else b.appendChild(body);
   $('sheet').hidden = false;
+  document.body.classList.add('sheet-open'); // строка связи под шторкой прячется (styles/live.css)
   return b;
 }
 export function closeSheet() {
   $('sheet').hidden = true;
+  document.body.classList.remove('sheet-open');
   sheetClose?.();
   sheetClose = null;
 }
@@ -177,10 +189,6 @@ export function progress(frac: number | null, text = '') {
   p.hidden = false;
   (p.firstElementChild as HTMLElement).style.width = `${Math.round(frac * 100)}%`;
   p.querySelector('span')!.textContent = text;
-}
-
-export function field(label: string, input: string) {
-  return `<label class="field"><span>${label}</span>${input}</label>`;
 }
 
 /** Простая шина событий между модулями. */

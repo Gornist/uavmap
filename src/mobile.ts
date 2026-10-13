@@ -89,12 +89,22 @@ function initLongPress(onPoint: (p: LatLon) => void) {
 
 /** Числовым полям без inputmode — десятичную/цифровую клавиатуру. */
 function initInputModes() {
-  const fix = (root: ParentNode) => root.querySelectorAll<HTMLInputElement>('input[type="number"]:not([inputmode])').forEach((i) => {
+  const SEL = 'input[type="number"]:not([inputmode])';
+  const one = (i: HTMLInputElement) => {
     const min = i.min === '' ? NaN : Number(i.min);
     if (!(min >= 0)) return; // с минусом нужна обычная клавиатура
     const step = Number(i.step || 1);
     i.inputMode = Number.isInteger(step) && step >= 1 ? 'numeric' : 'decimal';
-  });
+  };
+  const fix = (root: Element | Document) => {
+    if (root instanceof HTMLInputElement && root.matches(SEL)) one(root);
+    root.querySelectorAll<HTMLInputElement>(SEL).forEach(one);
+  };
   fix(document);
-  new MutationObserver(() => fix(document)).observe(document.body, { childList: true, subtree: true });
+  // Поля создаются только в шторке и меню: следим за ними и смотрим лишь добавленные узлы
+  // (а не весь документ при каждой перерисовке строки связи).
+  const mo = new MutationObserver((recs) => {
+    for (const r of recs) r.addedNodes.forEach((n) => { if (n instanceof Element) fix(n); });
+  });
+  for (const id of ['shBody', 'drBody']) mo.observe($(id), { childList: true, subtree: true });
 }

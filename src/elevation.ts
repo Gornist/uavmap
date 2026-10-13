@@ -1,11 +1,11 @@
 // Высоты рельефа из открытых тайлов Terrarium (Mapzen/AWS Open Data, SRTM/ASTER/GMTED и др.).
 // Значение = R*256 + G + B/256 − 32768 (метры над уровнем моря).
-import { LatLon, lonLatToPixel, interpolate, R_EARTH } from './geo';
+import { LatLon, lonLatToPixel, interpolate, destination, R_EARTH, D2R } from './geo';
+import { DEM_MAX_Z, TILE, demTileUrl, demTileSpan, demTileCount } from './demTiles';
 
-export const DEM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
-export const DEM_MAX_Z = 15;
-const TILE = 256;
-
+// Кеш тайлов — LRU по порядку Map: при обращении тайл переставляется в конец, вытесняется самый давний.
+// 200 тайлов × 256 КБ (Float32 256×256) ≈ 50 МБ. Мозаику зоны (до 256 тайлов) держат свои ссылки — кеш её не ограничивает.
+const CACHE_MAX = 200;
 const cache = new Map<string, Promise<Float32Array | null>>();
 
 /** Свой источник высот тайла (например, из HGT пользователя). null — нет покрытия, идём в сеть. */
@@ -13,7 +13,7 @@ export type LocalDemProvider = (z: number, x: number, y: number) => Promise<Floa
 let localDem: LocalDemProvider | null = null;
 
 /** Сбросить кеш тайлов (после смены своих данных рельефа). */
-export function clearDemCache() { cache.clear(); }
+function clearDemCache() { cache.clear(); }
 
 /** Подключить/отключить провайдера локальных высот; кеш сбрасывается. */
 export function setLocalDemProvider(fn: LocalDemProvider | null) {
@@ -22,7 +22,7 @@ export function setLocalDemProvider(fn: LocalDemProvider | null) {
 }
 
 function fromNetwork(z: number, x: number, y: number): Promise<Float32Array | null> {
-  return fetch(DEM_URL.replace('{z}', String(z)).replace('{x}', String(x)).replace('{y}', String(y)))
+  return fetch(demTileUrl(z, x, y))
     .then((r) => (r.ok ? r.blob() : Promise.reject(r.status)))
     .then((b) => createImageBitmap(b))
     .then(decode)
@@ -39,18 +39,18 @@ function decode(img: ImageBitmap): Float32Array {
   return out;
 }
 
-export function getTile(z: number, x: number, y: number): Promise<Float32Array | null> {
+function getTile(z: number, x: number, y: number): Promise<Float32Array | null> {
   const n = 2 ** z;
   x = ((x % n) + n) % n;
   if (y < 0 || y >= n) return Promise.resolve(null);
   const key = `${z}/${x}/${y}`;
   let p = cache.get(key);
-  if (!p) {
+  if (p) { cache.delete(key); cache.set(key, p); } else {
     const local = localDem ? Promise.resolve().then(() => localDem!(z, x, y)).catch(() => null) : Promise.resolve(null);
     const q: Promise<Float32Array | null> = local.then((t) => t ?? fromNetwork(z, x, y)).then((t) => { if (!t && cache.get(key) === q) cache.delete(key); return t; });
     p = q;
     cache.set(key, p);
-    if (cache.size > 600) cache.delete(cache.keys().next().value!);
+    while (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!);
   }
   return p;
 }
@@ -72,13 +72,7 @@ export interface DemGrid {
 
 /** onTile(готово, всего) — после каждого тайла (для индикатора загрузки). */
 export async function fetchGrid(points: LatLon[], z: number, pad = 2, onTile?: (done: number, total: number) => void): Promise<DemGrid> {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const p of points) {
-    const [x, y] = lonLatToPixel(p.lon, p.lat, z);
-    minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y);
-  }
-  const tx0 = Math.floor((minX - pad) / TILE), tx1 = Math.floor((maxX + pad) / TILE);
-  const ty0 = Math.floor((minY - pad) / TILE), ty1 = Math.floor((maxY + pad) / TILE);
+  const { tx0, tx1, ty0, ty1 } = demTileSpan(points, z, pad);
   const cols = tx1 - tx0 + 1, rows = ty1 - ty0 + 1;
   const width = cols * TILE, height = rows * TILE;
   const data = new Float32Array(width * height);
@@ -122,19 +116,12 @@ export async function elevationAt(p: LatLon, z = 14): Promise<number | null> {
   return null;
 }
 
-/** Уровень DEM, при котором шаг пикселя ≈ требуемому шагу выборки. */
-export function zoomForStep(lat: number, stepM: number): number {
-  const mPerPxZ0 = (40075016.7 * Math.cos((lat * Math.PI) / 180)) / TILE;
-  return Math.max(8, Math.min(DEM_MAX_Z, Math.round(Math.log2(mPerPxZ0 / stepM))));
-}
-
 // ---------- Выборка «максимум в окне» ----------
 // Билинейная выборка срезает вершины хребтов (оптимистично для радиорасчёта), поэтому отсчёт трассы
 // с шагом step = максимум узлов DEM в окне вдоль луча ±step/2 (узлы берём каждые 0.5 px; поперёк луча —
 // ближайший узел, т.е. ±0.5 px: окно у́же пикселя смысла не имеет, шире — завышало бы препятствия на склонах).
 // Концы трассы (антенны) — билинейно в самой точке: иначе пульт «встанет» на соседнюю кочку.
 
-const D2R = Math.PI / 180;
 
 type Read = (ix: number, iy: number) => number; // значение узла (индексы узлов, не пикселей)
 
@@ -203,6 +190,26 @@ export function demPlan(lat: number, D: number, tilesAt?: (z: number) => number,
   let z = Math.max(8, Math.min(DEM_MAX_Z, 14, Math.round(Math.log2((40075016.7 * Math.cos(lat * D2R)) / TILE / 15))));
   if (tilesAt) while (z > 8 && tilesAt(z) > maxTiles) z--;
   return { z, step: Math.max(demPixelM(lat, z), D / 400) };
+}
+
+/** Предел мозаики зоны покрытия: 256 тайлов ≈ 64 МБ Float32. */
+export const COVERAGE_MAX_TILES = 256;
+/** Радиусы зоны покрытия, км (выбор в шторке зоны; под них же качаются офлайн-районы). */
+export const COVERAGE_RADII_KM = [5, 10, 15, 25, 40];
+
+/** Квадрат, описанный вокруг круга зоны: границы по сторонам света. */
+export function coverageBox(c: LatLon, radius: number): { w: number; e: number; n: number; s: number } {
+  return {
+    w: destination(c, 270, radius).lon, e: destination(c, 90, radius).lon,
+    n: destination(c, 0, radius).lat, s: destination(c, 180, radius).lat,
+  };
+}
+
+/** План рельефа зоны покрытия (уровень и шаг) — общий для расчёта зоны и офлайн-районов. */
+export function coverageZoom(c: LatLon, radius: number): { z: number; step: number } {
+  const b = coverageBox(c, radius);
+  const corners = [{ lat: b.n, lon: b.w }, { lat: b.s, lon: b.e }];
+  return demPlan(c.lat, radius, (z) => demTileCount(corners, z, 2), COVERAGE_MAX_TILES);
 }
 
 /** Подсказка о грубом рельефе: SRTM покрывает 56°S–60°N, дальше Terrarium берёт другие источники. */

@@ -1,4 +1,4 @@
-// PWA: регистрация Service Worker, офлайн-оболочка, индикатор сети. Владелец: задача A.
+// PWA: регистрация Service Worker, офлайн-оболочка, индикатор сети.
 import { registerSW } from 'virtual:pwa-register';
 import { toast, openSheet } from './app';
 
@@ -17,7 +17,7 @@ export function initPwa(): void {
       const p = document.createElement('p');
       p.textContent = 'Доступна новая версия — обновить? Несохранённые расчёты будут потеряны.';
       const btn = document.createElement('button');
-      btn.className = 'btn primary';
+      btn.className = 'primary';
       btn.textContent = 'Обновить';
       btn.onclick = () => void update(true);
       box.append(p, btn);

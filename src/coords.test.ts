@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import proj4 from 'proj4';
-import { formatCoords, fromSK42, parseCoords, toSK42 } from './coords';
+import { formatCoords, fromSK42, parseCoords, toSK42, toSK42Exact } from './coords';
 import { distance } from './geo';
 
 /** Эллипсоид Красовского (a=6378245, 1/f=298.3): длина дуги меридиана от экватора, м (численное интегрирование). */
@@ -79,6 +79,48 @@ describe('toSK42 / fromSK42', () => {
     expect(b.zone).toBe(7);
     expect(distance(fromSK42(a.x, a.y), { lat: 55, lon: 35.9999 })).toBeLessThan(1);
     expect(distance(fromSK42(b.x, b.y), { lat: 55, lon: 36.0001 })).toBeLessThan(1);
+  });
+});
+
+describe('свой пересчёт против proj4 (эталон, devDependency)', () => {
+  const TOWGS = '23.57,-140.95,-79.8,0,0.35,0.79,-0.22';
+  const def = (zone: number) =>
+    `+proj=tmerc +lat_0=0 +lon_0=${zone * 6 - 3} +k=1 +x_0=${zone * 1e6 + 500000} +y_0=0 +ellps=krass +towgs84=${TOWGS} +units=m +no_defs`;
+  // Сетка: широты 40–70°, зоны 4–32, по 7 долгот на зону, включая края ±2.9° от осевого меридиана.
+  const grid: [number, number, number][] = [];
+  for (let zone = 4; zone <= 32; zone++) {
+    for (const dl of [-2.9, -2, -1, 0, 1, 2, 2.9]) {
+      for (let lat = 40; lat <= 70; lat += 5) grid.push([lat + 0.123, zone * 6 - 3 + dl, zone]);
+    }
+  }
+  it('прямой: X/Y совпадают с proj4 ≤ 1 см (без округления), toSK42 — округлённый эталон', () => {
+    let maxDx = 0, maxDy = 0;
+    for (const [lat, lon, zone] of grid) {
+      const [e, n] = proj4('WGS84', def(zone), [lon, lat]);
+      const s = toSK42Exact(lat, lon);
+      expect(s.zone).toBe(zone);
+      maxDx = Math.max(maxDx, Math.abs(s.x - n));
+      maxDy = Math.max(maxDy, Math.abs(s.y - e));
+      const r = toSK42(lat, lon);
+      expect(Math.abs(r.x - n)).toBeLessThanOrEqual(0.51);
+      expect(Math.abs(r.y - e)).toBeLessThanOrEqual(0.51);
+    }
+    expect(maxDx).toBeLessThanOrEqual(0.01);
+    expect(maxDy).toBeLessThanOrEqual(0.01);
+  });
+  it('обратный: fromSK42 совпадает с proj4 ≤ 1e-7°; туда-обратно < 1 см', () => {
+    let maxLat = 0, maxLon = 0, maxRt = 0;
+    for (const [lat, lon, zone] of grid) {
+      const [e, n] = proj4('WGS84', def(zone), [lon, lat]);
+      const [rlon, rlat] = proj4(def(zone), 'WGS84', [e, n]);
+      const p = fromSK42(n, e);
+      maxLat = Math.max(maxLat, Math.abs(p.lat - rlat));
+      maxLon = Math.max(maxLon, Math.abs(p.lon - rlon));
+      maxRt = Math.max(maxRt, distance(p, { lat, lon }));
+    }
+    expect(maxLat).toBeLessThan(1e-7);
+    expect(maxLon).toBeLessThan(1e-7);
+    expect(maxRt).toBeLessThan(0.01);
   });
 });
 

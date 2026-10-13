@@ -114,14 +114,7 @@
 }
 /* Общие для обеих тем */
 :root {
-  --warn: var(--weak); /* старые имена — алиасы */
-  --bad: var(--none);
   --digit: var(--none); /* выделение километровых цифр СК-42 */
-  /* статусы НА КАРТЕ (линия связи, растр зоны): насыщенные, одинаковые в обеих темах — подложка от темы не зависит.
-     = STATUS_MAP в theme.ts (проверяет тест); текстовые --ok/--weak/--none — отдельно. */
-  --map-ok: #3fae5f;
-  --map-weak: #e0a530;
-  --map-none: #d9473a;
   --font-ui: "Golos Text", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
   --r: 10px;

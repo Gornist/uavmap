@@ -3,7 +3,7 @@ import {
   bullington, bullingtonSmooth, bullingtonTaper, deltaBullington, knifeEdgeJ, regressionSums, smoothSurfaceHeights,
   sphericalEarthLoss, sphericalFirstTerm,
 } from './diffraction';
-import { analyzeLink, C, DEFAULT_RADIO, diffractionDeygout, knifeEdge, RadioParams } from './radio';
+import { analyzeLink, C, DEFAULT_RADIO, RadioParams } from './radio';
 import { R_EARTH } from './geo';
 
 const AE = (4 / 3) * R_EARTH;
@@ -85,7 +85,6 @@ describe('§ 4.5.1: Буллингтон', () => {
   it('ур. (57): Lb = Luc + (1 − e^(−Luc/6))·(10 + 0.02·d[км]); 0 → 0', () => {
     expect(bullingtonTaper(0, 10000)).toBe(0);
     expect(bullingtonTaper(6, 10000)).toBeCloseTo(6 + (1 - Math.exp(-1)) * 10.2, 9);
-    expect(knifeEdgeJ(1)).toBe(knifeEdge(1));
   });
   it('один клин за горизонтом: точка Буллингтона = вершина клина, Luc = J(ν) (ур. 31)', () => {
     const n = 100, D = 10000, d = dist(n, D), h = zeros(n);
@@ -94,8 +93,8 @@ describe('§ 4.5.1: Буллингтон', () => {
     const v = 50 * Math.sqrt((2 * D) / (lam(2440) * 4000 * 6000));
     expect(b.los).toBe(false);
     expect(b.edges).toEqual([40]);
-    expect(b.luc).toBeCloseTo(knifeEdge(v), 6);
-    expect(b.lb).toBeCloseTo(bullingtonTaper(knifeEdge(v), D), 6);
+    expect(b.luc).toBeCloseTo(knifeEdgeJ(v), 6);
+    expect(b.lb).toBeCloseTo(bullingtonTaper(knifeEdgeJ(v), D), 6);
   });
   it('два клина за горизонтом: точка Буллингтона — пересечение лучей от обоих концов', () => {
     const n = 100, D = 10000, d = dist(n, D), h = zeros(n);
@@ -103,7 +102,7 @@ describe('§ 4.5.1: Буллингтон', () => {
     const b = bullington(d, h, 10, 10, 1e15, lam(2440));
     const v = 100 * Math.sqrt((2 * D) / (lam(2440) * 5000 * 5000));
     expect(b.edges).toEqual([25, 75]);
-    expect(b.luc).toBeCloseTo(knifeEdge(v), 4);
+    expect(b.luc).toBeCloseTo(knifeEdgeJ(v), 4);
   });
   it('гладкий профиль: двоичный поиск (bullingtonSmooth) совпадает с полным перебором', () => {
     for (const [n, D, ht, hr, f] of [[200, 30000, 2, 120, 2440], [300, 30000, 2, 10, 868], [50, 3000, 30, 0, 5800], [400, 40000, 0, 0, 433], [80, 8000, 15, 3, 2440], [10, 500, 10, 10, 2440]]) {
@@ -153,28 +152,32 @@ describe('§ 4.5.2: эффективные высоты и полный мето
     const n = 100, D = 10000, h = zeros(n);
     h[50] = 130;
     const r = deltaBullington(h, D, 100, 100, 1e9 * R_EARTH, 2440, lam(2440));
-    const J = knifeEdge(30 * Math.sqrt((2 * D) / (lam(2440) * 5000 * 5000)));
+    const J = knifeEdgeJ(30 * Math.sqrt((2 * D) / (lam(2440) * 5000 * 5000)));
     expect(r.loss).toBeCloseTo(bullingtonTaper(J, D), 6);
     expect(r.lsph).toBe(0);
   });
 
   it('(4) «гребёнка» холмов: дельта-Буллингтон заметно меньше Дейгу; одиночный клин — наоборот', () => {
+    // Эталоны метода Дейгу (главный клин + по одному на половинах, T = 1 − exp(−Lp/6)) сняты с прежней
+    // реализации перед её удалением: гребёнка 48.12 дБ, шесть холмов 47.99 дБ, одиночный хребет 36.76 дБ.
     // Холмы sin² высотой 40 м с периодом ≈1.26 км, 8 км, пульт 2 м, дрон 100 м, 2.44 ГГц.
-    // Числа (на момент написания): дельта-Буллингтон 37.7 дБ, Дейгу 48.1 дБ.
     const D = 8000, n = 267;
     const e = Float64Array.from({ length: n + 1 }, (_, i) => 40 * Math.max(0, Math.sin((D * i) / n / 400)) ** 2);
-    const db = analyzeLink(e, D, 2, 100, P).diffraction, dg = diffractionDeygout(e, D, 2, 100, P).loss;
-    expect(db).toBeCloseTo(37.7, 0);
-    expect(dg).toBeCloseTo(48.1, 0);
-    expect(dg - db).toBeGreaterThan(6);
+    const db = analyzeLink(e, D, 2, 100, P).diffraction;
+    expect(db).toBeCloseTo(37.73, 1);
+    expect(48.12 - db).toBeGreaterThan(6);
     // Шесть узких холмов по 30 м на 6 км, обе антенны 2 м: 42.8 против 48.0 дБ.
     const n6 = 240, D6 = 6000, e6 = zeros(n6);
     for (let i = 0; i <= n6; i++) for (let k = 1; k <= 6; k++) e6[i] = Math.max(e6[i], 30 * Math.max(0, 1 - Math.abs((D6 * i) / n6 - (D6 * k) / 7) / 150));
-    expect(diffractionDeygout(e6, D6, 2, 2, P).loss - analyzeLink(e6, D6, 2, 2, P).diffraction).toBeGreaterThan(4);
+    const d6 = analyzeLink(e6, D6, 2, 2, P).diffraction;
+    expect(d6).toBeCloseTo(42.81, 1);
+    expect(47.99 - d6).toBeGreaterThan(4);
     // Одиночный хребет 150 м: поправка (57) делает метод пессимистичнее Дейгу на ≈10 дБ (46.8 против 36.8).
     const n1 = 100, D1 = 5000;
     const e1 = Float64Array.from({ length: n1 + 1 }, (_, i) => Math.max(0, 150 * (1 - Math.abs((D1 * i) / n1 - 2200) / 220)));
-    expect(analyzeLink(e1, D1, 2, 30, P).diffraction - diffractionDeygout(e1, D1, 2, 30, P).loss).toBeCloseTo(10, 0);
+    const d1 = analyzeLink(e1, D1, 2, 30, P).diffraction;
+    expect(d1).toBeCloseTo(46.84, 1);
+    expect(d1 - 36.76).toBeCloseTo(10, 0);
   });
 });
 

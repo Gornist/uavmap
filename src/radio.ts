@@ -1,8 +1,7 @@
 // Радиорасчёт трассы: свободное пространство + дифракция на рельефе (ITU-R P.526-15 § 4.5, «дельта-Буллингтон»,
 // см. diffraction.ts), кривизна Земли с эквивалентным радиусом k·R, первая зона Френеля.
-// Старый метод Дейгу оставлен как diffractionDeygout — для сравнения.
 import { R_EARTH } from './geo';
-import { deltaBullington, knifeEdgeJ } from './diffraction';
+import { deltaBullington } from './diffraction';
 
 export interface RadioParams {
   freqMHz: number;
@@ -55,16 +54,8 @@ export const C = 299792458;
 /** k < 0.5 физически бессмыслен и ломает расчёт (k ≤ 0 → NaN); очень большой k — плоская Земля. */
 export const clampK = (k: number) => (Number.isFinite(k) ? Math.min(1e9, Math.max(0.5, k)) : 4 / 3);
 
-/** Множитель вторичных клиньев Дейгу (ITU-R P.526): мал при слабом главном препятствии. */
-export const deygoutT = (mainLoss: number) => 1 - Math.exp(-mainLoss / 6);
-
 export function fspl(distM: number, fMHz: number): number {
   return 32.45 + 20 * Math.log10(Math.max(distM, 1) / 1000) + 20 * Math.log10(fMHz);
-}
-
-/** Потери на одиночном клиновидном препятствии, ITU-R P.526 (формула 31). */
-export function knifeEdge(v: number): number {
-  return knifeEdgeJ(v);
 }
 
 /** Радиус первой зоны Френеля, м. */
@@ -152,40 +143,6 @@ export function analyzeLink(elev: ArrayLike<number>, dist: number, hA: number, h
 }
 
 /**
- * Метод Дейгу (из ранних редакций ITU-R P.526; в P.526-15 его нет — заменён § 4.5): главный клин и по одному
- * на каждой половине, вторичные — с множителем T = 1 − exp(−Lp/6). Оставлен для сравнения с дельта-Буллингтоном.
- * Аргументы — как у analyzeLink. Возвращает потери, дБ, и индексы клиньев.
- */
-export function diffractionDeygout(elev: ArrayLike<number>, dist: number, hA: number, hB: number, p: RadioParams): { loss: number; edges: number[] } {
-  const n = elev.length - 1;
-  const lambda = C / (p.freqMHz * 1e6);
-  const Re = clampK(p.k) * R_EARTH;
-  const d = new Float64Array(n + 1), ground = new Float64Array(n + 1);
-  for (let i = 0; i <= n; i++) {
-    d[i] = (dist * i) / n;
-    ground[i] = elev[i] + (d[i] * (dist - d[i])) / (2 * Re);
-  }
-  const edges: number[] = [];
-  const deygout = (a: number, b: number, depth: number): number => {
-    if (b - a < 2) return 0;
-    const da = d[a], db = d[b], ha = a === 0 ? hA : ground[a], hb = b === n ? hB : ground[b];
-    let best = -Infinity, bi = -1;
-    for (let i = a + 1; i < b; i++) {
-      const d1 = d[i] - da, d2 = db - d[i];
-      const h = ground[i] - (ha + ((hb - ha) * d1) / (db - da));
-      const v = h * Math.sqrt((2 * (d1 + d2)) / (lambda * d1 * d2));
-      if (v > best) { best = v; bi = i; }
-    }
-    if (bi < 0 || best <= -0.78) return 0;
-    edges.push(bi);
-    const L = knifeEdge(best);
-    if (depth >= 1) return L;
-    return L + deygoutT(L) * (deygout(a, bi, depth + 1) + deygout(bi, b, depth + 1));
-  };
-  return { loss: n >= 2 ? deygout(0, n, 0) : 0, edges };
-}
-
-/**
  * Минимальная высота дрона (м над точкой отсчёта), при которой запас ≥ требуемого.
  * heightFn(h) → абсолютная высота дрона для h. Возвращает null, если не хватает и на maxH.
  */
@@ -211,7 +168,7 @@ export interface PairResult {
 export const RANK: Record<LinkStatus, number> = { none: 0, weak: 1, ok: 2 };
 
 /** Худшая из двух линий: сначала по статусу, при равных — по запасу сверх желаемого. */
-export function worstOf(rc: LinkResult, rcP: RadioParams, video: LinkResult | null, vP: RadioParams | null): LineId {
+function worstOf(rc: LinkResult, rcP: RadioParams, video: LinkResult | null, vP: RadioParams | null): LineId {
   if (!video || !vP) return 'rc';
   if (RANK[video.status] !== RANK[rc.status]) return RANK[video.status] < RANK[rc.status] ? 'video' : 'rc';
   return video.margin - vP.fadeMarginDb < rc.margin - rcP.fadeMarginDb ? 'video' : 'rc';
@@ -247,6 +204,3 @@ export function minHeightsForPair(elev: ArrayLike<number>, dist: number, hA: num
   return { pair: Math.max(Math.ceil(hi), mRc, mV), rc: mRc, video: mV };
 }
 
-/** Минимальная высота, при которой обе линии (или одна, если video = null) держат свой запас. */
-export const minHeightForPair = (elev: ArrayLike<number>, dist: number, hA: number, heightFn: (h: number) => number, rc: RadioParams, video: RadioParams | null, maxH = 1500) =>
-  minHeightsForPair(elev, dist, hA, heightFn, rc, video, maxH).pair;

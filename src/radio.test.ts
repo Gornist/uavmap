@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  analyzeLink, analyzePair, RANK, budget, DEFAULT_VIDEO, minHeightForPair, minHeightsForPair, presetsFor, C, DEFAULT_RADIO, diffractionDeygout, freeSpaceRange, fresnelR, fspl, knifeEdge, minHeightForLink, PRESETS,
+  analyzeLink, analyzePair, RANK, budget, DEFAULT_VIDEO, minHeightsForPair, presetsFor, C, DEFAULT_RADIO, freeSpaceRange, fresnelR, fspl, minHeightForLink, PRESETS,
   radioHorizon, RadioParams,
 } from './radio';
-import { bullingtonTaper } from './diffraction';
+import { bullingtonTaper, knifeEdgeJ } from './diffraction';
 import { R_EARTH } from './geo';
 
 const P: RadioParams = { ...DEFAULT_RADIO };
@@ -34,25 +34,25 @@ describe('fspl (ITU-R P.525: L = 32.45 + 20·lg f[МГц] + 20·lg d[км])', ()
   });
 });
 
-describe('knifeEdge (ITU-R P.526, ур. 31)', () => {
-  it('v=0 → ≈6.03 дБ', () => expect(knifeEdge(0)).toBeCloseTo(6.03, 1));
+describe('knifeEdgeJ (ITU-R P.526, ур. 31)', () => {
+  it('v=0 → ≈6.03 дБ', () => expect(knifeEdgeJ(0)).toBeCloseTo(6.03, 1));
   it('v ≤ −0.78 → 0, на границе ≈0', () => {
-    expect(knifeEdge(-0.78)).toBe(0);
-    expect(knifeEdge(-5)).toBe(0);
-    expect(knifeEdge(-0.7799)).toBeLessThan(0.05);
-    expect(knifeEdge(-0.7799)).toBeGreaterThanOrEqual(0);
+    expect(knifeEdgeJ(-0.78)).toBe(0);
+    expect(knifeEdgeJ(-5)).toBe(0);
+    expect(knifeEdgeJ(-0.7799)).toBeLessThan(0.05);
+    expect(knifeEdgeJ(-0.7799)).toBeGreaterThanOrEqual(0);
   });
   it('v=1 → ≈13.9; v=2.4 → ≈20.5', () => {
-    expect(knifeEdge(1)).toBeCloseTo(13.92, 1);
-    expect(knifeEdge(2.4)).toBeCloseTo(20.5, 0);
+    expect(knifeEdgeJ(1)).toBeCloseTo(13.92, 1);
+    expect(knifeEdgeJ(2.4)).toBeCloseTo(20.5, 0);
   });
   it('асимптотика J ≈ 13 + 20·lg v при v ≫ 1 (P.526)', () => {
-    expect(Math.abs(knifeEdge(10) - (13 + 20 * Math.log10(10)))).toBeLessThan(0.5);
+    expect(Math.abs(knifeEdgeJ(10) - (13 + 20 * Math.log10(10)))).toBeLessThan(0.5);
   });
   it('строго возрастает при v > −0.78', () => {
-    let prev = knifeEdge(-0.78);
+    let prev = knifeEdgeJ(-0.78);
     for (let v = -0.7; v <= 10; v += 0.1) {
-      const j = knifeEdge(v);
+      const j = knifeEdgeJ(v);
       expect(j).toBeGreaterThan(prev);
       prev = j;
     }
@@ -135,13 +135,12 @@ describe('analyzeLink: синтетические трассы', () => {
 
   // Дельта-Буллингтон (P.526-15 § 4.5): к J(ν) точки Буллингтона добавляется коническая поправка (57)
   // [1 − exp(−J/6)]·(10 + 0.02·d[км]); при J = 6.03 дБ на 10 км это ещё ≈6.5 дБ (Дейгу давал чистые 6.03).
-  const LB0 = bullingtonTaper(knifeEdge(0), D); // ≈12.50 дБ
+  const LB0 = bullingtonTaper(knifeEdgeJ(0), D); // ≈12.50 дБ
 
-  it('клин ровно на линии визирования → J(0) = 6.03 дБ + поправка (57) ≈ 12.5 дБ; Дейгу — 6.03', () => {
+  it('клин ровно на линии визирования → J(0) = 6.03 дБ + поправка (57) ≈ 12.5 дБ', () => {
     const r = analyzeLink(profile(N, 0, { 50: 100 }), D, 100, 100, FLAT);
     expect(r.diffraction).toBeCloseTo(LB0, 1);
     expect(LB0).toBeCloseTo(12.5, 1);
-    expect(diffractionDeygout(profile(N, 0, { 50: 100 }), D, 100, 100, FLAT).loss).toBeCloseTo(6.03, 1);
     expect(r.edges).toEqual([50]);
     expect(r.margin).toBeCloseTo(budget(P) - fspl(D, P.freqMHz) - LB0, 1);
     expect(r.fresnelBlocked).toBeCloseTo(0.5, 2);
@@ -153,8 +152,7 @@ describe('analyzeLink: синтетические трассы', () => {
     const r20 = analyzeLink(profile(N, 0, { 50: 120 }), D, 100, 100, FLAT);
     const v = 20 * Math.sqrt((2 * D) / (lambda * 5000 * 5000));
     expect(r20.los).toBe(false);
-    expect(r20.diffraction).toBeCloseTo(bullingtonTaper(knifeEdge(v), D), 6);
-    expect(diffractionDeygout(profile(N, 0, { 50: 120 }), D, 100, 100, FLAT).loss).toBeCloseTo(knifeEdge(v), 6);
+    expect(r20.diffraction).toBeCloseTo(bullingtonTaper(knifeEdgeJ(v), D), 6);
     let prev = r20.diffraction;
     for (const h of [140, 180, 250]) {
       const r = analyzeLink(profile(N, 0, { 50: h }), D, 100, 100, FLAT);
@@ -172,16 +170,12 @@ describe('analyzeLink: синтетические трассы', () => {
     expect(r.minClearance).toBeCloseTo(0.6, 2);
   });
 
-  it('два клина на линии: Буллингтон сводит их к одной кромке (= одному клину); Дейгу — Lp + T·Ls', () => {
+  it('два клина на линии: Буллингтон сводит их к одной кромке (= одному клину)', () => {
     const one = analyzeLink(profile(N, 0, { 33: 100 }), D, 100, 100, FLAT);
     const two = analyzeLink(profile(N, 0, { 33: 100, 66: 100 }), D, 100, 100, FLAT);
     expect(two.diffraction).toBeGreaterThanOrEqual(one.diffraction - 1e-6);
     expect(two.diffraction).toBeCloseTo(LB0, 1);
     expect(two.edges.length).toBeGreaterThanOrEqual(1);
-    // старый метод, для сравнения (T = 1 − exp(−Lp/6)): 9.85 дБ
-    const dg = diffractionDeygout(profile(N, 0, { 33: 100, 66: 100 }), D, 100, 100, FLAT);
-    expect(dg.loss).toBeCloseTo(6.03 + (1 - Math.exp(-6.03 / 6)) * 6.03, 1);
-    expect(dg.edges.length).toBe(2);
   });
 
   it('три клина: потери не убывают с добавлением препятствий', () => {
@@ -418,13 +412,13 @@ describe('две линии: управление и видео', () => {
         expect(pr.rc.margin).toBeGreaterThanOrEqual(rc.fadeMarginDb);
         expect(pr.video!.margin).toBeGreaterThanOrEqual(vd.fadeMarginDb);
       }
-      expect(minHeightForPair(e, dist, 102, hf, rc, null)).toBe(single(rc));
+      expect(minHeightsForPair(e, dist, 102, hf, rc, null).pair).toBe(single(rc));
     }
   });
 
   it('минимальная высота пары: null, если одна из линий не тянет даже на 1500 м', () => {
     const dead = { ...vd, txPowerDbm: -30 };
-    expect(minHeightForPair(ridge, 60000, 102, (hh) => 100 + hh, rc, dead)).toBeNull();
+    expect(minHeightsForPair(ridge, 60000, 102, (hh) => 100 + hh, rc, dead).pair).toBeNull();
   });
 });
 

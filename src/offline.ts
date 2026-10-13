@@ -1,129 +1,12 @@
-// Офлайн-районы: скачивание тайлов рельефа для района в Cache Storage. Владелец: задача B.
+// Офлайн-районы: скачивание тайлов рельефа для района в Cache Storage (в интерфейсе — «рельеф района», без слова «тайлы»).
 // Кеш 'uavmap-dem-v1': ключ — полный URL тайла, значение — ответ fetch(url, { mode: 'cors' }).
-// Service Worker (агент A) отдаёт тайлы DEM оттуда в первую очередь.
+// Service Worker (sw.ts) отдаёт тайлы DEM оттуда в первую очередь.
 import './styles/offline.css';
-import { S, map, center, openSheet, progress, toast, h, escapeHtml, fc, setGeo } from './app';
-import { DEM_URL, DEM_MAX_Z, demPlan } from './elevation';
+import { S, map, center, openSheet, progress, toast, fc, setGeo } from './app';
+import { h, button, chips, confirmDialog } from './ui';
+import { fmtBytes, escapeHtml } from './format';
 import { destination } from './geo';
-
-export const OFFLINE_CACHE = 'uavmap-dem-v1';
-export const OFFLINE_KEY = 'uavmap.offline.v1';
-export const RADII_KM = [5, 10, 20, 40];
-/** Средний тайл Terrarium (грубая оценка, уточняется замером). */
-export const DEFAULT_TILE_BYTES = 90 * 1024;
-const VIEW_Z0 = 8, VIEW_Z1 = 13; // maplibre-contour: maxzoom 13; hillshade берёт те же тайлы
-const COV_MAX_TILES = 256; // как MAX_TILES в coverage.ts
-const PAD_PX = 16; // запас по краю: окно максимума и билинейная выборка выходят за радиус
-
-// ---------- Чистые функции ----------
-export interface Layer { z: number; km: number }
-export interface Area {
-  id: string; name: string; lat: number; lon: number; km: number;
-  calc: boolean; view: boolean; layers: Layer[]; tiles: number; bytes: number; ts: number;
-}
-export interface Tile { z: number; x: number; y: number }
-
-export const tileKey = (t: Tile) => `${t.z}/${t.x}/${t.y}`;
-export const tileUrl = (t: Tile) => DEM_URL.replace('{z}', String(t.z)).replace('{x}', String(t.x)).replace('{y}', String(t.y));
-
-const MAX_LAT = 85.0511287798;
-
-/** Диапазон тайлов, накрывающий круг радиуса km (+ запас). X не обёрнут (может выходить за [0, 2^z)), Y обрезан. */
-export function tileRange(lat: number, lon: number, km: number, z: number): { x0: number; x1: number; y0: number; y1: number } {
-  const n = 2 ** z;
-  const dLat = (km * 1000) / 6371008.8 * (180 / Math.PI);
-  const cosL = Math.max(0.01, Math.cos(Math.min(Math.abs(lat) + dLat, 89.9) * Math.PI / 180));
-  const dLon = Math.min(180, dLat / cosL);
-  const padT = PAD_PX / 256;
-  const fx = (lo: number) => ((lo + 180) / 360) * n;
-  const fy = (la: number) => {
-    const s = Math.sin(Math.max(-MAX_LAT, Math.min(MAX_LAT, la)) * Math.PI / 180);
-    return (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * n;
-  };
-  const x0 = Math.floor(fx(lon - dLon) - padT), x1 = Math.floor(fx(lon + dLon) + padT);
-  const y0 = Math.max(0, Math.floor(fy(lat + dLat) - padT)), y1 = Math.min(n - 1, Math.floor(fy(lat - dLat) + padT));
-  return { x0, x1: Math.min(x1, x0 + n - 1), y0, y1 };
-}
-
-/** Все тайлы набора слоёв {z, km} вокруг точки: без дублей, X обёрнут по антимеридиану. */
-export function enumerateTiles(lat: number, lon: number, layers: Layer[]): Tile[] {
-  const seen = new Set<string>();
-  const out: Tile[] = [];
-  for (const { z, km } of layers) {
-    const n = 2 ** z;
-    const r = tileRange(lat, lon, km, z);
-    for (let y = r.y0; y <= r.y1; y++) {
-      for (let xr = r.x0; xr <= r.x1; xr++) {
-        const t = { z, x: ((xr % n) + n) % n, y };
-        const k = tileKey(t);
-        if (!seen.has(k)) { seen.add(k); out.push(t); }
-      }
-    }
-  }
-  return out;
-}
-
-export function countTiles(lat: number, lon: number, km: number, z: number): number {
-  const r = tileRange(lat, lon, km, z);
-  return (r.x1 - r.x0 + 1) * (r.y1 - r.y0 + 1);
-}
-
-export const estimateBytes = (tiles: number, avg = DEFAULT_TILE_BYTES) => Math.round(tiles * avg);
-
-/** Слои района: «расчёт» (зум профиля/зоны для радиусов ≤ R) и «карта» (z 8..13 по bbox района). */
-export function planLayers(lat: number, km: number, calc: boolean, view: boolean): Layer[] {
-  const out: Layer[] = [];
-  if (calc) {
-    out.push({ z: demPlan(lat, km * 1000).z, km }); // профиль до любой точки района
-    for (const r of RADII_KM.filter((v) => v <= km)) { // зона покрытия радиуса r
-      out.push({ z: demPlan(lat, r * 1000, (zz) => countTiles(lat, 0, r, zz), COV_MAX_TILES).z, km: r });
-    }
-  }
-  if (view) for (let z = VIEW_Z0; z <= VIEW_Z1; z++) out.push({ z, km });
-  // Слой (z, km) с тем же z и меньшим радиусом входит в больший — убираем дубли.
-  return out.filter((a, i) => !out.some((b, j) => j !== i && b.z === a.z && (b.km > a.km || (b.km === a.km && j < i))));
-}
-
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
-const num = (v: unknown, lo: number, hi: number): v is number => typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi;
-
-/** Разбор метаданных из localStorage: повреждённое отбрасывается. */
-export function parseAreas(raw: string | null): Area[] {
-  if (!raw) return [];
-  let j: unknown;
-  try { j = JSON.parse(raw); } catch { return []; }
-  const arr = isObj(j) && Array.isArray(j.areas) ? j.areas : Array.isArray(j) ? j : [];
-  const out: Area[] = [];
-  const ids = new Set<string>();
-  for (const a of arr) {
-    if (!isObj(a) || typeof a.id !== 'string' || !a.id || ids.has(a.id) || typeof a.name !== 'string') continue;
-    if (!num(a.lat, -90, 90) || !num(a.lon, -180, 180) || !num(a.km, 0.1, 1000)) continue;
-    if (!Array.isArray(a.layers) || !a.layers.length) continue;
-    const layers: Layer[] = [];
-    let bad = false;
-    for (const l of a.layers) {
-      if (isObj(l) && num(l.z, 0, DEM_MAX_Z) && Number.isInteger(l.z) && num(l.km, 0.1, 1000)) layers.push({ z: l.z, km: l.km }); else bad = true;
-    }
-    if (bad) continue;
-    if (!num(a.tiles, 0, 1e7) || !num(a.bytes, 0, 1e12) || !num(a.ts, 0, 1e14)) continue;
-    ids.add(a.id);
-    out.push({ id: a.id, name: a.name.slice(0, 80), lat: a.lat, lon: a.lon, km: a.km, calc: a.calc === true, view: a.view === true, layers, tiles: a.tiles, bytes: a.bytes, ts: a.ts });
-  }
-  return out;
-}
-
-/** Ключи тайлов района, которые не нужны ни одному другому району. */
-export function exclusiveKeys(area: Area, others: Area[]): string[] {
-  const used = new Set<string>();
-  for (const o of others) for (const t of enumerateTiles(o.lat, o.lon, o.layers)) used.add(tileKey(t));
-  return enumerateTiles(area.lat, area.lon, area.layers).map(tileKey).filter((k) => !used.has(k));
-}
-
-export const keyToUrl = (k: string) => { const [z, x, y] = k.split('/'); return tileUrl({ z: +z, x: +x, y: +y }); };
-
-export function fmtBytes(b: number): string {
-  return b >= 1048576 ? `${(b / 1048576).toFixed(b >= 1.07e8 ? 0 : 1)} МБ` : `${Math.max(1, Math.round(b / 1024))} КБ`;
-}
+import { OFFLINE_CACHE, OFFLINE_KEY, RADII_KM, DEFAULT_TILE_BYTES, Area, Tile, tileUrl, enumerateTiles, estimateBytes, planLayers, parseAreas, exclusiveKeys, keyToUrl } from './offlineCore';
 
 // ---------- Хранилище метаданных ----------
 function loadAreas(): Area[] {
@@ -132,6 +15,9 @@ function loadAreas(): Area[] {
 function saveAreas(a: Area[]) {
   try { localStorage.setItem(OFFLINE_KEY, JSON.stringify({ v: 1, areas: a })); } catch { /* переполнение/запрет — не критично */ }
 }
+
+/** Сколько районов скачано (для меню). */
+export const offlineAreaCount = () => loadAreas().length;
 
 // ---------- Скачивание ----------
 const sleep = (ms: number, sig?: AbortSignal) => new Promise<void>((res) => {
@@ -181,7 +67,7 @@ async function downloadTiles(tiles: Tile[], opts: { reload: boolean; sig: AbortS
   return r;
 }
 
-/** Замер среднего размера тайла на нескольких реальных тайлах (они же сразу кладутся в кеш). */
+/** Замер среднего размера тайла на нескольких реальных тайлах (в кеш района они не кладутся). */
 let measuredAvg = 0;
 let measureTried = false;
 async function measureAvg(tiles: Tile[]): Promise<number> {
@@ -239,18 +125,18 @@ const cachesOk = () => typeof caches !== 'undefined' && typeof caches.open === '
 async function runDownload(area: Area, reload: boolean) {
   const tiles = enumerateTiles(area.lat, area.lon, area.layers);
   const ctl = new AbortController();
-  job = { ctl, text: 'Загрузка…' };
+  job = { ctl, text: '0%' };
   renderFn?.();
   try { await navigator.storage?.persist?.(); } catch { /* не критично */ }
-  progress(0, `Офлайн: 0/${tiles.length}`);
+  progress(0, 'Скачиваю рельеф: 0%');
   let res: Result;
   try {
     res = await downloadTiles(tiles, {
       reload, sig: ctl.signal,
-      onProgress: (n, total) => { job!.text = `${n}/${total}`; progress(n / total, `Офлайн: ${n}/${total}`); },
+      onProgress: (n, total) => { const pc = `${Math.floor((n / total) * 100)}%`; job!.text = pc; progress(n / total, `Скачиваю рельеф: ${pc}`); },
     });
   } catch (e) {
-    toast(`Не удалось скачать: ${e instanceof Error ? e.message : 'хранилище браузера недоступно'}`, 5000);
+    toast(`Не удалось скачать: ${e instanceof Error ? e.message : 'хранилище браузера недоступно'}. Проверьте сеть и свободное место, затем нажмите «Скачать» ещё раз`, 6000);
     return;
   } finally {
     // Состояние сбрасываем всегда, иначе зависший job блокирует скачивание до перезагрузки.
@@ -268,16 +154,21 @@ async function runDownload(area: Area, reload: boolean) {
     if (k >= 0) cur[k] = area; else cur.push(area);
     saveAreas(cur);
   }
-  toast(res.aborted ? `Отменено: скачано ${res.done}` : `Скачано ${res.done}, пропущено ${res.skipped}, ошибок ${res.errors}`, 5000);
+  const size = fmtBytes(Math.max(area.bytes, 1));
+  toast(res.aborted
+    ? 'Скачивание отменено. Уже скачанное сохранено — «Обновить» докачает остальное'
+    : res.errors
+      ? `Скачано не всё (${size}): часть данных не загрузилась. Когда будет сеть, нажмите «Обновить» у района`
+      : `Район скачан: ${size}. Расчёт здесь работает без сети`, 6000);
   renderFn?.();
 }
 
-/** Шторка «Офлайн-районы»: скачать район вокруг прицела/пульта, список, удаление, занятое место. */
+/** Шторка «Офлайн-районы»: скачать рельеф района вокруг пульта/прицела, список, удаление, занятое место. */
 export function openOfflineSheet(): void {
-  const body = h('<div></div>');
+  const body = h('<div class="off"></div>');
   openSheet('Офлайн-районы', body, () => { renderFn = null; });
   if (!cachesOk()) {
-    body.innerHTML = '<p class="off-warn">Офлайн-режим недоступен: браузер не даёт Cache Storage. Откройте приложение по https:// (или localhost) в современном браузере.</p>';
+    body.innerHTML = '<p class="off-warn">В этом браузере офлайн недоступен. Откройте приложение по адресу https:// в Chrome или установите его на телефон («Добавить на главный экран»).</p>';
     return;
   }
   let plan = { n: 0, newN: 0, need: 0, free: Infinity, msg: '', ok: true, busy: true };
@@ -290,7 +181,7 @@ export function openOfflineSheet(): void {
     const my = ++planId;
     plan = { ...plan, busy: true };
     const o = origin();
-    const layers = planLayers(o.lat, selKm, selCalc, selView);
+    const layers = planLayers(o.lat, o.lon, selKm, selCalc, selView);
     const tiles = enumerateTiles(o.lat, o.lon, layers);
     let newN = tiles.length;
     try {
@@ -303,7 +194,7 @@ export function openOfflineSheet(): void {
     try { const e = await navigator.storage?.estimate?.(); if (e?.quota) free = e.quota - (e.usage ?? 0); } catch { /* ignore */ }
     const need = estimateBytes(newN, avg);
     const ok = layers.length > 0 && need * 1.1 < free;
-    plan = { n: tiles.length, newN, need, free, ok, busy: false, msg: layers.length ? (ok ? '' : `Не хватит места: нужно ~${fmtBytes(need)}, свободно ${Number.isFinite(free) ? fmtBytes(free) : '?'}`) : 'Выберите хотя бы один уровень' };
+    plan = { n: tiles.length, newN, need, free, ok, busy: false, msg: layers.length ? (ok ? '' : `Не хватит места: нужно ~${fmtBytes(need)}, свободно ${Number.isFinite(free) ? fmtBytes(free) : '?'}. Уменьшите радиус, снимите «Для карты» или удалите старый район`) : 'Отметьте хотя бы одно: «Для расчёта связи» или «Для карты»' };
     render();
     // Замер — один раз за сессию; пересчёт после него тоже один (иначе recompute → measureAvg → recompute…).
     if (!measuredAvg && !measureTried && tiles.length) {
@@ -315,35 +206,28 @@ export function openOfflineSheet(): void {
   function render() {
     body.innerHTML = '';
     const o = origin();
-    body.appendChild(h(`<div class="off-sum">Рельеф вокруг: ${o.src === 'пульт' ? 'пульта' : 'прицела'}. Радиус:</div>`));
-    const chips = h('<div class="chips"></div>');
-    for (const km of RADII_KM) {
-      const b = h(`<button class="${km === selKm ? 'on' : ''}">${km} км</button>`);
-      b.onclick = () => { selKm = km; recompute(); render(); };
-      chips.appendChild(b);
-    }
-    body.appendChild(chips);
+    body.appendChild(h(`<p class="off-sum">Рельеф вокруг ${o.src === 'пульт' ? 'пульта' : 'прицела'} — расчёт связи будет работать без сети. Радиус:</p>`));
+    body.appendChild(chips(RADII_KM.map((km) => ({ text: `${km} км`, on: km === selKm, click: () => { selKm = km; recompute(); render(); } }))));
     const checks = h(`<div class="off-checks">
-      <label><input type="checkbox" id="offCalc" ${selCalc ? 'checked' : ''}><span>Для расчёта связи</span></label>
-      <label><input type="checkbox" id="offView" ${selView ? 'checked' : ''}><span>Для карты (горизонтали, отмывка)<small>масштабы ${VIEW_Z0}–${VIEW_Z1}</small></span></label></div>`);
+      <label><input type="checkbox" id="offCalc" ${selCalc ? 'checked' : ''}><span>Для расчёта связи<small>профиль, строка связи, зона</small></span></label>
+      <label><input type="checkbox" id="offView" ${selView ? 'checked' : ''}><span>Для карты<small>горизонтали и отмывка; займёт больше места</small></span></label></div>`);
     (checks.querySelector('#offCalc') as HTMLInputElement).onchange = (e) => { selCalc = (e.target as HTMLInputElement).checked; recompute(); render(); };
     (checks.querySelector('#offView') as HTMLInputElement).onchange = (e) => { selView = (e.target as HTMLInputElement).checked; recompute(); render(); };
     body.appendChild(checks);
-    const avgNote = measuredAvg ? `средний тайл ${fmtBytes(measuredAvg)} (замер)` : `средний тайл ~${fmtBytes(DEFAULT_TILE_BYTES)} (оценка)`;
     body.appendChild(h(plan.busy
-      ? '<div class="hint">Считаю…</div>'
-      : `<div class="off-sum">Скачать ~${fmtBytes(plan.need)} · свободно ${Number.isFinite(plan.free) ? fmtBytes(plan.free) : 'неизвестно'}</div><div class="hint muted">Тайлов: ${plan.n}, новых: ${plan.newN}; ${avgNote}.</div>`));
-    if (plan.msg) body.appendChild(h(`<div class="off-warn">${escapeHtml(plan.msg)}</div>`));
+      ? '<p class="hint">Считаю объём…</p>'
+      : `<p class="off-sum">Скачать ~${fmtBytes(plan.need)}${plan.newN < plan.n ? ' (часть уже есть)' : ''} · свободно ${Number.isFinite(plan.free) ? fmtBytes(plan.free) : 'неизвестно'}</p>`));
+    if (plan.msg) body.appendChild(h(`<p class="off-warn">${escapeHtml(plan.msg)}</p>`));
     const row = h('<div class="row"></div>');
     if (job) {
-      const cancel = h(`<button class="ghost">Отмена (${escapeHtml(job.text)})</button>`);
+      const cancel = h(`<button class="ghost" type="button">Отменить (${escapeHtml(job.text)})</button>`);
       cancel.onclick = () => job?.ctl.abort();
       row.appendChild(cancel);
     } else {
-      const go = h('<button class="primary">Скачать</button>');
+      const go = h('<button class="primary" type="button">Скачать</button>');
       (go as HTMLButtonElement).disabled = plan.busy || !plan.ok || plan.n === 0;
       go.onclick = () => {
-        const layers = planLayers(o.lat, selKm, selCalc, selView);
+        const layers = planLayers(o.lat, o.lon, selKm, selCalc, selView);
         const tiles = enumerateTiles(o.lat, o.lon, layers).length;
         const area: Area = {
           id: `o${Date.now().toString(36)}`, name: `Район ${selKm} км · ${new Date().toLocaleDateString('ru-RU')}`,
@@ -354,56 +238,66 @@ export function openOfflineSheet(): void {
       row.appendChild(go);
     }
     body.appendChild(row);
-    body.appendChild(h('<div class="hint">Скачивается только рельеф (Mapzen Terrain Tiles); спутник и схемы — нет.</div>'));
+    body.appendChild(h('<p class="hint off-note"><b>Подложка не сохраняется</b> — только рельеф. Без сети спутник и топокарта не покажутся; для них добавьте свою карту (Меню → Офлайн → Свои карты).</p>'));
 
-    body.appendChild(h('<div class="off-sec">Скачанные районы</div>'));
+    body.appendChild(h('<h4 class="off-sec">Скачанные районы</h4>'));
     const list = loadAreas();
-    if (!list.length) body.appendChild(h('<div class="hint">Пока нет скачанных районов.</div>'));
+    if (!list.length) body.appendChild(h('<p class="hint">Пока нет.</p>'));
     for (const a of list) {
       const lv = [a.calc ? 'расчёт' : '', a.view ? 'карта' : ''].filter(Boolean).join(' + ');
-      const it = h(`<div class="off-item"><b>${escapeHtml(a.name)}</b><div class="off-meta">${a.km} км · ${lv} · ${a.tiles} тайлов · ~${fmtBytes(a.bytes)}<br>${a.lat.toFixed(4)}, ${a.lon.toFixed(4)}</div><div class="row"></div></div>`);
+      const it = h(`<div class="off-item"><b>${escapeHtml(a.name)}</b><div class="off-meta">${a.km} км · ${lv} · ~${fmtBytes(a.bytes)}</div><div class="row"></div></div>`);
       const r = it.querySelector('.row')!;
-      const mk = (t: string, f: () => void) => { const b = h(`<button class="ghost">${t}</button>`); b.onclick = f; r.appendChild(b); };
-      mk('Показать', () => showAreaOnMap(a));
-      mk('Обновить', () => { if (!job) runDownload({ ...a }, true); });
-      mk('Удалить', async () => {
-        if (job) return;
-        const cache = await caches.open(OFFLINE_CACHE);
-        const keys = exclusiveKeys(a, list.filter((o2) => o2.id !== a.id));
-        await Promise.all(keys.map((k) => cache.delete(keyToUrl(k))));
-        saveAreas(loadAreas().filter((x) => x.id !== a.id));
-        toast(`Удалено тайлов: ${keys.length}`);
+      const mk = (t: string, cls: string, f: () => void) => r.appendChild(button(t, cls, f));
+      mk('Показать', 'ghost', () => showAreaOnMap(a));
+      mk('Обновить', 'ghost', () => { if (job) { toast('Дождитесь конца скачивания'); return; } runDownload({ ...a }, true); });
+      mk('Удалить', 'danger', async () => {
+        if (job) { toast('Дождитесь конца скачивания'); return; }
+        if (!(await confirmDialog('Удалить район?', `«${a.name}» перестанет работать без сети.`, 'Удалить'))) return;
+        try {
+          const cache = await caches.open(OFFLINE_CACHE);
+          const keys = exclusiveKeys(a, list.filter((o2) => o2.id !== a.id));
+          await Promise.all(keys.map((k) => cache.delete(keyToUrl(k))));
+          saveAreas(loadAreas().filter((x) => x.id !== a.id));
+          toast('Район удалён');
+        } catch (e) {
+          toast(`Не удалось удалить район: ${e instanceof Error ? e.message : 'хранилище браузера недоступно'}. Перезапустите приложение и попробуйте снова`, 6000);
+        }
         recompute(); refreshStats(); render();
       });
       body.appendChild(it);
     }
-    body.appendChild(h('<div class="off-sec">Занято</div>'));
-    body.appendChild(h(`<div class="off-sum" id="offStats">${stats || 'Считаю…'}</div>`));
-    const clr = h('<button class="ghost">Очистить всё</button>');
-    clr.onclick = async () => {
-      if (job || !confirm('Удалить все скачанные тайлы рельефа и список районов?')) return;
-      await caches.delete(OFFLINE_CACHE);
-      saveAreas([]);
-      toast('Офлайн-данные удалены');
-      stats = ''; recompute(); refreshStats(); render();
-    };
-    body.appendChild(clr);
-    const pers = h('<button class="ghost">Не удалять при нехватке места</button>');
-    pers.onclick = async () => {
+    body.appendChild(h('<h4 class="off-sec">Место на устройстве</h4>'));
+    body.appendChild(h(`<p class="off-sum" id="offStats">${escapeHtml(stats || 'Считаю…')}</p>`));
+    const tail = h('<div class="row"></div>');
+    const pers = button('Защитить от очистки', 'ghost', async () => {
       const ok = await navigator.storage?.persist?.().catch(() => false);
-      toast(ok ? 'Данные защищены от автоматической очистки' : 'Браузер не разрешил (попробуйте после установки приложения)', 4000);
-    };
-    body.appendChild(pers);
+      toast(ok ? 'Готово: браузер не удалит офлайн-данные сам' : 'Браузер не разрешил. Установите приложение на телефон и попробуйте снова', 5000);
+    });
+    const clr = button('Удалить всё', 'danger', async () => {
+      if (job) { toast('Дождитесь конца скачивания'); return; }
+      if (!(await confirmDialog('Удалить все районы?', 'Весь скачанный рельеф и список районов удалятся с устройства.', 'Удалить всё'))) return;
+      try {
+        await caches.delete(OFFLINE_CACHE);
+        saveAreas([]);
+        toast('Офлайн-районы удалены');
+      } catch (e) {
+        toast(`Не удалось очистить: ${e instanceof Error ? e.message : 'хранилище браузера недоступно'}. Перезапустите приложение и попробуйте снова`, 6000);
+      }
+      stats = ''; recompute(); refreshStats(); render();
+    });
+    tail.append(pers);
+    if (list.length) tail.append(clr);
+    body.appendChild(tail);
   }
 
   async function refreshStats() {
     try {
       const s = await cacheStats();
       const e = await navigator.storage?.estimate?.();
-      stats = `В кеше рельефа: ${s.n} тайлов, ~${fmtBytes(s.bytes)}${e?.quota ? `. Всего использовано ${fmtBytes(e.usage ?? 0)} из ${fmtBytes(e.quota)}` : ''}`;
+      stats = `Рельеф: ${s.n ? `~${fmtBytes(s.bytes)}` : 'нет'}${e?.quota ? ` · всего занято ${fmtBytes(e.usage ?? 0)} из ${fmtBytes(e.quota)}` : ''}`;
       const el = document.getElementById('offStats');
       if (el) el.textContent = stats;
-    } catch { stats = 'Не удалось прочитать кеш'; }
+    } catch { stats = 'Не удалось узнать занятое место'; }
   }
 
   renderFn = () => { render(); void recompute(); void refreshStats(); };

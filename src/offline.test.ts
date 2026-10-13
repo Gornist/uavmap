@@ -1,6 +1,6 @@
-import { describe, it, expect, vi } from 'vitest';
-vi.mock('./app', () => ({ S: {}, map: {}, center: () => ({ lat: 0, lon: 0 }), openSheet: () => document, progress: () => {}, toast: () => {}, h: () => ({}), escapeHtml: (t: string) => t, fc: () => ({}), setGeo: () => {} }));
-import { tileRange, enumerateTiles, countTiles, estimateBytes, planLayers, parseAreas, exclusiveKeys, tileKey, tileUrl, keyToUrl, Area, DEFAULT_TILE_BYTES } from './offline';
+import { describe, it, expect } from 'vitest';
+import { tileRange, enumerateTiles, countTiles, estimateBytes, planLayers, parseAreas, exclusiveKeys, tileKey, tileUrl, keyToUrl, Area, DEFAULT_TILE_BYTES } from './offlineCore';
+import { coverageZoom } from './elevation';
 
 const area = (id: string, lat: number, lon: number, km: number, z = [10]): Area => ({
   id, name: id, lat, lon, km, calc: true, view: false, layers: z.map((zz) => ({ z: zz, km })), tiles: 1, bytes: 1, ts: 1,
@@ -45,15 +45,24 @@ describe('оценка и план', () => {
     expect(estimateBytes(10, 1000)).toBe(10000);
   });
   it('слои расчёта и карты', () => {
-    const l = planLayers(50, 10, true, true);
+    const l = planLayers(50, 30, 10, true, true);
     expect(l.some((x) => x.z === 8) && l.some((x) => x.z === 13)).toBe(true);
-    expect(planLayers(50, 10, false, false)).toEqual([]);
+    expect(planLayers(50, 30, 10, false, false)).toEqual([]);
     const keys = l.map((x) => `${x.z}`);
     expect(new Set(keys).size).toBe(keys.length);
   });
+  it('слои зоны — тот же уровень рельефа, что берёт расчёт зоны (coverageZoom)', () => {
+    for (const [lat, lon] of [[43.68, 40.2], [55.75, 37.62], [64.5, 40.5]]) {
+      const l = planLayers(lat, lon, 40, true, false);
+      for (const r of [5, 10, 15, 25, 40]) {
+        const z = coverageZoom({ lat, lon }, r * 1000).z;
+        expect(l.some((x) => x.z === z && x.km >= r), `${lat}, ${r} км`).toBe(true);
+      }
+    }
+  });
   it('растёт с радиусом на широтах 45 и 55', () => {
     for (const lat of [45, 55]) {
-      const n = [5, 10, 20, 40].map((km) => enumerateTiles(lat, 30, planLayers(lat, km, true, true)).length);
+      const n = [5, 10, 20, 40].map((km) => enumerateTiles(lat, 30, planLayers(lat, 30, km, true, true)).length);
       expect(n[0]).toBeLessThan(n[1]); expect(n[1]).toBeLessThan(n[2]); expect(n[2]).toBeLessThan(n[3]);
     }
   });

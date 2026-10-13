@@ -1,0 +1,71 @@
+/* Меню, инструменты (линейка), карточки «Точка»/«Метка» (блок координат) и диалоги (ui.ts → dialog).
+ * Подключается из src/menu/index.ts. Цели нажатия ≥ 44 px на любом устройстве. */
+
+/* ----- Ящик меню ----- */
+#drClose { width: 44px; height: 44px; font-size: 18px; flex: none; }
+.dr-item { min-height: 56px; }
+.dr-top { position: sticky; top: -8px; z-index: 1; display: flex; align-items: center; gap: 4px; margin-top: -8px; padding: 0 16px 0 4px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.dr-top b { flex: 1; min-width: 0; font-size: 17px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dr-back { min-height: 48px; min-width: 44px; padding: 0 12px; }
+#drawer .dr-sec > .primary, #drawer .dr-sec > .ghost, #drawer .dr-sec > .danger { display: block; width: 100%; margin: 8px 0; }
+#drawer button { min-height: 44px; }
+#drawer .seg button { min-height: 44px; }
+.seg-wrap { flex-wrap: wrap; }
+.seg-wrap button { flex: 1 1 33%; }
+#drawer .chk { min-height: 44px; align-items: center; }
+#drawer .chk input { width: 24px; height: 24px; flex: none; }
+.chk small { display: block; font-size: 13px; }
+#drawer input[type="text"], #drawer input[type="number"], #drawer select { min-height: 44px; }
+#drawer input[type="range"] { min-height: 44px; padding: 0; }
+.row-2 { flex-wrap: nowrap; }
+.row-2 > * { min-width: 0; }
+.go-row input { flex: 3; min-width: 0; }
+.go-row button { flex: 1 0 auto; }
+.warn-line { border-left: 3px solid var(--weak); padding-left: 10px; color: var(--text); }
+.warn-line b { color: var(--weak); }
+
+/* Списки меток и маршрутов */
+#drawer .list { gap: 4px; }
+button.li { width: 100%; min-height: 44px; font: inherit; color: var(--text); text-align: left; }
+.li-acts { padding: 0 0 0 4px; gap: 4px; cursor: default; }
+.li-main { flex: 1; min-width: 0; min-height: 44px; display: flex; align-items: center; gap: 10px; background: transparent; border: 0; padding: 0 4px; color: var(--text); text-align: left; }
+.li-acts .mini { width: 44px; height: 44px; flex: none; border-color: transparent; font-size: 17px; }
+.li-acts .mini:hover { border-color: var(--line-strong); }
+
+/* ----- Карточки «Точка» и «Метка» ----- */
+.card-sheet .field input.txt { text-align: left; }
+.card-sheet button, .mm button { min-height: 44px; min-width: 44px; }
+.card-sheet .colors button { width: 44px; height: 44px; }
+.coords { margin: 8px 0; }
+.coords-main { background: var(--panel-2); border-radius: 8px; padding: 8px 12px; }
+.coords-main small { display: block; color: var(--muted); font-size: 13px; }
+.coords-main .mono { font-size: 20px; font-weight: 600; line-height: 1.35; }
+.coords-main .k { color: var(--muted); font-family: var(--font-ui); font-size: 15px; font-weight: 400; display: inline-block; min-width: 1.4em; }
+.coords .details { margin: 6px 0 0; }
+.coords .details .kv { margin: 4px 0; }
+.coords .details .kv b { font-family: var(--font-mono); font-size: 15px; }
+
+/* ----- Диалог (вместо prompt/confirm) ----- */
+.dlg-scrim { position: fixed; inset: 0; z-index: 40; background: var(--scrim); display: flex; align-items: center; justify-content: center; padding: 16px calc(16px + var(--safe-r, 0px)) calc(16px + var(--safe-b, 0px)) calc(16px + var(--safe-l, 0px)); }
+.dlg { width: min(420px, 100%); max-height: 100%; overflow-y: auto; background: var(--panel); color: var(--text); border: 1px solid var(--line-strong); border-radius: 14px; box-shadow: var(--shadow-lg); padding: 16px; }
+.dlg-title { margin: 0 0 8px; font-size: 18px; font-weight: 600; }
+.dlg-text { margin: 0 0 12px; color: var(--text); font-size: 15px; line-height: 1.45; overflow-wrap: anywhere; }
+.dlg-field { display: flex; flex-direction: column; gap: 4px; margin: 0 0 12px; }
+.dlg-field span { color: var(--muted); font-size: 14px; }
+.dlg-field input { width: 100%; min-height: 44px; font-size: 16px; }
+.dlg-acts { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.dlg-acts button { flex: 1 1 auto; min-height: 44px; min-width: 44px; white-space: nowrap; }
+
+/* ----- Линейка ----- */
+body #rulerBar { display: grid; grid-template-columns: repeat(4, auto); grid-gap: 8px; gap: 8px; align-items: center; }
+body #rulerBar #rulerText { grid-column: 1 / -1; min-width: 0; font: 15px var(--font-ui); font-variant-numeric: tabular-nums; }
+body #rulerBar button { min-height: 44px; white-space: nowrap; padding: 0 12px; }
+html.no-flexgap #rulerBar > * { margin: 0; }
+.no-flexgap .dr-top > * + *, .no-flexgap .li-acts > * + *, .no-flexgap .li-main > * + *, .no-flexgap .dlg-acts > * + * { margin-left: 8px; }
+.no-flexgap .row-2 > * { margin-bottom: 0; } /* у сетки свой зазор (grid-gap есть и в Chrome 68) */
+/* Пока линейка включена, строку связи не показываем (одна панель внизу). */
+body.ruler-on #linkStrip { display: none; }
+@media (max-width: 640px), (max-height: 520px) and (orientation: landscape) {
+  body #rulerBar { grid-template-columns: 1fr 1fr; }
+  body #rulerBar #rulerText { font-size: 14px; }
+}

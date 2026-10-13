@@ -1,13 +1,15 @@
 /* Шторка «Офлайн-районы» */
-.off-sec { color: var(--muted); font-size: 13px; margin: 12px 0 4px; }
-.off-sum { font-size: 13px; margin: 6px 0; line-height: 1.5; }
-.off-warn { color: var(--bad); font-size: 13px; margin: 6px 0; }
-.off-ok { color: var(--ok); font-size: 13px; margin: 6px 0; }
-.off-checks label { display: flex; gap: 8px; align-items: flex-start; margin: 6px 0; font-size: 13px; }
-.off-checks label input { margin-top: 3px; }
+.off-sec { color: var(--accent-text); font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; margin: 16px 0 6px; }
+.off-sum { font-size: 15px; margin: 6px 0; line-height: 1.5; }
+.off-warn { color: var(--none); font-size: 14px; margin: 6px 0; }
+.off-note { border-left: 3px solid var(--weak); padding-left: 10px; color: var(--text); }
+.off-note b { color: var(--weak); }
+.off-checks label { display: flex; gap: 10px; align-items: center; min-height: 44px; margin: 2px 0; font-size: 15px; }
+.off-checks label input { width: 24px; height: 24px; flex: none; accent-color: var(--accent); }
 .off-checks label small { display: block; color: var(--muted); font-size: 13px; }
 .off-item { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin: 8px 0; background: var(--panel-2); }
-.off-item b { font-size: 13px; }
+.off-item b { font-size: 15px; }
 .off-item .off-meta { color: var(--muted); font-size: 13px; margin: 2px 0 6px; }
 .off-item .row { margin: 4px 0 0; }
-.off-item .row button { padding: 6px 8px; font-size: 13px; }
+#shBody .off-item .row > button { flex: 1 1 0; }
+.off button, .off .chips button { min-height: 44px; min-width: 44px; }

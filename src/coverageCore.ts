@@ -16,7 +16,7 @@
 //  • r0..r1 — часть лучей (для параллельных воркеров), сетка может быть вырезкой мозаики под сектор.
 import { destination, lonLatToPixel, R_EARTH } from './geo';
 import { DemGrid, sampleGrid, sampleRay } from './elevation';
-import { clampK } from './radio';
+import { C, clampK } from './radio';
 import { bullingtonPointNu, bullingtonTaper, deltaBullingtonTail, knifeEdgeJ, smoothSurfaceHeights } from './diffraction';
 
 export interface CoverageJob {
@@ -60,7 +60,7 @@ export function computeCoverage(j: CoverageJob, onProgress?: (frac: number) => v
   const r0 = j.r0 ?? 0, r1 = j.r1 ?? j.rays, nr = r1 - r0;
   const exact = j.exact !== false;
   const thr = lossThreshold(j.fade);
-  const lambda = 299792458 / (j.freqMHz * 1e6);
+  const lambda = C / (j.freqMHz * 1e6);
   const ae = clampK(j.k) * R_EARTH;
   const k2 = 1 / (2 * ae);
   const fsConst = 32.45 + 20 * Math.log10(j.freqMHz);

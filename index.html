@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
-  <meta name="theme-color" content="#10151f" />
+  <meta name="theme-color" content="#171614" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <title>Радиус — радиовидимость дрона</title>
@@ -21,20 +21,14 @@
   </div>
   <div id="crossLabel"></div>
 
-  <header id="topLeft">
-    <button class="round" id="btnMenuTop" title="Меню">☰</button>
-    <div class="logo">РАДИУС</div>
-  </header>
-
   <section id="infoCard" class="card">
     <div class="ic-head">
-      <span title="Высота рельефа под прицелом">Высота</span>
+      <span title="Высота рельефа под прицелом над уровнем моря">Рельеф</span>
       <b id="hereH">—</b><small>м</small>
       <button id="infoToggle" class="mini" title="Свернуть">−</button>
     </div>
     <div id="infoBody">
       <div class="ic-coords" id="hereCoords"></div>
-      <div id="hereLink" class="ic-link" hidden></div>
       <button class="ic-more" id="btnPoint">Точка: координаты, профиль…</button>
     </div>
   </section>
@@ -46,29 +40,31 @@
     <button class="round" id="btnHome" title="К пульту">⌂</button>
   </div>
 
-  <!-- строка «связь до креста» -->
-  <div id="linkStrip" hidden>
-    <div class="ls-tabs">
-      <button data-ls="link" class="on">Связь</button>
-      <button data-ls="zone">Зона</button>
-      <button data-ls="best">Где встать</button>
-      <button id="lsClose" class="ls-x" title="Скрыть">×</button>
+  <!-- строка связи: пульт → прицел (всегда видна; прячется при открытой шторке и линейке) -->
+  <div id="linkStrip">
+    <div id="lsOffer" class="ls-offer" hidden></div>
+    <div id="lsEmpty" class="ls-empty">
+      <p>Поставьте пульт там, где будете стоять</p>
+      <div class="ls-acts">
+        <button id="btnStHere" class="primary">📡 Пульт здесь</button>
+        <button id="btnStGps" class="ghost">⌖ По GPS</button>
+      </div>
     </div>
-    <div class="ls-status" id="lsStatus" aria-live="polite">Двигайте карту — прицел покажет связь</div>
-    <div class="ls-inputs">
-      <label><span><b class="l-s">Антенна</b><b class="l-l">Антенна пульта</b></span><input id="inAnt" type="number" inputmode="decimal" min="0" step="0.5"/><i>м</i></label>
-      <label><span><b class="l-s">Дрон</b><b class="l-l">Дрон</b> <em id="altModeLbl"></em></span><input id="inDrone" type="number" inputmode="decimal" min="0" step="5"/><i>м</i></label>
-      <button id="btnProfile" class="primary">Профиль</button>
+    <div id="lsMain" hidden>
+      <div class="ls-status" id="lsStatus" aria-live="polite"></div>
+      <div class="ls-inputs">
+        <label id="lblDrone"><span>Дрон, м <em id="altModeLbl"></em></span><input id="inDrone" type="number" inputmode="decimal" min="0" max="5000" step="5"/></label>
+        <label><span>Антенна, м</span><input id="inAnt" type="number" inputmode="decimal" min="0" max="100" step="0.5"/></label>
+        <button id="btnProfile" class="primary">Профиль</button>
+      </div>
     </div>
   </div>
 
   <nav id="bottomBar">
-    <button id="btnMark" class="accent" title="Метка в прицел">✚⚑</button>
-    <button id="btnLink"><span class="tx-l">Проверить связь</span><span class="tx-s">Связь</span></button>
-    <button id="btnRuler" title="Линейка"><span class="ico">📏</span><span class="tx-l"> Линейка</span></button>
-    <button id="btnLabels" title="Подписи"><span class="ico">🏷</span><span class="tx-l"> Подписи</span></button>
-    <button id="btnFull" title="Во весь экран"><span class="ico">⛶</span><span class="tx-l"> Во весь экран</span></button>
-    <button id="btnMenu" class="right" title="Меню"><span class="ico">☰</span> Меню</button>
+    <button id="btnMark" title="Метка в прицел"><span class="ico">⚑</span><span class="tx">Метка</span></button>
+    <button id="btnZone" title="Зона покрытия вокруг пульта"><span class="ico">◎</span><span class="tx">Зона</span></button>
+    <button id="btnBest" title="Где встать пилоту, чтобы связь с прицелом была лучше"><span class="ico">◆</span><span class="tx">Где встать</span></button>
+    <button id="btnMenu" title="Меню"><span class="ico">☰</span><span class="tx">Меню</span></button>
   </nav>
 
   <div id="rulerBar" hidden>

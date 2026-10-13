@@ -25,47 +25,23 @@ textarea.txt { min-height: 70px; resize: vertical; font: inherit; color: var(--t
   .seg button { font-size: 14px; }
   .maplibregl-compact { min-height: 44px; min-width: 44px; }
   .maplibregl-ctrl-attrib-button { width: 44px !important; height: 44px !important; }
-  #topLeft { top: calc(8px + var(--safe-t)); left: calc(10px + var(--safe-l)); }
   #infoCard { top: calc(8px + var(--safe-t)); right: calc(10px + var(--safe-r)); }
   #toast { top: calc(64px + var(--safe-t)); }
   #progress { top: calc(64px + var(--safe-t)); }
   #rightBar { right: calc(10px + var(--safe-r)); }
-  #bottomBar { padding: 8px calc(8px + var(--safe-r)) calc(8px + var(--safe-b)) calc(8px + var(--safe-l)); }
-  #bottomBar button { min-height: 44px; padding: 0 12px; }
-  .maplibregl-ctrl-bottom-left, .maplibregl-ctrl-bottom-right { bottom: calc(60px + var(--safe-b)) !important; }
-  #linkStrip, #rulerBar { bottom: calc(66px + var(--safe-b)); }
-  .ls-tabs { overflow-x: auto; scrollbar-width: none; }
-  .ls-tabs button { flex: none; padding: 0 10px; }
-  .ls-x { margin-left: auto; }
-  .ls-status { font-size: 14px; padding: 2px 2px 6px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-  .ls-inputs input { width: 58px; }
   .ic-head button.mini { margin: -6px -8px -6px 0; }
 }
 
 /* Узкий портрет телефона */
 @media (max-width: 640px) {
   #infoCard { width: min(210px, calc(100vw - 190px)); padding: 4px 4px 4px 10px; }
-  #bottomBar { gap: 6px; }
-  #bottomBar button .tx-l { display: none; }
-  #bottomBar #btnLink .tx-s { display: inline; }
-  #bottomBar #btnLink { padding: 0 14px; }
-  #bottomBar button.accent { padding: 0 12px; }
 }
 /* Компактные плашки: узкий портрет и ландшафт телефона */
 @media (max-width: 640px), (max-height: 520px) and (orientation: landscape) {
   .ic-head span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .ic-head small { margin-right: 0; }
   .ic-coords { margin-top: 4px; }
-  #linkStrip, #rulerBar { width: calc(100% - 16px - var(--safe-l) - var(--safe-r)); padding: 6px 8px; }
-  .l-s { display: inline; } .l-l { display: none; }
-  .ls-inputs { flex-wrap: wrap; gap: 6px; }
-  .ls-inputs label { min-width: 0; flex: 1 1 0; padding: 0 6px; gap: 4px; min-height: 44px; }
-  .ls-inputs label span { font-size: 13px; }
-  .ls-inputs label em { display: none; }
-  .ls-inputs input { width: 50px; padding: 4px; border: 0; background: transparent; }
-  .ls-inputs label span { flex: none; overflow: visible; }
-  .ls-inputs label { justify-content: space-between; }
-  .ls-inputs button { padding: 0 10px; font-size: 13px; }
+  #rulerBar { width: calc(100% - 16px - var(--safe-l) - var(--safe-r)); padding: 6px 8px; }
   #rulerText { flex: 1 1 100%; min-width: 0; font-size: 13px; }
   #rulerBar button { flex: 1; }
 }
@@ -87,9 +63,9 @@ textarea.txt { min-height: 70px; resize: vertical; font: inherit; color: var(--t
 
 /* Ландшафт телефона */
 @media (max-height: 520px) and (orientation: landscape) {
-  #rightBar { top: auto; bottom: calc(68px + var(--safe-b)); transform: none; flex-direction: row; gap: 8px; }
+  #rightBar { top: auto; bottom: calc(var(--bar-h) + 8px + var(--safe-b)); transform: none; flex-direction: row; gap: 8px; }
   #infoCard { width: 210px; }
-  #linkStrip, #rulerBar { left: calc(8px + var(--safe-l)); transform: none; width: min(380px, 46vw); }
+  #rulerBar { left: calc(8px + var(--safe-l)); transform: none; width: min(380px, 44vw); }
   #drawer { padding-left: var(--safe-l); }
   .dr-head { padding-top: calc(10px + var(--safe-t)); }
   #drBody { padding-bottom: calc(24px + var(--safe-b)); }

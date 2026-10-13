@@ -1,13 +1,14 @@
-// Service Worker (injectManifest). Без зависимостей: чистый Cache API.
+// Service Worker (injectManifest). Без библиотек: чистый Cache API.
 // Кеши: uavmap-shell-<hash> (оболочка), uavmap-dem-v1 (районы, пишет offline.ts — не вытесняется),
 // uavmap-dem-runtime (просмотренные тайлы рельефа, лимит), uavmap-glyphs (шрифты карты).
 // Подложки Esri/OSM/OpenTopoMap намеренно НЕ кешируются (условия провайдеров).
+
+import { DEM_PREFIX } from './demTiles';
 
 const sw = self as unknown as ServiceWorkerGlobalScope;
 
 interface ManifestEntry { url: string; revision: string | null }
 
-const DEM_PREFIX = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/';
 const GLYPH_PREFIX = 'https://demotiles.maplibre.org/font/';
 const DEM_AREA = 'uavmap-dem-v1';
 const DEM_RUNTIME = 'uavmap-dem-runtime';

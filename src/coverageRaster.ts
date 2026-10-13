@@ -1,5 +1,5 @@
 // Геометрия растра зоны: какой отсчёт (луч, расстояние) показывать в каждом пикселе.
-import { pixelToLonLat, R_EARTH } from './geo';
+import { pixelToLonLat, R_EARTH, D2R } from './geo';
 
 export interface RasterGeom {
   lat: number; lon: number;           // пульт
@@ -7,8 +7,6 @@ export interface RasterGeom {
   x0: number; y0: number; wx: number; wy: number; // окно растра в глобальных пикселях уровня z
   w: number; h: number; z: number;    // размер растра, px
 }
-
-const D2R = Math.PI / 180;
 
 /**
  * Для каждого пикселя (строка j, столбец i) — индекс r·samples + s или −1 вне круга. Формулы те же, что

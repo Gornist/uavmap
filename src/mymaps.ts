@@ -1,17 +1,21 @@
-// Свои карты: PMTiles как офлайн-подложка, HGT как свой рельеф (хранение — OPFS). Владелец: задача C.
+// Свои карты: PMTiles как офлайн-подложка, HGT как свой рельеф (хранение — OPFS).
 import './styles/mymaps.css';
 import maplibregl from 'maplibre-gl';
 import { PMTiles, FileSource } from 'pmtiles';
-import { S, map, h, toast, openSheet, progress, addBase, removeBase, ensureBase, applyMapStyle, BASES } from './app';
+import { S, map, toast, openSheet, progress, addBase, removeBase, ensureBase, applyMapStyle, BASES } from './app';
+import { h, button, confirmDialog } from './ui';
 import { setLocalDemProvider } from './elevation';
 import { HgtTile, checkHgtFile, parseHgtName, tileCoverage, synthTile } from './hgt';
-import { MyMapItem, META_KEY, MAX_ITEMS, PM_MAX_BYTES, PM_HEADER_BYTES, checkPmtiles, parseMeta, serializeMeta, newId, cleanName, fmtSize, fmtBounds } from './mymapsCore';
+import { MyMapItem, META_KEY, MAX_ITEMS, PM_MAX_BYTES, PM_HEADER_BYTES, checkPmtiles, parseMeta, serializeMeta, newId, cleanName, fmtBounds } from './mymapsCore';
+import { fmtBytes } from './format';
 
 const DIR = 'mymaps';
 const PROTO = 'uavpm';
 const EMPTY_PNG = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='), (c) => c.charCodeAt(0)).buffer;
 
 let items: MyMapItem[] = [];
+/** Сколько своих карт подключено (для меню). */
+export const myMapsCount = () => items.length;
 /** Файлы, подключённые только на сессию (OPFS недоступен или не хватило места). */
 const sessionFiles = new Map<string, File>();
 const archives = new Map<string, PMTiles>();
@@ -20,7 +24,7 @@ let protoAdded = false;
 // ---------- Хранилище ----------
 const loadMeta = () => { try { items = parseMeta(localStorage.getItem(META_KEY)); } catch { items = []; } };
 // Сессионные карты в метаданные не пишем: после перезапуска файла уже нет.
-const saveMeta = () => { try { localStorage.setItem(META_KEY, serializeMeta(items.filter((i) => !sessionFiles.has(i.id)))); } catch { toast('Не удалось сохранить список карт'); } };
+const saveMeta = () => { try { localStorage.setItem(META_KEY, serializeMeta(items.filter((i) => !sessionFiles.has(i.id)))); } catch { toast('Не удалось сохранить список карт: мало места в браузере. Удалите ненужную карту или офлайн-район', 5000); } };
 
 async function dir(): Promise<FileSystemDirectoryHandle | null> {
   try {
@@ -33,7 +37,7 @@ async function fileOf(it: MyMapItem): Promise<File> {
   const s = sessionFiles.get(it.id);
   if (s) return s;
   const d = await dir();
-  if (!d) throw new Error('Хранилище недоступно');
+  if (!d) throw new Error('Хранилище браузера недоступно — добавьте файл заново');
   return (await d.getFileHandle(it.file)).getFile();
 }
 
@@ -55,7 +59,7 @@ async function copyToOpfs(f: File, name: string): Promise<boolean> {
       if (end) break;
       await w.write(value);
       done += value.byteLength;
-      progress(done / f.size, `Копирование: ${fmtSize(done)} из ${fmtSize(f.size)}`);
+      progress(done / f.size, `Копирование: ${fmtBytes(done)} из ${fmtBytes(f.size)}`);
     }
     await w.close();
     return true;
@@ -98,7 +102,7 @@ function deactivatePmtiles(it: MyMapItem) {
 
 // ---------- HGT как рельеф ----------
 const hgtCache = new Map<string, Promise<HgtTile>>(); // id → ячейка (LRU по порядку вставки)
-const HGT_LRU = 4;
+const HGT_LRU = 2; // ячейка SRTM1 — 26 МБ Int16
 
 function loadHgt(it: MyMapItem): Promise<HgtTile> {
   let p = hgtCache.get(it.id);
@@ -151,7 +155,7 @@ export async function initMyMaps(): Promise<void> {
   if (bad.length) {
     items = items.filter((i) => !bad.includes(i));
     saveMeta();
-    toast(`Свои карты: не найдено файлов — ${bad.length}. Они убраны из списка`, 4000);
+    toast(`Свои карты: не найдено файлов — ${bad.length} (браузер очистил хранилище). Добавьте их заново: Меню → Офлайн → Свои карты`, 6000);
   }
   refreshDem();
   ensureBase();
@@ -170,11 +174,11 @@ function pick(accept: string, multiple: boolean): Promise<File[]> {
   });
 }
 
-const where = (inOpfs: boolean) => (inOpfs ? '' : ' (только на эту сессию: хранилище браузера недоступно или мало места)');
+const where = (inOpfs: boolean) => (inOpfs ? '' : ' — только до перезапуска: в браузере мало места или нет хранилища');
 
 async function importPmtiles(f: File) {
-  if (items.length >= MAX_ITEMS) throw new Error('Слишком много карт');
-  if (f.size > PM_MAX_BYTES) throw new Error('Файл больше 2 ГБ');
+  if (items.length >= MAX_ITEMS) throw new Error(`Не больше ${MAX_ITEMS} карт — удалите ненужную`);
+  if (f.size > PM_MAX_BYTES) throw new Error('Файл больше 2 ГБ — вырежьте нужный район (pmtiles extract)');
   const head = await f.slice(0, PM_HEADER_BYTES).arrayBuffer();
   const v = checkPmtiles(head, f.size);
   if (!v.ok) throw new Error(v.error);
@@ -194,7 +198,7 @@ async function importHgt(f: File) {
   const sw = parseHgtName(f.name)!;
   HgtTile.fromBuffer(f.name, await f.arrayBuffer()); // полная проверка содержимого (пропуски заполняются при каждом чтении)
   const same = hgtItems().find((i) => Math.round(i.bounds[1]) === sw.lat && Math.round(i.bounds[0]) === sw.lon);
-  if (!same && items.length >= MAX_ITEMS) throw new Error('Слишком много карт');
+  if (!same && items.length >= MAX_ITEMS) throw new Error(`Не больше ${MAX_ITEMS} карт — удалите ненужную`);
   const id = newId();
   const it: MyMapItem = { id, kind: 'hgt', name: hgtName({ bounds: [sw.lon, sw.lat, sw.lon + 1, sw.lat + 1] } as MyMapItem), size: f.size, added: Date.now(), file: `${id}.hgt`, bounds: [sw.lon, sw.lat, sw.lon + 1, sw.lat + 1] };
   // Сначала сохраняем новую ячейку и только потом удаляем старую: при сбое записи прежний рельеф не теряется.
@@ -220,35 +224,29 @@ async function dropItem(it: MyMapItem, doRefresh = true) {
 // ---------- Шторка ----------
 export function openMyMapsSheet(): void {
   const root = h('<div class="mm"></div>');
-  const body = openSheet('Свои карты', root);
-  void body;
+  openSheet('Свои карты', root);
   const busy = { v: false };
 
   const run = async (fn: () => Promise<void>) => {
     if (busy.v) return;
     busy.v = true;
-    try { await fn(); } catch (e) { toast(e instanceof Error ? e.message : 'Не удалось добавить файл', 5000); } finally { progress(null); busy.v = false; render(); }
-  };
-
-  const btn = (text: string, cls: string, fn: () => void) => {
-    const b = h('<button type="button"></button>');
-    b.className = cls; b.textContent = text; b.addEventListener('click', fn);
-    return b;
+    try { await fn(); } catch (e) { toast(e instanceof Error ? e.message : 'Не удалось добавить файл. Подходят растровые PMTiles и ячейки HGT', 6000); } finally { progress(null); busy.v = false; render(); }
   };
 
   function render() {
     root.innerHTML = '';
+    root.appendChild(h('<p class="hint mm-hint">Своя подложка и свой рельеф из файлов — работают без сети и хранятся на этом устройстве.</p>'));
     const add = h('<div class="row"></div>');
     add.append(
-      btn('Добавить карту (PMTiles)', 'primary', () => void run(async () => { for (const f of await pick('.pmtiles,application/octet-stream,application/vnd.pmtiles', false)) await importPmtiles(f); })),
-      btn('Добавить рельеф (HGT)', 'ghost', () => void run(async () => { for (const f of await pick('.hgt,application/octet-stream', true)) await importHgt(f); })),
+      button('+ Карта (PMTiles)', 'primary', () => void run(async () => { for (const f of await pick('.pmtiles,application/octet-stream,application/vnd.pmtiles', false)) await importPmtiles(f); })),
+      button('+ Рельеф (HGT)', 'ghost', () => void run(async () => { for (const f of await pick('.hgt,application/octet-stream', true)) await importHgt(f); })),
     );
     root.appendChild(add);
     const info = h('<details class="details"><summary>Какие файлы подходят</summary></details>');
-    info.appendChild(h('<p class="hint mm-hint"></p>')).textContent = 'PMTiles — только растровые (png/jpg/webp), до 2 ГБ. Сделать из MBTiles: утилита `pmtiles convert` (github.com/protomaps/go-pmtiles). HGT — ячейки SRTM 1″/3″ с именем вида N55E037.hgt (например, с viewfinderpanoramas.org или USGS EarthExplorer), до 30 МБ каждая.';
-    info.appendChild(h('<p class="hint mm-hint"></p>')).textContent = 'Свой рельеф (HGT) используется в профиле, зоне покрытия и высоте под прицелом, если ячейки целиком покрывают нужный участок. Отмывка и горизонтали рисуются из сети и HGT не используют.';
+    info.appendChild(h('<p class="hint mm-hint"></p>')).textContent = 'Карта: файл PMTiles с картинками (png, jpg, webp) до 2 ГБ; из MBTiles его делает утилита pmtiles convert (github.com/protomaps/go-pmtiles). Рельеф: файлы HGT с именем вида N55E037.hgt (SRTM; например, viewfinderpanoramas.org), до 30 МБ каждый.';
+    info.appendChild(h('<p class="hint mm-hint"></p>')).textContent = 'Свой рельеф идёт в профиль, зону и высоту под прицелом, если файлы целиком покрывают участок. Отмывка и горизонтали берутся из сети.';
     root.appendChild(info);
-    if (!navigator.storage?.getDirectory) root.appendChild(h('<p class="hint mm-warn"></p>')).textContent = 'Браузер не поддерживает хранилище OPFS: файлы подключаются только на текущую сессию, после перезагрузки их нужно добавить снова.';
+    if (!navigator.storage?.getDirectory) root.appendChild(h('<p class="hint mm-warn"></p>')).textContent = 'Этот браузер не умеет хранить файлы: карты подключаются до перезапуска, потом их нужно добавить снова. Обновите Chrome, чтобы они сохранялись.';
 
     if (!items.length) { root.appendChild(h('<p class="hint">Пока ничего не добавлено.</p>')); return; }
     const list = h('<div class="mm-list"></div>');
@@ -257,26 +255,26 @@ export function openMyMapsSheet(): void {
       const title = h('<div class="mm-title"></div>');
       title.textContent = it.name;
       const meta = h('<div class="mm-meta"></div>');
-      const sess = sessionFiles.has(it.id) ? ' · только сессия' : '';
+      const sess = sessionFiles.has(it.id) ? ' · до перезапуска' : '';
       meta.textContent = it.kind === 'pmtiles'
-        ? `Подложка PMTiles · ${fmtSize(it.size)} · зум ${it.minzoom}–${it.maxzoom} · ${fmtBounds(it.bounds)}${sess}`
-        : `Рельеф HGT · ${fmtSize(it.size)} · ${fmtBounds(it.bounds)}${sess}`;
+        ? `Подложка · ${fmtBytes(it.size)} · масштабы ${it.minzoom}–${it.maxzoom}${sess}`
+        : `Рельеф · ${fmtBytes(it.size)} · ${fmtBounds(it.bounds)}${sess}`;
       const acts = h('<div class="mm-acts"></div>');
-      acts.appendChild(btn('Показать', 'ghost', () => {
+      acts.appendChild(button('Показать', 'ghost', () => {
         const [w, s, e, n] = it.bounds;
         map.fitBounds([[w, s], [e, n]], { padding: 40, maxZoom: it.maxzoom ?? 16, duration: 600 });
       }));
       if (it.kind === 'pmtiles') {
         const bid = `my-${it.id}`;
         const cur = S.map.base === bid;
-        const b = btn(cur ? 'Подложка ✓' : 'Сделать подложкой', cur ? 'ghost on' : 'ghost', () => {
-          if (!BASES[bid]) { toast('Карта недоступна'); return; }
+        const b = button(cur ? 'Подложка ✓' : 'Сделать подложкой', cur ? 'ghost on' : 'ghost', () => {
+          if (!BASES[bid]) { toast('Карта не подключилась — удалите её и добавьте файл заново', 5000); return; }
           S.map.base = bid; applyMapStyle(); render();
         });
         acts.appendChild(b);
       }
-      acts.appendChild(btn('Удалить', 'ghost danger', () => void run(async () => {
-        if (!window.confirm(`Удалить «${it.name}»?`)) return;
+      acts.appendChild(button('Удалить', 'danger', () => void run(async () => {
+        if (!(await confirmDialog('Удалить карту?', `«${it.name}» удалится с устройства.`, 'Удалить'))) return;
         await dropItem(it);
       })));
       card.append(title, meta, acts);

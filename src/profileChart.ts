@@ -1,5 +1,6 @@
 // График профиля трассы: рельеф с учётом кривизны Земли, линия визирования, 1-я зона Френеля и её 60 %.
 import type { LinkResult } from './radio';
+import { fixed } from './format';
 
 export function drawProfile(cv: HTMLCanvasElement, r: LinkResult, labels: { a: string; b: string }) {
   const dpr = window.devicePixelRatio || 1;
@@ -38,7 +39,7 @@ export function drawProfile(cv: HTMLCanvasElement, r: LinkResult, labels: { a: s
   ctx.textAlign = 'center'; ctx.textBaseline = 'top';
   for (let d = 0; d <= D + 1; d += stepD) {
     ctx.beginPath(); ctx.moveTo(X(d), T); ctx.lineTo(X(d), H - B); ctx.stroke();
-    ctx.fillText(D > 2000 ? `${(d / 1000).toFixed(stepD < 1000 ? 1 : 0)}` : `${Math.round(d)}`, X(d), H - B + 5);
+    ctx.fillText(D > 2000 ? fixed(d / 1000, stepD < 1000 ? 1 : 0) : `${Math.round(d)}`, X(d), H - B + 5);
   }
   ctx.textAlign = 'left';
   ctx.fillText(D > 2000 ? 'км' : 'м', W - Rt - 14, H - B + 5);
@@ -69,7 +70,7 @@ export function drawProfile(cv: HTMLCanvasElement, r: LinkResult, labels: { a: s
   for (let i = 1; i < n; i++) {
     const clr = r.los_h[i] - r.ground[i];
     if (clr < 0.6 * r.fz[i]) {
-      ctx.fillStyle = clr < 0 ? col('--bad') : col('--warn');
+      ctx.fillStyle = clr < 0 ? col('--none') : col('--weak');
       ctx.fillRect(X(r.d[i]) - 1, Y(r.ground[i]) - 1, 2.5, 3);
     }
   }
@@ -81,7 +82,7 @@ export function drawProfile(cv: HTMLCanvasElement, r: LinkResult, labels: { a: s
   ctx.setLineDash([]);
 
   // препятствия, учтённые в дифракции
-  ctx.fillStyle = col('--bad');
+  ctx.fillStyle = col('--none');
   for (const i of r.edges) {
     ctx.beginPath(); ctx.moveTo(X(r.d[i]), Y(r.ground[i]) - 9); ctx.lineTo(X(r.d[i]) - 5, Y(r.ground[i]) - 17); ctx.lineTo(X(r.d[i]) + 5, Y(r.ground[i]) - 17); ctx.fill();
   }

@@ -98,10 +98,13 @@ async function scenario() {
   await step('высота в плашке', async () => { await waitFor(`/\\d/.test(document.getElementById('hereH').textContent)`); return ev(`document.getElementById('hereH').textContent + ' м'`); });
   await shot('1-start');
 
-  await step('поставить пульт (Проверить связь)', async () => {
-    await ev(`document.getElementById('btnLink').click(); true`);
-    await waitFor(`!document.getElementById('linkStrip').hidden`);
-    await waitFor(`/Связь|грани|Нет |ниже рельефа|Считаю|рельеф|Прицел на пульте/.test(document.getElementById('lsStatus').textContent)`);
+  await step('пустое состояние: «Поставьте пульт» и «Пульт здесь»', async () => {
+    await waitFor(`!document.getElementById('linkStrip').hidden && !document.getElementById('lsEmpty').hidden`);
+    const t = await ev(`document.getElementById('lsEmpty').textContent`);
+    if (!/Поставьте пульт/.test(t) || !/Пульт здесь/.test(t) || !/По GPS/.test(t)) throw new Error('нет пустого состояния: ' + t);
+    await ev(`document.getElementById('btnStHere').click(); true`);
+    await waitFor(`!document.getElementById('lsMain').hidden`);
+    await waitFor(`/Связь|грани|Нет |ниже склона|Считаю|рельеф|Прицел на пульте/.test(document.getElementById('lsStatus').textContent)`);
   });
   await step('связь до креста после сдвига 3 км на северо-восток', async () => {
     await ev(`(() => { const m = window.__map, c = m.getCenter(); m.jumpTo({ center: [c.lng + 0.03, c.lat + 0.02] }); return true; })()`);
@@ -116,11 +119,21 @@ async function scenario() {
     await waitFor(`/Упр\\.\\s*[+−]\\d/.test(document.getElementById('lsStatus').textContent)`);
     const t = await ev(`document.getElementById('lsStatus').textContent`);
     if (!/Упр\.\s*[+−]\d/.test(t) || !/Видео\s*[+−]\d/.test(t)) throw new Error('нет обеих линий: ' + t);
-    const big = await ev(`document.querySelector('#lsStatus .verdict-big')?.className || ''`);
+    const big = await ev(`document.querySelector('#lsStatus .ls-verdict')?.className || ''`);
     if (!/status-(ok|weak|none)/.test(big)) throw new Error('у вердикта нет класса статуса: ' + big);
-    const hl = await ev(`document.getElementById('hereLink').textContent`);
-    if (!/До пульта.*[✓⚠✕]/.test(hl)) throw new Error('плашка «До пульта» без вердикта: ' + hl);
+    const need = await ev(`document.querySelector('#lsStatus .ls-need')?.textContent || ''`);
+    if (!/Управление/.test(need) || !/Видео/.test(need) || !/(от \d+ м|не добьёт|любой высоты)/.test(need)) throw new Error('нет нужной высоты по линиям: ' + need);
+    if (/−99|ниже рельефа|поднимите дрон/i.test(t)) throw new Error('служебный текст в строке: ' + t);
+    // Вердикт — одна строка, не обрезан (высота строки по содержимому).
+    const clip = await ev(`(() => { const e = document.getElementById('linkStrip'); return e.scrollHeight > e.clientHeight + 1; })()`);
+    if (clip) throw new Error('строка связи обрезана');
     return t;
+  });
+  await step('ввод высоты: неверное значение возвращается', async () => {
+    await ev(`(() => { const i = document.getElementById('inDrone'); i.value = '9000'; i.dispatchEvent(new Event('input')); i.dispatchEvent(new Event('change')); return true; })()`);
+    const v = await ev(`document.getElementById('inDrone').value`);
+    if (v !== '1500') throw new Error('поле дрона после 9000: ' + v);
+    return 'дрон 9000 → ' + v;
   });
   await shot('2-link');
 
@@ -142,27 +155,81 @@ async function scenario() {
     await ev(`document.querySelectorAll('#shBody details.details').forEach(d => d.open = true); true`);
     if (!(await ev(`!!document.getElementById('tblPV') && [...document.querySelectorAll('#tblH th')].some(t => /Видео/.test(t.textContent))`))) throw new Error('нет колонки/таблицы видео');
     if (!(await ev(`/Упр\\./.test(document.querySelector('#shBody details .kv')?.textContent || '') || /упр\\./.test(document.querySelector('#shBody details .kv')?.textContent || '')`))) throw new Error('в «Подробнее» нет данных по управлению');
+    const need = await ev(`document.querySelector('#shBody .prof-need')?.textContent || ''`);
+    if (!/Управление/.test(need) || !/Видео/.test(need)) throw new Error('в профиле нет высоты по линиям: ' + need);
+    if (await ev(`[...document.querySelectorAll('#shBody tr')].some(tr => tr.dataset.p || tr.dataset.h)`)) throw new Error('выбор строкой таблицы остался');
+    if (!(await ev(`document.querySelectorAll('#shBody button.apply').length > 0`))) throw new Error('нет кнопок «Применить»');
+    if (/Дрон −|над землёй \/ над морем−/.test(await ev(`document.getElementById('shBody').textContent`))) throw new Error('отрицательная высота дрона');
     return `${v} — ${why}`;
   });
-  await ev(`(() => { const i = document.getElementById('inDrone'); i.value = '100'; i.dispatchEvent(new Event('input')); return true; })()`);
+  await step('где встать: сразу 1 км, варианты с номерами', async () => {
+    await ev(`document.getElementById('shClose').click(); document.getElementById('btnBest').click(); true`);
+    await waitFor(`!document.getElementById('sheet').hidden && /Где встать/.test(document.getElementById('shTitle').textContent) && (document.querySelectorAll('#shBody button.apply').length > 0 || /лучше не станет|Нет данных/.test(document.getElementById('shBody').textContent))`, 30000);
+    const txt = await ev(`document.getElementById('shBody').textContent`);
+    if (/−99/.test(txt)) throw new Error('служебный запас −99: ' + txt);
+    const n = await ev(`document.querySelectorAll('.bs-mk:not(.bs-target)').length`);
+    const labels = await ev(`[...document.querySelectorAll('.bs-mk:not(.bs-target) .bs-label')].map(e => e.textContent).join(',')`);
+    if (n && labels !== [...Array(n)].map((_, i) => i + 1).join(',')) throw new Error('подписи ромбов: ' + labels);
+    await sleep(800);
+    await shot('3b-best');
+    // Ромбы не под шторкой: каждый виден в свободной части карты.
+    const hidden = await ev(`(() => { const sh = document.getElementById('sheet').getBoundingClientRect(); return [...document.querySelectorAll('.bs-mk')].filter(m => { const r = m.getBoundingClientRect(); const cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2; return cx > sh.left && cx < sh.right && cy > sh.top && cy < sh.bottom; }).length; })()`);
+    if (hidden) throw new Error('ромбов под шторкой: ' + hidden);
+    await ev(`document.getElementById('shClose').click(); true`);
+    if (await ev(`document.querySelectorAll('.bs-mk').length`)) throw new Error('ромбы не убраны после закрытия');
+    return n ? `вариантов: ${n}` : txt.slice(0, 80);
+  });
+  await ev(`(() => { const i = document.getElementById('inDrone'); i.value = '100';i.dispatchEvent(new Event('input')); return true; })()`);
   await step('зона покрытия 10 км', async () => {
-    await ev(`document.querySelector('[data-ls="zone"]').click(); true`);
+    await ev(`document.getElementById('btnZone').click(); true`);
     await sleep(300);
     await ev(`(() => { const b = [...document.querySelectorAll('#shBody button')]; b.find(x => x.textContent.trim() === '10 км')?.click(); b.find(x => /Рассчитать/.test(x.textContent))?.click(); return true; })()`);
     const t0 = Date.now();
     await waitFor(`!!window.__map.getLayer('cov-raster')`, 60000);
+    // Точный результат: на телефоне шторка сама сворачивается в плашку, на десктопе — пропадает «Черновой» и «Отмена».
+    const pillOn = `(() => { const p = document.getElementById('covPill'); return !!p && !p.hidden; })()`;
+    const sheetDone = `!document.getElementById('sheet').hidden && !!document.querySelector('#shBody .cov-result') && !document.querySelector('#shBody .cov-prelim') && ![...document.querySelectorAll('#shBody button')].some(x => x.textContent.trim() === 'Отмена')`;
+    await waitFor(mode === 'mobile' ? pillOn : sheetDone, 60000);
     const sec = ((Date.now() - t0) / 1000).toFixed(1);
-    await waitFor(`/Связь держится до/.test(document.querySelector('#shBody .cov-result')?.textContent || '')`, 5000);
+    let pillTxt = '';
+    if (mode === 'mobile') {
+      if (!(await ev(`document.getElementById('sheet').hidden`))) throw new Error('на телефоне шторка не свернулась после расчёта');
+      pillTxt = await ev(`document.querySelector('#covPill .cov-pill-main').textContent`);
+      if (!/Дрон 100 м · до .*✓⚠✕/.test(pillTxt)) throw new Error('плашка зоны: ' + pillTxt);
+      await ev(`document.querySelector('#covPill .cov-pill-main').click(); true`); // тап по плашке — развернуть шторку
+      await waitFor(`!document.getElementById('sheet').hidden && !!document.querySelector('#shBody .cov-result')`, 3000);
+    }
     const sum = await ev(`document.querySelector('#shBody .cov-result').textContent`);
-    // Таблица — в свёрнутом «Подробнее»: раскрываем, как пользователь.
-    await ev(`(() => { const d = [...document.querySelectorAll('#shBody details.details')].find(x => /Подробнее/.test(x.querySelector('summary').textContent)); if (d) d.open = true; return true; })()`);
+    if (!/Связь держится до .* · дрон 100 м/.test(sum)) throw new Error('итог зоны: ' + sum);
+    if (await ev(`[...document.querySelectorAll('#shBody button')].some(x => x.textContent.trim() === 'Закрыть')`)) throw new Error('лишняя кнопка «Закрыть»');
+    if (await ev(`document.querySelectorAll('#shBody details.details').length`) !== 1) throw new Error('в шторке зоны должен быть один блок «Ещё»');
+    // Таблица — в свёрнутом «Ещё»: раскрываем, как пользователь.
+    await ev(`(() => { const d = [...document.querySelectorAll('#shBody details.details')].find(x => /Ещё/.test(x.querySelector('summary').textContent)); if (d) d.open = true; return true; })()`);
     const hdr = await ev(`[...document.querySelectorAll('#shBody details[open] table.rt th')].map(t => t.textContent).join('|')`);
-    if (!/Видео/.test(hdr)) throw new Error('в таблице зоны нет колонки «Видео»: ' + hdr);
-    return `${sec} с, «${sum}», строк в таблице: ${await ev(`document.querySelectorAll('#shBody table.rt tr').length - 1`)}, колонки: ${hdr}`;
+    if (!/Упр\..*Видео.*Обе/.test(hdr)) throw new Error('в таблице зоны нет колонок Упр./Видео/Обе: ' + hdr);
+    return `${sec} с, «${sum}»${pillTxt ? `, плашка «${pillTxt}»` : ''}, колонки: ${hdr}`;
   });
   await sleep(800);
   await shot('4-coverage');
-  await ev(`(() => { document.getElementById('shClose').click(); const s = document.querySelector('.station'); window.__map.jumpTo({ zoom: 11.3 }); return true; })()`);
+  await step('зона: плашка на карте после закрытия шторки, не перекрывает панели', async () => {
+    await ev(`document.getElementById('shClose').click(); true`);
+    await waitFor(`(() => { const p = document.getElementById('covPill'); return !!p && !p.hidden; })()`, 3000);
+    const t = await ev(`document.querySelector('#covPill .cov-pill-main').textContent`);
+    if (!/Дрон \d+ м · до /.test(t)) throw new Error('плашка: ' + t);
+    const bad = await ev(`(() => {
+      const p = document.getElementById('covPill').getBoundingClientRect(), out = [];
+      if (p.left < 0 || p.top < 0 || p.right > innerWidth || p.bottom > innerHeight) out.push('за экраном');
+      for (const id of ['topLeft', 'infoCard', 'rightBar', 'linkStrip', 'bottomBar', 'cross']) {
+        const e = document.getElementById(id); if (!e || e.hidden) continue;
+        const r = e.getBoundingClientRect(); if (!r.width) continue;
+        if (p.left < r.right - 1 && r.left < p.right - 1 && p.top < r.bottom - 1 && r.top < p.bottom - 1) out.push(id);
+      }
+      return out;
+    })()`);
+    if (bad.length) throw new Error('плашка перекрывает: ' + bad.join(', '));
+    return t;
+  });
+  await ev(`(() => { window.__map.jumpTo({ zoom: 11.3 }); return true; })()`);
   await ev(`(() => { const st = JSON.parse(localStorage.getItem('radius.project.v1') || '{}').station; if (st) window.__map.jumpTo({ center: [st.lon, st.lat] }); return true; })()`);
   await sleep(2500);
   await shot('4b-coverage-map');
@@ -177,13 +244,35 @@ async function scenario() {
   await step('метка и меню', async () => {
     await ev(`document.getElementById('btnMark').click(); true`);
     await waitFor(`document.querySelectorAll('.mk').length > 0`);
+    // Карточка метки: «Рельеф» и координаты одним форматом + свёрнутые «Другие форматы».
+    await waitFor(`/Метка/.test(document.getElementById('shTitle').textContent) && !!document.querySelector('#shBody .coords-main')`, 3000);
+    if (!(await ev(`/Рельеф/.test(document.getElementById('shBody').textContent) && !document.querySelector('#shBody .coords details').open`))) throw new Error('в карточке метки нет «Рельеф» или «Другие форматы» раскрыты');
     await ev(`document.getElementById('shClose').click(); document.getElementById('btnMenu').click(); true`);
     await waitFor(`document.body.classList.contains('drawer-open')`);
-    await ev(`[...document.querySelectorAll('.dr-item')].find(b => /Расчёт/.test(b.textContent)).click(); true`);
-    return `пунктов в «Расчёт»: ${await ev(`document.querySelectorAll('#drBody input, #drBody .li').length`)}`;
+    const items = await ev(`[...document.querySelectorAll('.dr-item b')].map(b => b.textContent).join(' · ')`);
+    await ev(`[...document.querySelectorAll('.dr-item')].find(b => /Аппаратура/.test(b.textContent)).click(); true`);
+    const sel = await ev(`document.querySelectorAll('#drBody select').length`);
+    if (sel !== 2) throw new Error('в «Аппаратура и высота» нет двух списков аппаратуры: ' + sel);
+    return `разделы: ${items}`;
   });
   await step('меню: нет прокрутки и кнопки ≥ 44 px', () => checkLayout('меню'));
   await shot('5-menu');
+  await step('меню → Инструменты: линейка включается с подписями кнопок', async () => {
+    await ev(`document.querySelector('.dr-back').click(); [...document.querySelectorAll('.dr-item')].find(b => /Инструменты/.test(b.textContent)).click(); true`);
+    await ev(`[...document.querySelectorAll('#drBody button')].find(b => /Включить линейку/.test(b.textContent)).click(); true`);
+    await waitFor(`!document.getElementById('rulerBar').hidden && !document.body.classList.contains('drawer-open')`, 3000);
+    const labels = await ev(`[...document.querySelectorAll('#rulerBar button')].map(b => b.textContent.trim()).join('|')`);
+    if (labels !== '+ Точка|Отменить|Сохранить маршрут|Готово') throw new Error('подписи: ' + labels);
+    await ev(`document.getElementById('rulerAdd').click(); true`);
+    await sleep(300);
+    await shot('5b-ruler');
+    const lay = await checkLayout('линейка');
+    await ev(`document.getElementById('rulerDone').click(); true`);
+    if (!(await ev(`document.getElementById('rulerBar').hidden`))) throw new Error('«Готово» не выключила линейку');
+    await ev(`document.getElementById('btnMenu').click(); true`);
+    await waitFor(`document.body.classList.contains('drawer-open')`);
+    return lay;
+  });
   await step('тема: переключатель День / Ночь / Авто в настройках', async () => {
     await ev(`document.querySelector('.dr-back')?.click(); true`);
     await ev(`[...document.querySelectorAll('.dr-item')].find(b => /Настройки/.test(b.textContent)).click(); true`);
@@ -204,12 +293,16 @@ async function scenario() {
     await step('долгое нажатие открывает шторку «Точка»', async () => {
       await ev(`document.getElementById('shClose').click(); true`);
       const px = await ev(`innerWidth / 2`);
-      await touch('touchStart', px, 110);
+      // Ниже плашки зоны (#covPill), но не в центре: в ландшафте там прицел с меткой из шага «метка и меню».
+      const py = await ev(`innerHeight < 500 ? 110 : 200`);
+      await touch('touchStart', px, py);
       await sleep(900);
       await touch('touchEnd');
       await waitFor(`!document.getElementById('sheet').hidden && document.getElementById('shTitle').textContent === 'Точка'`, 3000);
       await sleep(400);
       await shot('6-point');
+      const t = await ev(`document.getElementById('shBody').textContent`);
+      if (!/Рельеф/.test(t) || !/Метка сюда/.test(t) || !/Пульт сюда/.test(t)) throw new Error('в «Точке» нет «Рельеф» / «Метка сюда» / «Пульт сюда»');
       return checkLayout('шторка');
     });
     if (!LAND) await step('свайп вниз по ручке закрывает шторку', async () => {
@@ -221,7 +314,7 @@ async function scenario() {
     });
     if (LAND) await ev(`document.getElementById('shClose').click(); true`);
     await step('короткое нажатие не открывает шторку', async () => {
-      await touch('touchStart', await ev(`innerWidth / 2`), 110); await sleep(150); await touch('touchEnd'); await sleep(900);
+      await touch('touchStart', await ev(`innerWidth / 2`), await ev(`innerHeight < 500 ? 110 : 200`)); await sleep(150); await touch('touchEnd'); await sleep(900);
       if (await ev(`!document.getElementById('sheet').hidden`)) throw new Error('шторка открылась');
     });
   }

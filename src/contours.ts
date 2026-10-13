@@ -2,7 +2,7 @@
 import maplibregl from 'maplibre-gl';
 import mlcontour from 'maplibre-contour';
 import { map, S } from './app';
-import { DEM_URL } from './elevation';
+import { DEM_URL } from './demTiles';
 
 const LAYERS = ['contours-line', 'contours-line-major', 'contours-label'];
 

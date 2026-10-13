@@ -1,7 +1,7 @@
 // Свой рельеф из файлов SRTM HGT (big-endian int16, квадрат 1°×1°, привязка — по имени файла).
 // Чистая логика без DOM: разбор, высота в точке, покрытие тайла Terrarium и синтез тайла высот.
 
-export const HGT_MAX_BYTES = 30 * 1024 * 1024;
+const HGT_MAX_BYTES = 30 * 1024 * 1024;
 export const HGT_VOID = -32768;
 /** Допустимые стороны сетки: SRTM3 (3″) и SRTM1 (1″). */
 const SIDES = [1201, 3601] as const;

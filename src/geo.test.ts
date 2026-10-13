@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bearing, destination, distance, fmtDist, interpolate, lonLatToPixel, pixelToLonLat, R_EARTH } from './geo';
+import { bearing, destination, distance, interpolate, lonLatToPixel, pixelToLonLat, R_EARTH } from './geo';
 
 const MSK = { lat: 55.7558, lon: 37.6173 };
 const SPB = { lat: 59.9343, lon: 30.3351 };
@@ -119,16 +119,5 @@ describe('Web Mercator', () => {
     const [lon2] = pixelToLonLat(x + 1, y, 12);
     const m = distance({ lat: 55.7558, lon: 37.6173 }, { lat: 55.7558, lon: lon2 });
     expect(m).toBeCloseTo((40075016.7 / (256 * 4096)) * Math.cos((55.7558 * Math.PI) / 180), 1);
-  });
-});
-
-describe('fmtDist', () => {
-  it('метры, километры с разной точностью', () => {
-    expect(fmtDist(0)).toBe('0 м');
-    expect(fmtDist(999.4)).toBe('999 м');
-    expect(fmtDist(1000)).toBe('1.00 км');
-    expect(fmtDist(9999)).toBe('10.00 км');
-    expect(fmtDist(12345)).toBe('12.3 км');
-    expect(fmtDist(634000)).toBe('634.0 км');
   });
 });

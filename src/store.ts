@@ -2,6 +2,8 @@
 import { DEFAULT_RADIO, DEFAULT_VIDEO, DEFAULT_VIDEO_PRESET, RadioParams } from './radio';
 import type { CoordFormat } from './coords';
 import type { ClutterClass } from './clutter';
+import { escapeHtml as esc } from './format';
+import { isObj, num, fin, oneOf } from './validate';
 
 export interface Mark { id: string; name: string; note: string; lat: number; lon: number; color: string; folder: string; created: number }
 export interface Route { id: string; name: string; pts: [number, number][] } // [lon, lat]
@@ -19,13 +21,21 @@ export interface State {
   presetId: string;
   /** Вторая линия — видео. radio/presetId выше — линия «Управление» (формат прежних проектов). */
   video: { enabled: boolean; radio: RadioParams; presetId: string };
-  coverage: { radius: number; heights: number[]; show: 'margin' | 'minh'; heightIdx: number; opacity: number; line: 'rc' | 'video' | 'both' };
+  /**
+   * Зона покрытия. Высота показа — всегда S.droneH; heights — список «Сравнить высоты» (S.droneH в него
+   * добавляется при расчёте, см. coverageHeights), compare — считать ли этот список.
+   */
+  coverage: { radius: number; compare: boolean; heights: number[]; show: 'margin' | 'minh'; opacity: number; line: 'rc' | 'video' | 'both' };
   map: { base: string; labels: boolean; hillshade: boolean; contours: boolean; dim: number; center: [number, number]; zoom: number };
   coordFormat: CoordFormat;
   clutter: ClutterClass;   // местность у пульта
 }
 
 const KEY = 'radius.project.v1';
+/** Цвет новой метки по умолчанию. */
+export const MARK_COLOR = '#e3a948';
+/** Единый лимит высот зоны: и сохранённый список, и набор расчёта (вместе с S.droneH). */
+export const COV_MAX_HEIGHTS = 8;
 
 export const defaults = (): State => ({
   v: 1,
@@ -37,7 +47,7 @@ export const defaults = (): State => ({
   radio: { ...DEFAULT_RADIO },
   presetId: 'elrs24',
   video: { enabled: true, radio: { ...DEFAULT_VIDEO }, presetId: DEFAULT_VIDEO_PRESET },
-  coverage: { radius: 15000, heights: [30, 60, 100, 150, 250, 400], show: 'margin', heightIdx: 2, opacity: 0.6, line: 'both' },
+  coverage: { radius: 15000, compare: false, heights: [30, 60, 100, 150, 250, 400], show: 'margin', opacity: 0.6, line: 'both' },
   map: { base: 'sat', labels: true, hillshade: false, contours: true, dim: 0.35, center: [40.2045, 43.6805], zoom: 12 },
   coordFormat: 'sk42',
   clutter: 'open',
@@ -53,18 +63,28 @@ function merge<T>(base: T, over: unknown): T {
   return out as T;
 }
 
+/**
+ * Миграция сырых данных до слияния с defaults (иначе не отличить старый формат от нового).
+ * Зона: прежние проекты считали весь список высот и показывали выбранную heightIdx. Теперь показ — S.droneH,
+ * список остаётся «Сравнить высоты»: у старого проекта сравнение включено, если высот было больше одной.
+ */
+export function migrate(raw: unknown): unknown {
+  if (!isObj(raw) || !isObj(raw.coverage)) return raw;
+  const c = { ...raw.coverage };
+  if (typeof c.compare !== 'boolean' && ('heightIdx' in c || 'heights' in c)) c.compare = Array.isArray(c.heights) && c.heights.length > 1;
+  delete c.heightIdx;
+  return { ...raw, coverage: c };
+}
+
 export function load(): State {
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) return sanitize(merge(defaults(), JSON.parse(raw)));
+    if (raw) return sanitize(merge(defaults(), migrate(JSON.parse(raw))));
   } catch { /* повреждённые данные — начинаем с чистого */ }
   return defaults();
 }
 
-const fin = (v: unknown, lo: number, hi: number, def: number) => (typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi ? v : def);
 const okLL = (lat: unknown, lon: unknown) => typeof lat === 'number' && typeof lon === 'number' && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
-const oneOf = <T extends string>(v: unknown, allowed: readonly T[], def: T): T => (allowed.includes(v as T) ? (v as T) : def);
-const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 
 /** Радиопараметры из недоверенного источника: каждое поле — число в разумных пределах, иначе значение по умолчанию. */
 function sanitizeRadio(src: unknown, def: RadioParams): RadioParams {
@@ -76,6 +96,12 @@ function sanitizeRadio(src: unknown, def: RadioParams): RadioParams {
   return out;
 }
 
+/** Не больше n элементов, равномерно по списку с сохранением первого и последнего (старые проекты — до 12 высот). */
+function spread<T>(a: T[], n: number): T[] {
+  if (a.length <= n) return a;
+  return Array.from({ length: n }, (_, i) => a[Math.round((i * (a.length - 1)) / (n - 1))]);
+}
+
 /** Привести состояние из недоверенного источника (localStorage, файл копии) к корректному виду. */
 export function sanitize(s: State): State {
   const d = defaults();
@@ -84,7 +110,7 @@ export function sanitize(s: State): State {
     id: typeof m.id === 'string' && m.id ? m.id.slice(0, 40) : uid(),
     name: str(m.name, 120) || 'Метка', note: str(m.note, 1000),
     lat: m.lat, lon: m.lon,
-    color: typeof m.color === 'string' && /^#[0-9a-f]{3,8}$/i.test(m.color) ? m.color : '#e3a948',
+    color: typeof m.color === 'string' && /^#[0-9a-f]{3,8}$/i.test(m.color) ? m.color : MARK_COLOR,
     folder: str(m.folder, 120), created: fin(m.created, 0, 1e14, Date.now()),
   }));
   out.routes = (Array.isArray(s.routes) ? s.routes : []).filter(isObj).map((r) => ({
@@ -108,12 +134,12 @@ export function sanitize(s: State): State {
   };
   const c: Record<string, unknown> = isObj(s.coverage) ? s.coverage : {};
   const heights = (Array.isArray(c.heights) ? c.heights : []).filter((x): x is number => typeof x === 'number' && Number.isFinite(x) && x >= 0 && x <= 10000);
-  const sortedH = [...new Set(heights)].sort((a, b) => a - b).slice(0, 12); // «мин. высота» требует возрастания
+  const sortedH = spread([...new Set(heights)].sort((a, b) => a - b), COV_MAX_HEIGHTS); // «нужная высота» требует возрастания
   out.coverage = {
     radius: fin(c.radius, 500, 100000, d.coverage.radius),
-    heights: sortedH.length ? sortedH : d.coverage.heights,
+    compare: typeof c.compare === 'boolean' ? c.compare : d.coverage.compare,
+    heights: Array.isArray(c.heights) ? sortedH : d.coverage.heights, // пустой список — сравнивать не с чем, это допустимо
     show: oneOf(c.show, ['margin', 'minh'] as const, d.coverage.show),
-    heightIdx: Math.round(fin(c.heightIdx, 0, 11, d.coverage.heightIdx)),
     opacity: fin(c.opacity, 0, 1, d.coverage.opacity),
     line: oneOf(c.line, ['rc', 'video', 'both'] as const, d.coverage.line),
   };
@@ -132,10 +158,11 @@ export function sanitize(s: State): State {
 }
 
 let timer = 0;
-export function save(s: State) {
+/** Отложенная запись проекта (300 мс). onError — запись не удалась (квота, запрет хранилища). */
+export function save(s: State, onError?: (e: unknown) => void) {
   clearTimeout(timer);
   timer = window.setTimeout(() => {
-    try { localStorage.setItem(KEY, JSON.stringify(s)); } catch { /* квота */ }
+    try { localStorage.setItem(KEY, JSON.stringify(s)); } catch (e) { onError?.(e); }
   }, 300);
 }
 
@@ -156,8 +183,6 @@ export function toGeoJSON(s: State) {
   return { type: 'FeatureCollection', features, properties: { app: 'radius', droneH: s.droneH, altMode: s.altMode, radio: s.radio, video: s.video } };
 }
 
-const esc = (t: string) => t.replace(/[<>&"']/g, (c) => `&#${c.charCodeAt(0)};`);
-
 export function toGPX(s: State): string {
   const wpts = s.marks.map((m) => `<wpt lat="${m.lat}" lon="${m.lon}"><name>${esc(m.name)}</name><desc>${esc(m.note)}</desc></wpt>`);
   const trks = s.routes.map((r) => `<rte><name>${esc(r.name)}</name>${r.pts.map(([lon, lat]) => `<rtept lat="${lat}" lon="${lon}"/>`).join('')}</rte>`);
@@ -172,14 +197,13 @@ export function toKML(s: State): string {
 
 // ---------- Импорт (данные из файла считаем недоверенными: только текст и числа) ----------
 
-const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : NaN);
 const str = (v: unknown, max = 500) => (typeof v === 'string' ? v.slice(0, max) : '');
 
 export function importText(text: string, name: string): { marks: Mark[]; routes: Route[] } {
   const marks: Mark[] = [], routes: Route[] = [];
   const addMark = (lat: number, lon: number, nm: string, note = '') => {
     if (Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180)
-      marks.push({ id: uid(), name: nm || 'Метка', note, lat, lon, color: '#e3a948', folder: name, created: Date.now() });
+      marks.push({ id: uid(), name: nm || 'Метка', note, lat, lon, color: MARK_COLOR, folder: name, created: Date.now() });
   };
   const addRoute = (pts: [number, number][], nm: string) => {
     const ok = pts.filter(([lon, lat]) => Number.isFinite(lon) && Number.isFinite(lat) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180);
@@ -246,5 +270,5 @@ export function restoreProject(text: string): State {
   const r = raw as Record<string, unknown>;
   if (r.marks !== undefined && !Array.isArray(r.marks)) throw new Error('В копии повреждён список меток');
   if (r.routes !== undefined && !Array.isArray(r.routes)) throw new Error('В копии повреждён список маршрутов');
-  return sanitize(merge(defaults(), raw));
+  return sanitize(merge(defaults(), migrate(raw)));
 }

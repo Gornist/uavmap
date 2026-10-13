@@ -12,9 +12,9 @@
  *                                   со стрелкой и целью нажатия ≥ 44 px.
  *   .num                          — табличные цифры (выравниваются в столбик).
  *   .mono                         — моноширинный (координаты).
- *   .btn-primary / .btn-secondary — главная/вторичная кнопка; старые .primary / .ghost — те же стили.
- * CSS-переменные статусов: --ok/--weak/--none (текст), --ok-bg/--weak-bg/--none-bg (фон плашки);
- * старые --warn/--bad — алиасы. Цвета статусов НА КАРТЕ (линия, растр) — STATUS_MAP/STATUS_RGB в theme.ts.
+ *   .primary / .ghost             — главная/вторичная кнопка.
+ * CSS-переменные статусов: --ok/--weak/--none (текст), --ok-bg/--weak-bg/--none-bg (фон плашки).
+ * Цвета статусов НА КАРТЕ (линия, растр) — STATUS_MAP/STATUS_RGB в theme.ts.
  */
 @import './styles/fonts.css';
 @import './styles/theme.css';
@@ -24,7 +24,6 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 button, label, .card, #bottomBar, #sheet, #drawer { touch-action: manipulation; -webkit-user-select: none; user-select: none; }
 input, textarea { -webkit-user-select: text; user-select: text; }
 #map { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
-button .tx-s, .l-s { display: none; }
 .sh-grip { display: none; }
 .pt-pin { width: 20px; height: 20px; border-radius: 50%; border: 3px solid var(--accent); background: rgba(217, 164, 70, 0.33); box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.6); }
 button { font: inherit; color: inherit; cursor: pointer; }
@@ -50,18 +49,18 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); 
 .details[open] > summary { border-bottom: 1px solid var(--line); margin-bottom: 4px; }
 .details[open] { padding-bottom: 6px; }
 
-.logo { font-family: var(--font-ui); font-weight: 600; letter-spacing: 0.18em; color: var(--text); font-size: 19px; background: var(--panel); border: 1px solid var(--line); border-radius: 22px; padding: 7px 14px 7px 16px; box-shadow: var(--shadow); line-height: 1.2; }
-.logo.big { font-size: 22px; background: none; border: 0; box-shadow: none; padding: 0; color: var(--accent-text); }
+.logo { font-family: var(--font-ui); font-weight: 600; letter-spacing: 0.18em; line-height: 1.2; }
+.logo.big { font-size: 22px; color: var(--accent-text); }
 
 .round { width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--line-strong); background: var(--panel); color: var(--text); font-size: 20px; display: grid; place-items: center; box-shadow: var(--shadow); }
 .round:active { transform: scale(0.96); }
-.mini { background: transparent; border: 1px solid var(--line-strong); border-radius: 8px; width: 30px; height: 30px; padding: 0; color: var(--text); }
-.primary, .btn-primary { background: var(--accent); color: var(--accent-ink); border: 1px solid var(--accent); border-radius: 10px; padding: 9px 16px; font-weight: 600; }
-.ghost, .btn-secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--line-strong); border-radius: 10px; padding: 9px 14px; }
-.primary:active, .btn-primary:active, .ghost:active, .btn-secondary:active { transform: translateY(1px); }
+.mini { position: relative; background: transparent; border: 1px solid var(--line-strong); border-radius: 8px; width: 30px; height: 30px; padding: 0; color: var(--text); }
+/* На десктопе кнопка компактная, а цель нажатия — 44×44 (невидимая рамка вокруг). */
+.mini::after { content: ""; position: absolute; top: -8px; right: -8px; bottom: -8px; left: -8px; }
+.primary { background: var(--accent); color: var(--accent-ink); border: 1px solid var(--accent); border-radius: 10px; padding: 9px 16px; font-weight: 600; }
+.ghost { background: var(--panel-2); color: var(--text); border: 1px solid var(--line-strong); border-radius: 10px; padding: 9px 14px; }
+.primary:active, .ghost:active { transform: translateY(1px); }
 .danger { background: transparent; border: 1px solid var(--danger-line); color: var(--none); border-radius: 10px; padding: 9px 14px; }
-
-#topLeft { position: absolute; top: 10px; left: 10px; display: flex; align-items: center; gap: 10px; z-index: 5; }
 
 #cross { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); color: var(--accent); pointer-events: none; z-index: 4; filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 2px rgba(0, 0, 0, 0.7)); }
 #crossLabel { position: absolute; left: 50%; top: calc(50% + 28px); transform: translateX(-50%); pointer-events: none; z-index: 4; font: 600 13px var(--font-mono); color: #fff4dc; text-shadow: 0 0 3px #000, 0 0 2px #000, 0 0 1px #000; white-space: nowrap; }
@@ -77,43 +76,19 @@ em { font-style: normal; color: var(--digit); }
 .ic-coords { margin-top: 8px; font: 14px var(--font-mono); font-variant-numeric: tabular-nums; display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; }
 .ic-coords .k { color: var(--muted); font-family: var(--font-ui); font-size: 13px; }
 .ic-coords .v { text-align: right; }
-.ic-link { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 14px; color: var(--muted); }
-.ic-link b { color: var(--text); }
-.ic-more { margin-top: 8px; width: 100%; background: transparent; border: 0; border-top: 1px solid var(--line); color: var(--accent-text); padding: 10px 0 2px; font-size: 14px; text-align: left; }
+.ic-more { margin-top: 6px; width: 100%; min-height: 44px; background: transparent; border: 0; border-top: 1px solid var(--line); color: var(--accent-text); padding: 6px 0 0; font-size: 14px; text-align: left; }
 #infoCard.collapsed #infoBody { display: none; }
 
 #rightBar { position: absolute; right: 10px; top: 50%; transform: translateY(-30%); display: flex; flex-direction: column; gap: 14px; z-index: 5; }
 
-#bottomBar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 6; display: flex; gap: 8px; padding: 8px 8px calc(8px + var(--safe-b)); background: var(--panel); border-top: 1px solid var(--line); box-shadow: var(--shadow); overflow-x: auto; scrollbar-width: none; }
-#bottomBar button { flex: none; background: var(--panel-2); color: var(--text); border: 1px solid var(--line-strong); border-radius: 10px; padding: 10px 14px; white-space: nowrap; }
-#bottomBar button.accent { background: var(--accent); color: var(--accent-ink); font-weight: 600; border-color: var(--accent); }
-#bottomBar button.on { border-color: var(--accent-text); color: var(--accent-text); background: var(--accent-soft); font-weight: 600; }
-#bottomBar .right { margin-left: auto; }
-
-.maplibregl-ctrl-bottom-left { bottom: calc(64px + var(--safe-b)) !important; }
 .maplibregl-ctrl-scale { background: rgba(255, 255, 255, 0.85) !important; color: #1d1b18 !important; border-color: #1d1b18 !important; font: 12px var(--font-mono); }
 .maplibregl-ctrl-attrib { background: var(--panel) !important; color: var(--muted); font-size: 11px; }
 .maplibregl-ctrl-attrib a { color: var(--muted) !important; }
 .maplibregl-ctrl-attrib-button { background-color: var(--panel) !important; }
-.maplibregl-ctrl-bottom-right { bottom: calc(60px + var(--safe-b)) !important; }
 
-#linkStrip, #rulerBar { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(64px + var(--safe-b)); z-index: 6; width: min(620px, calc(100% - 16px)); background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow-lg); padding: 8px 10px; }
-.ls-tabs { display: flex; gap: 4px; margin-bottom: 6px; }
-.ls-tabs button { background: transparent; border: 0; color: var(--muted); padding: 5px 10px; border-radius: 8px; font-size: 14px; }
-.ls-tabs button.on { color: var(--accent-text); background: var(--accent-soft); font-weight: 600; }
-.ls-x { margin-left: auto; font-size: 20px !important; color: var(--text) !important; }
-.ls-status { font-size: 15px; padding: 4px 2px 8px; }
-.ls-status .ok { color: var(--ok); } .ls-status .weak { color: var(--weak); } .ls-status .none { color: var(--none); }
-.ls-inputs { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; }
-.ls-inputs label { display: flex; align-items: center; gap: 6px; background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: 10px; padding: 4px 8px; flex: 1; min-width: 150px; }
-.ls-inputs label span { font-size: 13px; color: var(--muted); flex: 1; white-space: nowrap; }
-.ls-inputs label span b { font-weight: 600; color: var(--text); }
-.ls-inputs label em { color: var(--muted); font-size: 13px; }
-.ls-inputs input { flex: none; width: 78px; padding: 6px 6px; text-align: right; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
-.ls-inputs i { font-style: normal; color: var(--muted); font-size: 13px; }
-
+#rulerBar { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(var(--bar-h) + 8px + var(--safe-b)); z-index: 6; width: min(620px, calc(100% - 16px)); background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow-lg); padding: 8px 10px; }
 #rulerBar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-#rulerBar[hidden], #linkStrip[hidden] { display: none; }
+#rulerBar[hidden] { display: none; }
 #rulerText { flex: 1; font: 14px var(--font-mono); font-variant-numeric: tabular-nums; min-width: 160px; }
 #rulerBar button:not(.primary) { background: var(--panel-2); color: var(--text); border: 1px solid var(--line-strong); border-radius: 10px; padding: 8px 10px; }
 
@@ -173,9 +148,9 @@ body.drawer-open #scrim { opacity: 1; pointer-events: auto; }
 .kv-key small { overflow-wrap: anywhere; }
 .kv-key b { font-size: 24px; line-height: 1.2; }
 .verdict { padding: 10px 12px; border-radius: 10px; margin: 8px 0; font-weight: 600; border: 1px solid transparent; border-left-width: 5px; }
-.verdict.ok { background: var(--ok-bg); color: var(--ok); border-color: var(--ok); }
-.verdict.weak { background: var(--weak-bg); color: var(--weak); border-color: var(--weak); }
-.verdict.none { background: var(--none-bg); color: var(--none); border-color: var(--none); }
+.verdict.status-ok { background: var(--ok-bg); color: var(--ok); border-color: var(--ok); }
+.verdict.status-weak { background: var(--weak-bg); color: var(--weak); border-color: var(--weak); }
+.verdict.status-none { background: var(--none-bg); color: var(--none); border-color: var(--none); }
 .verdict-why { margin: 6px 0 10px; color: var(--text); }
 table.rt { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
 table.rt th, table.rt td { padding: 7px 6px; border-bottom: 1px solid var(--line); text-align: right; }
@@ -195,13 +170,26 @@ body.no-labels .mk-label { display: none; }
 @media (max-width: 640px) {
   #infoCard { width: 200px; padding: 8px 10px; }
   .ic-head b { font-size: 24px; }
-  #topLeft .logo { font-size: 16px; letter-spacing: 0.12em; padding: 6px 12px; }
-  #bottomBar button { padding: 10px 11px; }
   #rightBar { right: 8px; }
-  .ls-inputs label { min-width: 130px; }
   .verdict-big { font-size: 20px; }
   .kv-key { gap: 4px; }
   .kv-key div { padding: 6px 8px; }
   .kv-key small { font-size: 13px; line-height: 1.25; }
   .kv-key b { font-size: 20px; white-space: nowrap; }
+}
+
+/* ---------- Запасной вариант для браузеров без gap у flexbox (Chrome < 84: пульты-планшеты без Google Play).
+   Класс .no-flexgap ставит polyfillsBase.ts по проверке возможностей; на современных браузерах блок не действует. */
+/* переносимые ряды: отступ справа и снизу у каждого элемента */
+.no-flexgap .row > *, .no-flexgap .chips > *, .no-flexgap .legend > *, .no-flexgap .mm-acts > *,
+.no-flexgap .colors > *, .no-flexgap .off-checks > *, .no-flexgap #rulerBar > * { margin: 0 8px 8px 0; }
+/* однострочные ряды: отступ слева у всех, кроме первого */
+.no-flexgap .ic-head > * + *,
+.no-flexgap .dr-head > * + *, .no-flexgap .dr-item > * + *, .no-flexgap .chk > * + *, .no-flexgap .details > summary > * + *,
+.no-flexgap .sh-head > * + *, .no-flexgap .cov-add > * + * { margin-left: 8px; }
+.no-flexgap .details > summary::before { margin-right: 10px; }
+/* столбцы */
+.no-flexgap #rightBar > * + *, .no-flexgap .list > * + *, .no-flexgap .kv-key div > * + * { margin-top: 10px; }
+@media (max-height: 520px) and (orientation: landscape) { /* как в main.css: правая панель — ряд */
+  .no-flexgap #rightBar > * + * { margin-top: 0; margin-left: 8px; }
 }

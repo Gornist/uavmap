@@ -83,13 +83,13 @@ export const MAP_THEME: Record<ThemeName, { bg: string; casing: string; casingOp
   night: { bg: '#171614', casing: '#0d0c0a', casingOpacity: 0.8, route: '#4a9cf0', baseBrightness: 0.82 },
 };
 
-export function hexRgb(hex: string): [number, number, number] {
+function hexRgb(hex: string): [number, number, number] {
   const n = parseInt(hex.slice(1), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
 /** Относительная яркость по WCAG 2.x. */
-export function luminance(hex: string): number {
+function luminance(hex: string): number {
   const [r, g, b] = hexRgb(hex).map((v) => {
     const c = v / 255;
     return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
@@ -103,7 +103,7 @@ export function contrast(a: string, b: string): number {
 }
 
 // ---------- Выбор темы ----------
-export const THEME_KEY = 'uavmap.theme';
+const THEME_KEY = 'uavmap.theme';
 let choice: ThemeChoice = 'auto';
 let applied: ThemeName | null = null;
 let inited = false;

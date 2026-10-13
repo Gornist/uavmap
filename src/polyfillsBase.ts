@@ -34,4 +34,24 @@ if (!(Array.prototype as any).flat) { // Chrome 69
   };
 }
 
+
+// gap у flexbox — с Chrome 84. Без него элементы слипаются; .no-flexgap включает запасные отступы в style.css.
+if (typeof document !== 'undefined') {
+  const mark = () => {
+    const d = document.createElement('div');
+    d.style.cssText = 'display:flex;flex-direction:column;row-gap:1px;position:absolute;visibility:hidden';
+    d.appendChild(document.createElement('div')); d.appendChild(document.createElement('div'));
+    document.documentElement.appendChild(d);
+    if (d.scrollHeight !== 1) document.documentElement.classList.add('no-flexgap');
+    d.remove();
+  };
+  if (document.documentElement) mark(); else document.addEventListener('DOMContentLoaded', mark);
+
+  // env() — с Chrome 69. Без него calc(… var(--safe-b)) недействителен целиком и позиции панелей сбрасываются.
+  const css = (window as any).CSS;
+  if (!(css && css.supports && css.supports('top: env(safe-area-inset-top, 0px)'))) {
+    for (const s of ['b', 't', 'l', 'r']) document.documentElement.style.setProperty(`--safe-${s}`, '0px');
+  }
+}
+
 export {};

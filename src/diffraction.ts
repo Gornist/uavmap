@@ -25,7 +25,7 @@ export function bullingtonTaper(luc: number, distM: number): number {
 /** Электрические параметры подстилающей поверхности для § 3.1.1.1. */
 export interface Ground { epsr: number; sigma: number; vertical: boolean }
 /** Суша, как в P.1812/P.452 (εr = 22, σ = 0.003 См/м); поляризация вертикальная (типичные диполи дрона). */
-export const LAND_V: Ground = { epsr: 22, sigma: 0.003, vertical: true };
+const LAND_V: Ground = { epsr: 22, sigma: 0.003, vertical: true };
 
 /**
  * Первый член ряда вычетов, § 3.1.1.2, ур. (11a)–(18b). Возвращает потери A = −20·lg(E/E0), дБ.
