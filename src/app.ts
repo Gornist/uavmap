@@ -3,6 +3,10 @@ import maplibregl, { Map as MLMap, StyleSpecification, RasterSourceSpecification
 import { load, save, State } from './store';
 import { DEM_URL } from './elevation';
 import type { LatLon } from './geo';
+import { initTheme, resolvedTheme, MAP_THEME } from './theme';
+
+// Тема должна стоять до создания карты (цвет фона, яркость подложки). Повторный вызов из main.ts безопасен.
+initTheme();
 
 export const S: State = load();
 export const persist = () => save(S);
@@ -19,6 +23,9 @@ export const BASES: Record<string, BaseDef> = {
   osm: { name: 'Схема (OSM)', tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'], max: 19, attr: '© участники OpenStreetMap' },
 };
 
+/** Яркость подложки: пользовательское затемнение × приглушение ночной темы. */
+const baseBrightness = () => (1 - S.map.dim) * MAP_THEME[resolvedTheme()].baseBrightness;
+
 function style(): StyleSpecification {
   const sources: StyleSpecification['sources'] = {
     // maxzoom 13 — как у офлайн-районов и горизонталей; на крупных масштабах MapLibre растягивает z13.
@@ -26,10 +33,10 @@ function style(): StyleSpecification {
     roads: { type: 'raster', tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}'], tileSize: 256, maxzoom: 19 },
     places: { type: 'raster', tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'], tileSize: 256, maxzoom: 19 },
   };
-  const layers: StyleSpecification['layers'] = [{ id: 'bg', type: 'background', paint: { 'background-color': '#10151f' } }];
+  const layers: StyleSpecification['layers'] = [{ id: 'bg', type: 'background', paint: { 'background-color': MAP_THEME[resolvedTheme()].bg } }];
   for (const [id, b] of Object.entries(BASES)) {
     sources[id] = { type: 'raster', tiles: b.tiles, tileSize: 256, maxzoom: b.max, attribution: b.attr };
-    layers.push({ id: `base-${id}`, type: 'raster', source: id, layout: { visibility: id === S.map.base ? 'visible' : 'none' }, paint: { 'raster-brightness-max': 1 - S.map.dim } });
+    layers.push({ id: `base-${id}`, type: 'raster', source: id, layout: { visibility: id === S.map.base ? 'visible' : 'none' }, paint: { 'raster-brightness-max': baseBrightness() } });
   }
   layers.push(
     { id: 'hillshade', type: 'hillshade', source: 'dem', layout: { visibility: S.map.hillshade ? 'visible' : 'none' }, paint: { 'hillshade-exaggeration': 0.45, 'hillshade-shadow-color': '#000', 'hillshade-highlight-color': '#fff8' } },
@@ -61,7 +68,7 @@ export function addBase(id: string, def: BaseDef, sourceSpec: Partial<RasterSour
   const layers = map.getStyle().layers;
   const bg = layers.findIndex((l) => l.id === 'bg');
   map.addLayer(
-    { id: `base-${id}`, type: 'raster', source: id, layout: { visibility: id === S.map.base ? 'visible' : 'none' }, paint: { 'raster-brightness-max': 1 - S.map.dim } },
+    { id: `base-${id}`, type: 'raster', source: id, layout: { visibility: id === S.map.base ? 'visible' : 'none' }, paint: { 'raster-brightness-max': baseBrightness() } },
     layers[bg + 1]?.id,
   );
 }
@@ -84,7 +91,7 @@ export function applyMapStyle() {
   for (const id of Object.keys(BASES)) {
     if (!map.getLayer(`base-${id}`)) continue;
     map.setLayoutProperty(`base-${id}`, 'visibility', id === S.map.base ? 'visible' : 'none');
-    map.setPaintProperty(`base-${id}`, 'raster-brightness-max', 1 - S.map.dim);
+    map.setPaintProperty(`base-${id}`, 'raster-brightness-max', baseBrightness());
   }
   map.setLayoutProperty('hillshade', 'visibility', S.map.hillshade ? 'visible' : 'none');
   for (const l of ['roads', 'places']) map.setLayoutProperty(l, 'visibility', S.map.labels ? 'visible' : 'none');
@@ -92,6 +99,39 @@ export function applyMapStyle() {
   $('btnLabels').classList.toggle('on', S.map.labels);
   persist();
 }
+
+/**
+ * Цвета слоёв карты под тему: фон, яркость подложек, обводки линий связи/маршрутов (тёмная обводка —
+ * чтобы линия читалась и на светлом топо, и на спутнике). Слои создают другие модули (main.ts, ruler.ts),
+ * поэтому правим их по id, когда они появятся (styledata), и при смене темы. Ставим свойство, только если
+ * значение отличается, — иначе styledata от setPaintProperty зациклился бы.
+ */
+function overlayPaint(): Record<string, Record<string, unknown>> {
+  const m = MAP_THEME[resolvedTheme()];
+  const casing = { 'line-color': m.casing, 'line-opacity': m.casingOpacity };
+  return {
+    bg: { 'background-color': m.bg },
+    'ov-link-casing': { ...casing, 'line-width': 7 },
+    'ov-link': { 'line-width': 4 },
+    'ov-link-dash': { 'line-width': 4 },
+    'ov-routes-casing': { ...casing, 'line-width': 6 },
+    'ov-routes': { 'line-color': m.route },
+    'ov-ruler-pts': { 'circle-stroke-color': m.casing },
+  };
+}
+export function applyMapTheme() {
+  // не isStyleLoaded(): он ложен, пока грузятся тайлы, а смену темы надо применить сразу. До загрузки стиля getLayer пуст.
+  const setIf = (id: string, prop: string, v: unknown) => {
+    if (JSON.stringify(map.getPaintProperty(id, prop)) !== JSON.stringify(v)) map.setPaintProperty(id, prop, v);
+  };
+  for (const [id, props] of Object.entries(overlayPaint())) {
+    if (!map.getLayer(id)) continue;
+    for (const [k, v] of Object.entries(props)) setIf(id, k, v);
+  }
+  for (const id of Object.keys(BASES)) if (map.getLayer(`base-${id}`)) setIf(`base-${id}`, 'raster-brightness-max', baseBrightness());
+}
+map.on('styledata', applyMapTheme);
+window.addEventListener('uavmap:theme', applyMapTheme);
 
 export const center = (): LatLon => { const c = map.getCenter(); return { lat: c.lat, lon: c.lng }; };
 

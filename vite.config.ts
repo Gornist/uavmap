@@ -37,7 +37,7 @@ export default defineConfig(({ command, mode }) => {
         },
         injectManifest: {
           rollupFormat: 'iife',
-          globPatterns: ['**/*.{js,css,html,svg,png,webmanifest}'],
+          globPatterns: ['**/*.{js,css,html,svg,png,webmanifest,woff2}'], // woff2 — шрифты интерфейса офлайн,
           globIgnores: ['**/*.map'],
           maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
         },

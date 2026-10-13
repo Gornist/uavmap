@@ -1,9 +1,9 @@
 /* Шторка «Зона покрытия» */
-.cov-stale { color: var(--accent); font-size: 12px; margin: 6px 0; }
-.cov-prelim { color: var(--muted); font-size: 12px; margin: 6px 0; font-style: italic; }
-.cov-sec { color: var(--muted); font-size: 12px; margin: 12px 0 4px; }
+.cov-stale { color: var(--accent-text); font-size: 13px; margin: 6px 0; }
+.cov-prelim { color: var(--muted); font-size: 13px; margin: 6px 0; font-style: italic; }
+.cov-sec { color: var(--muted); font-size: 13px; margin: 12px 0 4px; }
 .cov-add { display: flex; gap: 6px; margin-top: 6px; }
 .cov-add input { width: 90px; text-align: right; }
 .cov-opacity { width: 100%; }
 .chips button.x { padding: 4px 8px; }
-.rt td small { display: block; color: var(--muted); font-size: 11px; }
+.rt td small { display: block; color: var(--muted); font-size: 13px; }

@@ -5,7 +5,7 @@ import './style.css';
 import './styles/main.css';
 import maplibregl from 'maplibre-gl';
 import { S, $, h, map, center, fc, toast, openSheet, closeSheet, sheetOpen, on, emit, persist, applyMapStyle } from './app';
-import { setStation, initStation, updateLive, liveFollow, showProfile, findBestSpot, altModeText } from './link';
+import { setStation, initStation, updateLive, liveFollow, showProfile, findBestSpot, km } from './link';
 import { initMarks, addMarkAtCenter } from './marks';
 import { initRuler, toggleRuler } from './ruler';
 import { initCoverage, openCoverageSheet } from './coverage';
@@ -16,8 +16,11 @@ import { initMyMaps } from './mymaps';
 import { initMobile } from './mobile';
 import { formatCoords } from './coords';
 import { elevationAt } from './elevation';
-import { distance, bearing, fmtDist, type LatLon } from './geo';
+import { distance, bearing, type LatLon } from './geo';
 import { uid } from './store';
+import { initTheme } from './theme';
+
+initTheme(); // первым делом: тема до отрисовки панелей
 
 // Для отладки в консоли браузера (только dev-сборка).
 if (import.meta.env.DEV) (window as unknown as { __map: typeof map }).__map = map;
@@ -32,7 +35,8 @@ function renderHere() {
   $('hereCoords').innerHTML = f.rows.map(([k, v]) => `<span class="k">${k}</span><span class="v">${v}</span>`).join('');
   const t = hereH === null ? '—' : String(Math.round(hereH));
   $('hereH').textContent = t;
-  $('crossLabel').innerHTML = `${t} м ${f.short}`;
+  // Подпись у прицела дублирует плашку — показываем её, только когда плашка свёрнута (телефон).
+  $('crossLabel').innerHTML = $('infoCard').classList.contains('collapsed') ? `${t} м ${f.short}` : '';
 }
 
 async function refreshHeight() {
@@ -91,7 +95,7 @@ function initLinkStrip() {
     inAnt.disabled = !S.station;
     if (document.activeElement !== inAnt) inAnt.value = S.station ? String(S.station.antH) : '';
     if (document.activeElement !== inDrone) inDrone.value = String(S.droneH);
-    $('altModeLbl').textContent = `(${altModeText()})`;
+    $('altModeLbl').textContent = S.altMode === 'takeoff' ? '(над взлётом)' : '(над рельефом)';
   };
   inAnt.addEventListener('input', () => {
     const v = parseFloat(inAnt.value);
@@ -110,7 +114,7 @@ function initLinkStrip() {
 
 function openBestSheet() {
   const b = openSheet('Где встать', `
-    <p class="hint">Подбор места для пульта, откуда лучше всего видно точку в прицеле. Выберите радиус поиска.</p>
+    <p class="hint">Найду место для пульта, откуда лучше всего связь с точкой в прицеле. Где искать?</p>
     <div class="chips" id="bestR"></div>`);
   for (const r of [500, 1000, 2000, 3000]) {
     const c = document.createElement('button');
@@ -128,14 +132,14 @@ const clearPin = () => { pointPin?.remove(); pointPin = null; };
 function openPointSheet(at?: LatLon) {
   const p = at ?? center();
   const body = h('<div></div>');
-  let html = `<div class="kv"><div><small>Рельеф</small><b id="ptH">…</b></div>`;
+  let html = `<div class="kv"><div><small>Высота места</small><b id="ptH">…</b></div>`;
   for (const f of ['sk42', 'dd', 'dms'] as const) {
     const c = formatCoords(p.lat, p.lon, f);
     html += `<div><small>${c.label}</small><b>${c.short}</b></div>`;
   }
   if (S.station) {
     const a = { lat: S.station.lat, lon: S.station.lon };
-    html += `<div><small>От пульта</small><b>${fmtDist(distance(a, p))}, аз. ${bearing(a, p).toFixed(0)}°</b></div>`;
+    html += `<div><small>От пульта</small><b>${km(distance(a, p))}, аз. ${Math.round(bearing(a, p)) % 360}°</b></div>`;
   }
   html += `</div>
     <div class="row"><button class="ghost" id="ptSt">Пульт сюда</button><button class="ghost" id="ptMk">Метка здесь</button><button class="ghost" id="ptPr">Профиль сюда</button><button class="ghost" id="ptCp">Копировать координаты</button></div>`;
@@ -225,9 +229,11 @@ initLinkStrip();
 $('infoToggle').addEventListener('click', () => {
   const c = $('infoCard').classList.toggle('collapsed');
   $('infoToggle').textContent = c ? '+' : '−';
+  renderHere();
 });
 $('btnPoint').addEventListener('click', () => openPointSheet());
 initMobile({ onPointPress: openPointSheet });
+renderHere(); // плашка могла свернуться на телефоне — обновить подпись у прицела
 
 $('zIn').addEventListener('click', () => map.zoomIn());
 $('zOut').addEventListener('click', () => map.zoomOut());

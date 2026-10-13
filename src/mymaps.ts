@@ -244,8 +244,10 @@ export function openMyMapsSheet(): void {
       btn('Добавить рельеф (HGT)', 'ghost', () => void run(async () => { for (const f of await pick('.hgt,application/octet-stream', true)) await importHgt(f); })),
     );
     root.appendChild(add);
-    root.appendChild(h('<p class="hint mm-hint"></p>')).textContent = 'PMTiles — только растровые (png/jpg/webp), до 2 ГБ. Сделать из MBTiles: утилита `pmtiles convert` (github.com/protomaps/go-pmtiles). HGT — ячейки SRTM 1″/3″ с именем вида N55E037.hgt (например, с viewfinderpanoramas.org или USGS EarthExplorer), до 30 МБ каждая.';
-    root.appendChild(h('<p class="hint mm-hint"></p>')).textContent = 'Свой рельеф (HGT) используется в профиле, зоне покрытия и высоте под прицелом, если ячейки целиком покрывают нужный участок. Отмывка и горизонтали рисуются из сети и HGT не используют.';
+    const info = h('<details class="details"><summary>Какие файлы подходят</summary></details>');
+    info.appendChild(h('<p class="hint mm-hint"></p>')).textContent = 'PMTiles — только растровые (png/jpg/webp), до 2 ГБ. Сделать из MBTiles: утилита `pmtiles convert` (github.com/protomaps/go-pmtiles). HGT — ячейки SRTM 1″/3″ с именем вида N55E037.hgt (например, с viewfinderpanoramas.org или USGS EarthExplorer), до 30 МБ каждая.';
+    info.appendChild(h('<p class="hint mm-hint"></p>')).textContent = 'Свой рельеф (HGT) используется в профиле, зоне покрытия и высоте под прицелом, если ячейки целиком покрывают нужный участок. Отмывка и горизонтали рисуются из сети и HGT не используют.';
+    root.appendChild(info);
     if (!navigator.storage?.getDirectory) root.appendChild(h('<p class="hint mm-warn"></p>')).textContent = 'Браузер не поддерживает хранилище OPFS: файлы подключаются только на текущую сессию, после перезагрузки их нужно добавить снова.';
 
     if (!items.length) { root.appendChild(h('<p class="hint">Пока ничего не добавлено.</p>')); return; }

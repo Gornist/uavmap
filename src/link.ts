@@ -1,10 +1,11 @@
 // Пульт (точка А), «связь до креста», профиль трассы и подбор места для пилота.
 import maplibregl from 'maplibre-gl';
 import { S, $, h, map, center, setGeo, fc, line, toast, openSheet, emit, on, progress, escapeHtml } from './app';
-import { LatLon, distance, bearing, fmtDist, lonLatToPixel, destination } from './geo';
+import { LatLon, distance, bearing, lonLatToPixel, destination } from './geo';
 import { elevationAt, profile, demPlan, demPixelM, demQualityHint, fetchGrid, sampleGrid, sampleRay, DemMissingError, DemGrid } from './elevation';
 import { analyzeLink, analyzePair, RANK, minHeightForLink, minHeightsForPair, LinkResult, LinkStatus, PairResult, LineId, PRESETS, presetsFor, RadioParams, radioHorizon, freeSpaceRange } from './radio';
 import { drawProfile } from './profileChart';
+import { STATUS_RGB } from './theme';
 import { CLUTTER, withClutter } from './clutter';
 
 /** Радиопараметры с учётом местности у пульта — их и нужно передавать в расчёт. */
@@ -19,19 +20,87 @@ import { formatCoords } from './coords';
 export let stationGround: number | null = null;
 let stationMarker: maplibregl.Marker | null = null;
 
-const STATUS_TXT = { ok: 'связь уверенная', weak: 'на грани', none: 'связи нет' } as const;
-const STATUS_COL = { ok: '#4fbf72', weak: '#e3b948', none: '#e5484d' } as const;
-
-const fmtM = (m: number) => `${m >= 0 ? '+' : '−'}${Math.abs(m).toFixed(1)}`;
 const LINE_NAME: Record<LineId, string> = { rc: 'управление', video: 'видео' };
-const LINE_WORD: Record<LinkStatus, string> = { ok: 'уверенно', weak: 'на грани', none: 'нет связи' };
 
-/** Короткий статус пары для плашки: «связь уверенная», «видео на грани», «управление потеряно». */
-function pairText(p: PairResult): string {
-  if (!p.video || p.status === 'ok') return STATUS_TXT[p.status];
-  if (p.rc.belowGround) return 'ниже рельефа';
-  return `${LINE_NAME[p.worst]} ${p.status === 'weak' ? 'на грани' : 'потеряно'}`;
+// ---------- Человекочитаемые статусы и числа (общие для строки связи, профиля, зоны и меню) ----------
+
+/** Значок статуса: статус передаётся не только цветом. */
+export const ICON: Record<LinkStatus, string> = { ok: '✓', weak: '⚠', none: '✕' };
+/** Классы статуса: старые (ok/weak/none) для прежних стилей + семантические status-*. */
+export const stCls = (s: LinkStatus) => `${s} status-${s}`;
+/** Дальность: до 1 км — целые метры, дальше — км с одним знаком (запятая). */
+export function km(m: number): string {
+  if (!Number.isFinite(m)) return '—';
+  if (m < 1000) return `${Math.round(m)} м`;
+  return `${(m / 1000).toFixed(m < 100000 ? 1 : 0).replace('.', ',')} км`;
 }
+/** дБ целыми со знаком: «+17 дБ», «−3 дБ». */
+export function dB(x: number): string {
+  const r = Math.round(x);
+  return `${r >= 0 ? '+' : '−'}${Math.abs(r)} дБ`;
+}
+/** Человеческие названия пресетов (в radio.ts — технические). */
+const HUMAN_PRESET: Record<string, string> = {
+  elrs24: 'ELRS 2,4 ГГц — управление',
+  elrs24_50: 'ELRS 2,4 ГГц — дальний режим',
+  elrs900: 'ELRS 868/915 МГц — управление',
+  crsf: 'Crossfire 868 МГц — управление',
+  lora433: 'LoRa 433 МГц — телеметрия',
+  vtx58: 'Аналоговое видео 5,8 ГГц',
+  vtx12: 'Аналоговое видео 1,2 ГГц',
+  dig58: 'Цифровое видео 5,8 ГГц',
+  wifi24: 'Wi-Fi 2,4 ГГц (бытовой дрон)',
+};
+export const presetName = (p: { id: string; name: string }) => HUMAN_PRESET[p.id] ?? p.name;
+
+/** Вердикт пары одной фразой: «Связь есть», «Видео на грани», «Нет связи». */
+export function pairVerdict(p: PairResult): string {
+  if (p.rc.belowGround) return 'Дрон ниже рельефа';
+  if (p.status === 'ok') return 'Связь есть';
+  const who = p.video ? p.worst : null;
+  if (p.status === 'weak') return who === 'video' ? 'Видео на грани' : who === 'rc' ? 'Управление на грани' : 'Связь на грани';
+  if (who === 'video' && p.rc.status !== 'none') return 'Нет видео';
+  return 'Нет связи';
+}
+
+// Цвета статусов на карте (линия связи, растр зоны, легенда). Палитра — из theme.ts (STATUS_RGB: на подложке
+// цвета от темы не зависят, а --ok/--weak/--none в CSS — это цвета ТЕКСТА на панели). Тема может переопределить
+// их CSS-переменными --map-ok/--map-weak/--map-none. Кеш сбрасывается при смене темы.
+const MAP_VARS: Record<LinkStatus, string> = { ok: '--map-ok', weak: '--map-weak', none: '--map-none' };
+let colCache: Record<LinkStatus, [number, number, number]> | null = null;
+function cssRgb(color: string, fb: [number, number, number]): [number, number, number] {
+  try {
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = 1;
+    const ctx = cv.getContext('2d');
+    if (!ctx) return fb;
+    ctx.fillStyle = `rgb(${fb.join(',')})`;
+    ctx.fillStyle = color; // неизвестный формат браузер игнорирует — останется запасной
+    ctx.fillRect(0, 0, 1, 1);
+    const d = ctx.getImageData(0, 0, 1, 1).data;
+    return [d[0], d[1], d[2]];
+  } catch {
+    return fb;
+  }
+}
+/** Цвета статусов для карты, [r, g, b]. */
+export function statusRgb(): Record<LinkStatus, [number, number, number]> {
+  if (colCache) return colCache;
+  const cs = getComputedStyle(document.documentElement);
+  const pick = (s: LinkStatus) => {
+    const x = cs.getPropertyValue(MAP_VARS[s]).trim();
+    return x ? cssRgb(x, STATUS_RGB[s]) : STATUS_RGB[s];
+  };
+  colCache = { ok: pick('ok'), weak: pick('weak'), none: pick('none') };
+  return colCache;
+}
+const statusCss = (s: LinkStatus) => `rgb(${statusRgb()[s].join(',')})`;
+/** Подписка на смену темы (theme.ts шлёт 'uavmap:theme' на window; 'themechange' на document — запасной вариант). */
+export function onThemeChange(fn: () => void) {
+  window.addEventListener('uavmap:theme', fn);
+  document.addEventListener('themechange', fn);
+}
+onThemeChange(() => { colCache = null; if (S.station) updateLive(); });
 
 export function altModeText() {
   return S.altMode === 'takeoff' ? 'над точкой взлёта' : 'над рельефом';
@@ -99,9 +168,9 @@ function showStationSheet() {
   if (!S.station) return;
   const st = S.station;
   const c = formatCoords(st.lat, st.lon, S.coordFormat);
-  const b = openSheet('📡 Пульт — точка А', `
+  const b = openSheet('📡 Пульт', `
     <div class="kv">
-      <div><small>Рельеф</small><b>${stationGround !== null ? Math.round(stationGround) + ' м' : '…'}</b></div>
+      <div><small>Высота места</small><b>${stationGround !== null ? Math.round(stationGround) + ' м' : '…'}</b></div>
       <div><small>Антенна над землёй</small><b>${st.antH} м</b></div>
       <div><small>${c.label}</small><b>${c.short}</b></div>
     </div>
@@ -162,9 +231,33 @@ const linkLine = (a: S_Station, c: LatLon, props: Record<string, unknown>) =>
   setGeo('link', fc([line([[a.lon, a.lat], [c.lon, c.lat]], props)]));
 type S_Station = { lat: number; lon: number };
 
+/** Минимальная высота дрона (в текущем режиме отсчёта), при которой обе линии держат свой запас. null — не хватает и на 1500 м. */
+function needHeight(r: LinkCalc, radio: RadioParams = effRadio(), video: RadioParams | null = r.vres ? effVideo() : null): number | null {
+  const fn = (hh: number) => droneAbs(r.groundB, hh, r.groundA);
+  return minHeightsForPair(r.elev, r.dist, r.hA, fn, radio, video).pair;
+}
+
+/**
+ * Хвост вердикта: «— нужно ≥ 410 м», если уверенную связь даёт подъём дрона. need = null — не даёт и 1500 м:
+ * для «на грани» хвоста нет (высота не поможет), для «нет связи» — так и пишем.
+ */
+function needTail(p: PairResult, need: number | null): string {
+  if (p.status === 'ok') return '';
+  if (need !== null) return need > S.droneH ? ` — нужно ≥ ${need} м` : '';
+  if (p.rc.belowGround) return ' — поднимите дрон';
+  return p.status === 'none' ? ' — не хватит и на 1500 м' : '';
+}
+
+/** Вторая строка: запасы линий и азимут. */
+function subLine(r: LinkCalc): string {
+  const m = (x: LinkResult) => `<span class="${stCls(x.status)} num">${x.belowGround ? '—' : dB(x.margin)}</span>`;
+  const lines = r.vres ? `Упр. ${m(r.res)} · Видео ${m(r.vres)}` : `Запас ${m(r.res)}`;
+  return `${lines} · аз. <span class="num">${Math.round(r.az) % 360}°</span>`;
+}
+
 /**
  * Мгновенная реакция на движение карты (без расчёта): линия пульт → прицел следует за крестом
- * приглушённым цветом, в строке — азимут и дальность, запас «…» до прихода расчёта для этой точки.
+ * приглушённым цветом, в строке — дальность и азимут, вердикт «…» до прихода расчёта для этой точки.
  */
 export function liveFollow() {
   const st = S.station;
@@ -173,10 +266,10 @@ export function liveFollow() {
   const dist = distance(a, c);
   if (dist < 5) { setGeo('link', fc()); return; }
   linkLine(a, c, { color: PENDING_COL, dash: 0, op: 0.55 });
-  const az = bearing(a, c);
-  $('lsStatus').innerHTML = `Аз. ${az.toFixed(1)}° · ${fmtDist(dist)} · ${S.video.enabled ? 'Упр. … · Видео …' : 'запас …'}`;
+  const az = Math.round(bearing(a, c)) % 360;
+  $('lsStatus').innerHTML = `<div class="verdict-big muted">Считаю… · <span class="num">${km(dist)}</span></div><div class="ls-sub muted">аз. <span class="num">${az}°</span></div>`;
   const hl = $('hereLink');
-  if (!hl.hidden) hl.innerHTML = `До пульта <b>${fmtDist(dist)}</b>, аз. <b>${az.toFixed(0)}°</b><br>Дрон ${S.droneH} м: <b style="color:${PENDING_COL}">…</b>`;
+  if (!hl.hidden) hl.innerHTML = `До пульта <b class="num">${km(dist)}</b> · <span class="muted">считаю…</span>`;
 }
 
 export async function updateLive() {
@@ -189,7 +282,8 @@ export async function updateLive() {
     const c = center();
     if (import.meta.env.DEV) (window as unknown as { __liveStats: { calcs: number } }).__liveStats.calcs++;
     let r: LinkCalc | null;
-    try { r = await calcLink(c, effRadio(), effVideoOrNull(), LIVE_N); } catch (e) {
+    const radio = effRadio(), video = effVideoOrNull();
+    try { r = await calcLink(c, radio, video, LIVE_N); } catch (e) {
       if (!(e instanceof DemMissingError)) throw e;
       if (distance(center(), c) > 2) return; // прицел уже ушёл — устаревший ответ
       lastLive = null;
@@ -205,16 +299,13 @@ export async function updateLive() {
       st.innerHTML = stationGroundFailed ? 'Нет данных рельефа под пультом' : stationGround === null ? 'Загружаю высоту пульта…' : 'Прицел на пульте — сдвиньте карту';
       setGeo('link', fc()); hl.hidden = true;
     } else {
-      const { res, vres, pair } = r;
-      const losTxt = res.belowGround ? 'дрон ниже рельефа' : res.los ? (res.minClearance >= 0.6 ? 'прямая видимость, Френель чист' : `прямая видимость, Френель закрыт на ${Math.round(Math.min(1, res.fresnelBlocked) * 100)}%`) : 'прямой видимости нет';
-      const mTxt = (x: LinkResult) => (x.belowGround ? '—' : fmtM(x.margin) + ' дБ');
-      st.innerHTML = vres
-        ? `Аз. ${r.az.toFixed(1)}° · ${fmtDist(r.dist)} · Упр. <span class="${res.status}">${mTxt(res)}</span> · Видео <span class="${vres.status}">${mTxt(vres)}</span> · ${losTxt}`
-        : `Аз. ${r.az.toFixed(1)}° · ${fmtDist(r.dist)} · запас <span class="${res.status}">${res.belowGround ? '—' : res.margin.toFixed(1) + ' дБ'}</span> · ${losTxt}`;
+      const { res, pair } = r;
+      const need = pair.status === 'ok' ? 0 : needHeight(r, radio, video);
+      const v = `${ICON[pair.status]} ${pairVerdict(pair)}`;
+      st.innerHTML = `<div class="verdict-big ${stCls(pair.status)}">${v} · <span class="num">${km(r.dist)}</span><span class="ls-need">${needTail(pair, need)}</span></div><div class="ls-sub muted">${subLine(r)}</div>`;
       hl.hidden = false;
-      const detail = res.belowGround ? '(ниже рельефа)' : vres ? `(упр. ${res.margin.toFixed(0)} / видео ${vres.margin.toFixed(0)} дБ)` : `(${res.margin.toFixed(0)} дБ)`;
-      hl.innerHTML = `До пульта <b>${fmtDist(r.dist)}</b>, аз. <b>${r.az.toFixed(0)}°</b><br>Дрон ${S.droneH} м: <b style="color:${STATUS_COL[pair.status]}">${pairText(pair)}</b> ${detail}`;
-      linkLine(S.station, c, { color: STATUS_COL[pair.status], dash: res.los ? 0 : 1, op: 1 });
+      hl.innerHTML = `До пульта <b class="num">${km(r.dist)}</b> · <b class="${stCls(pair.status)}">${v}</b>`;
+      linkLine(S.station, c, { color: statusCss(pair.status), dash: res.los ? 0 : 1, op: 1 });
     }
   } finally {
     liveBusy = false;
@@ -223,6 +314,9 @@ export async function updateLive() {
 }
 
 // ---------- Полный профиль ----------
+
+let profRedraw: (() => void) | null = null;
+window.addEventListener('uavmap:theme', () => profRedraw?.());
 
 export async function showProfile(target = center()) {
   if (!S.station) { toast('Сначала поставьте пульт'); return; }
@@ -236,6 +330,46 @@ export async function showProfile(target = center()) {
   renderProfileSheet(r);
 }
 
+/** Главное препятствие: точка, глубже всего закрывающая линию связи (или ближе всех к ней подходящая). */
+function obstacle(res: LinkResult): { at: number; kind: 'block' | 'fresnel' } | null {
+  const n = res.d.length - 1;
+  if (n < 2) return null;
+  if (!res.los) {
+    let bi = 1, best = -Infinity;
+    for (let i = 1; i < n; i++) { const pen = res.ground[i] - res.los_h[i]; if (pen > best) { best = pen; bi = i; } }
+    return { at: res.d[bi], kind: 'block' };
+  }
+  if (res.minClearance < 0.6) {
+    let bi = 1, best = Infinity;
+    for (let i = 1; i < n; i++) if (res.fz[i] > 0) { const q = (res.los_h[i] - res.ground[i]) / res.fz[i]; if (q < best) { best = q; bi = i; } }
+    return { at: res.d[bi], kind: 'fresnel' };
+  }
+  return null;
+}
+
+/** Объяснение вердикта одной-двумя фразами: что мешает и что сделать. */
+function explain(r: LinkCalc, need: number | null): string {
+  const p = r.pair;
+  if (p.rc.belowGround) return `На высоте ${S.droneH} м дрон в этой точке оказывается ниже склона. Поднимите его или считайте высоту «над рельефом» (меню → Расчёт).`;
+  const w = p.worst === 'video' && r.vres ? r.vres : r.res;
+  const ob = obstacle(w);
+  const near = (at: number) => (at < 300 ? 'рядом с пультом' : at > r.dist - 300 ? 'у цели' : `на ${km(at)} от пульта`);
+  const parts: string[] = [];
+  if (ob?.kind === 'block') parts.push(`Хребет ${near(ob.at)} закрывает обзор${p.status === 'ok' ? ', но сигнал его огибает' : ''}.`);
+  else if (ob) parts.push(`Рельеф ${near(ob.at)} почти касается линии связи — сигнал ослаблен.`);
+  else parts.push(p.status === 'ok' ? 'Между пультом и дроном препятствий нет.' : p.status === 'weak' ? 'Препятствий нет, но для такой дальности сигнал слабоват.' : 'Препятствий нет, но на такую дальность не хватает мощности.');
+  if (p.status !== 'ok') {
+    if (need === null) parts.push(p.status === 'weak' ? 'Высота не поможет — подойдите ближе или возьмите аппаратуру мощнее.' : 'Даже на 1500 м уверенной связи не будет — подойдите ближе или возьмите аппаратуру мощнее.');
+    else if (need > S.droneH) parts.push(`Поднимитесь до ${need} м или подойдите ближе.`);
+    else parts.push('Подойдите ближе.');
+    if (p.status === 'weak' && p.worst === 'video' && r.vres && r.res.status === 'ok') parts.push('Управление держится, картинка пропадёт раньше.');
+  }
+  return parts.join(' ');
+}
+
+// Раскрытые блоки «Подробнее» в профиле переживают перерисовку (выбор высоты/аппаратуры из таблицы).
+const profOpen = new Set<string>();
+
 function renderProfileSheet(r: LinkCalc) {
   const res = r.res, vres = r.vres, pair = r.pair, hA = r.hA;
   const st = { antH: r.antH };
@@ -243,31 +377,16 @@ function renderProfileSheet(r: LinkCalc) {
   const heightFn = (hh: number) => droneAbs(r.groundB, hh, r.groundA);
   const radioEff = effRadio(), videoEff = vres ? effVideo() : null;
   const mins = minHeightsForPair(r.elev, r.dist, hA, heightFn, radioEff, videoEff);
-  const mh = (v: number | null) => (v === null ? '&gt;1500' : String(v));
-  const rcFade = S.radio.fadeMarginDb;
-  const verdict1 = {
-    ok: `Связь уверенная: запас ${res.margin.toFixed(1)} дБ при требуемых ${rcFade} дБ`,
-    weak: `На грани: запас ${res.margin.toFixed(1)} дБ — меньше желаемых ${rcFade} дБ, возможны срывы`,
-    none: `Связи нет: не хватает ${(-res.margin).toFixed(1)} дБ до чувствительности приёмника`,
-  }[res.status];
-  let verdictText = verdict1;
-  if (vres) {
-    let tail = '';
-    if (RANK[vres.status] < RANK[res.status]) tail = ': картинка пропадёт раньше управления';
-    else if (RANK[res.status] < RANK[vres.status]) tail = ': управление слабее видео — дальность ограничивает управление';
-    verdictText = `Управление — ${LINE_WORD[res.status]} (${fmtM(res.margin)} дБ), видео — ${LINE_WORD[vres.status]} (${fmtM(vres.margin)} дБ)${tail}`;
-  }
-  if (res.belowGround) verdictText = 'Связи нет: дрон ниже рельефа в этой точке — увеличьте высоту или переключите отсчёт «над рельефом»';
+  const mh = (v: number | null) => (v === null ? '&gt; 1500 м' : `${v} м`);
+  const worst = pair.worst === 'video' && vres ? vres : res;
 
   const heights = [...new Set([...S.coverage.heights, S.droneH])].sort((a, b) => a - b);
-  const colM = (m: LinkResult) => `<td style="color:${STATUS_COL[m.status]}">${m.margin.toFixed(1)}</td>`;
+  const colM = (m: LinkResult) => `<td class="${stCls(m.status)} num">${m.belowGround ? '—' : dB(m.margin)}</td>`;
   const hRows = heights.map((hh) => {
     const p = analyzePair(r.elev, r.dist, hA, heightFn(hh), radioEff, videoEff);
-    return `<tr data-h="${hh}" class="${hh === S.droneH ? 'sel' : ''}"><td>${hh} м</td><td>${Math.round(heightFn(hh))} м</td><td>${p.rc.los ? 'да' : 'нет'}</td>${p.video ? '' : `<td>${p.rc.diffraction.toFixed(1)}</td>`}${colM(p.rc)}${p.video ? colM(p.video) : ''}</tr>`;
+    return `<tr data-h="${hh}" class="${hh === S.droneH ? 'sel' : ''}"><td class="num">${hh} м</td><td class="${stCls(p.status)}">${ICON[p.status]} ${pairVerdict(p)}</td>${colM(p.rc)}${p.video ? colM(p.video) : ''}</tr>`;
   }).join('');
-  const hHead = vres
-    ? '<th>Высота</th><th>Абс.</th><th>Видимость</th><th>Упр., дБ</th><th>Видео, дБ</th>'
-    : '<th>Высота</th><th>Абс.</th><th>Видимость</th><th>Дифр., дБ</th><th>Запас, дБ</th>';
+  const hHead = vres ? '<th>Высота</th><th>Связь</th><th>Упр.</th><th>Видео</th>' : '<th>Высота</th><th>Связь</th><th>Запас</th>';
 
   const presetRows = (line: LineId) => presetsFor(line).map((p) => {
     const base = line === 'rc' ? S.radio : S.video.radio;
@@ -275,49 +394,61 @@ function renderProfileSheet(r: LinkCalc) {
     const m = analyzeLink(r.elev, r.dist, hA, absB, radio);
     const mHt = minHeightForLink(r.elev, r.dist, hA, heightFn, radio);
     const cur = line === 'rc' ? S.presetId : S.video.presetId;
-    return `<tr data-p="${p.id}" data-line="${line}" class="${p.id === cur ? 'sel' : ''}"><td>${p.name}</td><td>${radio.freqMHz}</td><td style="color:${STATUS_COL[m.status]}">${m.margin.toFixed(1)}</td><td>${mHt === null ? '&gt;1500' : mHt}</td></tr>`;
+    return `<tr data-p="${p.id}" data-line="${line}" class="${p.id === cur ? 'sel' : ''}"><td>${presetName(p)}</td>${colM(m)}<td class="num">${mh(mHt)}</td></tr>`;
   }).join('');
-  const pHead = '<tr><th>Пресет</th><th>МГц</th><th>Запас, дБ</th><th>Мин. высота, м</th></tr>';
-  const presetTables = vres
-    ? `<h4 class="hint">Управление — аппаратура на высоте ${S.droneH} м, нажмите, чтобы применить</h4>
-    <table class="rt" id="tblP">${pHead}${presetRows('rc')}</table>
-    <h4 class="hint">Видео — аппаратура на высоте ${S.droneH} м, нажмите, чтобы применить</h4>
-    <table class="rt" id="tblPV">${pHead}${presetRows('video')}</table>`
-    : `<h4 class="hint">Аппаратура и частоты на высоте ${S.droneH} м — нажмите, чтобы применить</h4>
-    <table class="rt" id="tblP">${pHead}${presetRows('rc')}</table>`;
+  const pHead = '<tr><th>Аппаратура</th><th>Запас</th><th>Нужна высота</th></tr>';
+  const presetTables = `<p class="hint">Аппаратура на высоте ${S.droneH} м — нажмите строку, чтобы выбрать.</p>`
+    + (vres ? '<h4 class="hint">Управление</h4>' : '') + `<table class="rt" id="tblP">${pHead}${presetRows('rc')}</table>`
+    + (vres ? `<h4 class="hint">Видео</h4><table class="rt" id="tblPV">${pHead}${presetRows('video')}</table>` : '');
 
   // Карточка с двумя значениями: «управление / видео» (одно значение, если видео выключено).
-  const two = (label: string, f: (x: LinkResult) => string, plain?: string) =>
-    `<div><small>${label}${vres ? ', упр. / видео' : ''}</small><b>${plain ?? (vres ? `${f(res)} / ${f(vres)}` : f(res))}</b></div>`;
-  const margCard = (x: LinkResult) => `<span style="color:${STATUS_COL[x.status]}">${x.belowGround ? '—' : x.margin.toFixed(1) + ' дБ'}</span>`;
+  const two = (label: string, f: (x: LinkResult) => string) =>
+    `<div><small>${label}${vres ? ', упр. / видео' : ''}</small><b class="num">${vres ? `${f(res)} / ${f(vres)}` : f(res)}</b></div>`;
   const q = demQualityHint(S.station?.lat ?? r.target.lat, r.target.lat);
   const hintHtml = q ? `<p class="hint">${escapeHtml(q)}</p>` : '';
   const hz = radioHorizon(st.antH, absB - r.groundB, S.radio.k);
-  const fsr = (p: RadioParams) => fmtDist(freeSpaceRange(p));
-  const b = openSheet(`Профиль: пульт → прицел · ${fmtDist(r.dist)}`, `
-    <div class="verdict ${pair.status}">${verdictText}</div>
+  const fsr = (p: RadioParams) => km(freeSpaceRange(p));
+  const int = (x: number) => String(Math.round(x));
+  const det = (id: string, title: string, inner: string) =>
+    `<details class="details" data-d="${id}"${profOpen.has(id) ? ' open' : ''}><summary>${title}</summary>${inner}</details>`;
+
+  const b = openSheet(`Профиль до прицела · ${km(r.dist)}`, `
+    <div class="verdict verdict-big ${stCls(pair.status)}">${ICON[pair.status]} ${pairVerdict(pair)}</div>
+    <p class="verdict-why">${explain(r, mins.pair)}</p>
     <canvas id="profileCanvas"></canvas>
-    <div class="legend"><span><i style="background:var(--accent)"></i>линия визирования</span><span><i style="background:rgba(227,169,72,.35)"></i>1-я зона Френеля / 60 %${vres ? ` (упр. ${radioEff.freqMHz} МГц)` : ''}</span><span><i style="background:var(--bad)"></i>перекрытие / препятствия</span></div>
-    <div class="kv">
-      <div><small>Азимут</small><b>${r.az.toFixed(1)}°</b></div>
-      <div><small>Дрон абс. / над землёй</small><b>${Math.round(absB)} / ${Math.round(absB - r.groundB)} м</b></div>
-      ${vres ? `<div><small>Частоты, МГц: упр. / видео</small><b>${radioEff.freqMHz} / ${videoEff!.freqMHz}</b></div>` : ''}
-      ${two('Свободное пр-во', (x) => x.fspl.toFixed(1))}
-      ${two('Дифракция на рельефе', (x) => x.diffraction.toFixed(1))}
-      ${two('Уровень на приёме', (x) => x.prx.toFixed(1))}
-      ${vres ? `<div><small>Запас, дБ: упр. / видео</small><b>${margCard(res)} / ${margCard(vres)}</b></div>` : `<div><small>Запас</small><b>${margCard(res)}</b></div>`}
-      <div><small>Мин. зазор / Френель</small><b>${res.belowGround ? '—' : Math.round(res.minClearance * 100) + ' %'}</b></div>
-      <div><small>Радиогоризонт</small><b>${fmtDist(hz)}</b></div>
-      <div><small>Мин. высота для связи${vres ? ' (обе линии)' : ''}</small><b>${mins.pair === null ? '&gt;1500 м' : mins.pair + ' м'}</b></div>
-      ${vres ? `<div><small>Мин. высота: упр. / видео</small><b>${mh(mins.rc)} / ${mh(mins.video)} м</b></div>` : ''}
-      ${vres ? `<div><small>Дальность без рельефа: упр. / видео</small><b>${fsr(radioEff)} / ${fsr(videoEff!)}</b></div>` : `<div><small>Дальность без рельефа</small><b>${fsr(radioEff)}</b></div>`}
+    <div class="legend"><span><i style="background:var(--accent)"></i>линия связи</span><span><i style="background:rgba(227,169,72,.35)"></i>зона Френеля</span><span><i style="background:var(--bad)"></i>препятствие</span></div>
+    <div class="kv kv-key">
+      <div><small>Дальность</small><b class="num">${km(r.dist)}</b></div>
+      <div><small>Высота для уверенной связи (сейчас ${S.droneH} м)</small><b class="num">${mh(mins.pair)}</b></div>
+      <div><small>Запас${vres ? ` (${LINE_NAME[pair.worst]})` : ''}</small><b class="num ${stCls(worst.status)}">${worst.belowGround ? '—' : dB(worst.margin)}</b></div>
     </div>
-    <h4 class="hint">Высоты дрона (${altModeText()}) — нажмите строку, чтобы выбрать</h4>
+    ${det('more', 'Подробнее', `<div class="kv">
+      <div><small>Азимут</small><b class="num">${Math.round(r.az) % 360}°</b></div>
+      <div><small>Дрон над землёй / над морем</small><b class="num">${Math.round(absB - r.groundB)} / ${Math.round(absB)} м</b></div>
+      ${vres ? `<div><small>Частоты, МГц: упр. / видео</small><b class="num">${radioEff.freqMHz} / ${videoEff!.freqMHz}</b></div>` : `<div><small>Частота</small><b class="num">${radioEff.freqMHz} МГц</b></div>`}
+      ${two('Запас, дБ', (x) => (x.belowGround ? '—' : dB(x.margin).replace(' дБ', '')))}
+      ${two('Потери в свободном пространстве, дБ', (x) => int(x.fspl))}
+      ${two('Потери на рельефе (дифракция), дБ', (x) => int(x.diffraction))}
+      ${two('Уровень приёма, дБм', (x) => int(x.prx))}
+      <div><small>Зона Френеля свободна</small><b class="num">${res.belowGround ? '—' : Math.round(Math.max(0, Math.min(1, res.minClearance)) * 100) + ' %'}</b></div>
+      <div><small>Радиогоризонт</small><b class="num">${km(hz)}</b></div>
+      ${vres ? `<div><small>Нужная высота: упр. / видео</small><b class="num">${mh(mins.rc)} / ${mh(mins.video)}</b></div>` : ''}
+      <div><small>Дальность без рельефа${vres ? ', упр. / видео' : ''}</small><b class="num">${vres ? `${fsr(radioEff)} / ${fsr(videoEff!)}` : fsr(radioEff)}</b></div>
+    </div>
+    ${hintHtml}<p class="hint">Модель: свободное пространство + дифракция на рельефе (ITU-R P.526-15), k = ${S.radio.k.toFixed(2)}, местность у пульта: ${CLUTTER_NAME()}. Лес, здания, помехи и диаграммы антенн не учтены — это оценка, а не гарантия.</p>`)}
+    ${det('cmp', 'Сравнить высоты и аппаратуру', `<p class="hint">Высота дрона ${altModeText()} — нажмите строку, чтобы выбрать.</p>
     <table class="rt" id="tblH"><tr>${hHead}</tr>${hRows}</table>
-    ${presetTables}
-    ${hintHtml}<p class="hint">Расчёт: свободное пространство + дифракция на рельефе по ITU-R P.526 (дельта-Буллингтон, P.526-15 §4.5), k = ${S.radio.k.toFixed(2)}. Профиль и линия визирования общие, потери считаются на частоте каждой линии. Местность у пульта: ${CLUTTER_NAME()}. Помехи и диаграммы антенн не моделируются.</p>
+    ${presetTables}`)}
   `);
-  drawProfile(b.querySelector('#profileCanvas')!, res, { a: `А ${st.antH} м`, b: `Б ${Math.round(absB - r.groundB)} м` });
+  b.querySelectorAll<HTMLDetailsElement>('details[data-d]').forEach((d) => d.addEventListener('toggle', () => {
+    if (d.open) profOpen.add(d.dataset.d!); else profOpen.delete(d.dataset.d!);
+  }));
+  const cv = b.querySelector<HTMLCanvasElement>('#profileCanvas')!;
+  const labels = { a: `Пульт ${st.antH} м`, b: `Дрон ${Math.round(absB - r.groundB)} м` };
+  drawProfile(cv, res, labels);
+  // Смена темы при открытом профиле перерисовывает холст (CSS меняется сам, пиксели — нет).
+  // Один постоянный обработчик хранит только последний профиль — без накопления подписок.
+  profRedraw = () => { if (cv.isConnected && !$('sheet').hidden) drawProfile(cv, res, labels); };
   b.querySelector('#tblH')!.addEventListener('click', (e) => {
     const tr = (e.target as HTMLElement).closest('tr[data-h]') as HTMLElement | null;
     if (!tr) return;
@@ -339,7 +470,7 @@ export function applyPreset(id: string, line?: LineId) {
   if (ln === 'video') { Object.assign(S.video.radio, p.p); S.video.presetId = id; S.video.enabled = true; }
   else { Object.assign(S.radio, p.p); S.presetId = id; }
   emit('radio');
-  toast(`${ln === 'video' ? 'Видео' : 'Управление'}: ${p.name}`);
+  toast(`${ln === 'video' ? 'Видео' : 'Управление'}: ${presetName(p)}`);
 }
 
 // ---------- «Где встать»: лучшее место для пульта, чтобы дотянуться до прицела ----------
@@ -399,15 +530,14 @@ export async function findBestSpot(radius: number) {
   }
   progress(null);
   top.forEach((t, i) => {
-    const el = h(`<div class="mk" title="Вариант ${i + 1}" style="color:${STATUS_COL[t.pair.status]}">◆<span class="mk-label">${i + 1}: ${t.res.margin.toFixed(0)} дБ</span></div>`);
+    const el = h(`<div class="mk" title="Вариант ${i + 1}" style="color:${statusCss(t.pair.status)}">◆<span class="mk-label">${i + 1} ${ICON[t.pair.status]}</span></div>`);
     el.addEventListener('click', (e) => { e.stopPropagation(); setStation(t.p); clearBest(); toast('Пульт поставлен в выбранную точку'); });
     bestMarkers.push(new maplibregl.Marker({ element: el }).setLngLat([t.p.lon, t.p.lat]).addTo(map));
   });
-  const cell = (x: LinkResult) => `<td style="color:${STATUS_COL[x.status]}">${x.margin.toFixed(1)}</td>`;
-  const rows = top.map((t, i) => `<tr data-i="${i}"><td>${i + 1}</td><td>${Math.round(t.gA)} м</td><td>${fmtDist(t.dist)}</td><td>${t.res.los ? 'да' : 'нет'}</td>${cell(t.pair.rc)}${t.pair.video ? cell(t.pair.video) : ''}</tr>`).join('');
+  const rows = top.map((t, i) => `<tr data-i="${i}"><td class="num">${i + 1}</td><td class="${stCls(t.pair.status)}">${ICON[t.pair.status]} ${pairVerdict(t.pair)}</td><td class="num">${km(t.dist)}</td><td class="num ${stCls(t.res.status)}">${dB(t.res.margin)}</td></tr>`).join('');
   const b = openSheet('Где встать пилоту', `
-    <p class="hint">Лучшие точки в радиусе ${fmtDist(radius)} ${S.station ? 'от пульта' : 'от прицела'} для связи с дроном над прицелом на ${S.droneH} м (${altModeText()}), антенна ${antH} м.${vEff ? ' Ранжирование — по худшей из двух линий (управление / видео).' : ''} Нажмите строку или ромб на карте, чтобы перенести пульт.</p>
-    <table class="rt"><tr><th>#</th><th>Рельеф</th><th>До прицела</th><th>Видимость</th>${vEff ? '<th>Упр., дБ</th><th>Видео, дБ</th>' : '<th>Запас, дБ</th>'}</tr>${rows}</table>
+    <p class="hint">Лучшие места в ${km(radius)} ${S.station ? 'от пульта' : 'от прицела'} для дрона над прицелом на ${S.droneH} м. Нажмите строку или ромб на карте — пульт переедет туда.</p>
+    <table class="rt"><tr><th>#</th><th>Связь</th><th>До прицела</th><th>Запас</th></tr>${rows}</table>
     <div class="row"><button class="ghost" id="bsClear">Убрать варианты</button></div>`, clearBest);
   b.querySelector('table')!.addEventListener('click', (e) => {
     const tr = (e.target as HTMLElement).closest('tr[data-i]') as HTMLElement | null;

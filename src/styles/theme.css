@@ -1,0 +1,132 @@
+/* Цветовые токены тем. Значения из блоков «@tokens» обязаны совпадать с THEMES в src/theme.ts —
+ * это проверяет src/theme.test.ts (и там же считается WCAG-контраст). Меняете цвет — меняйте в обоих местах.
+ * Порядок: день по умолчанию → ночь по prefers-color-scheme (пока JS не выставил data-theme) → явный data-theme. */
+:root, :root[data-theme="day"] {
+  /* @tokens day */
+  --bg: #e9e5dd;
+  --panel: #fbfaf7;
+  --panel-2: #f1ede6;
+  --field: #ffffff;
+  --line: #d3ccc0;
+  --line-strong: #8c8478;
+  --text: #1d1b18;
+  --muted: #4d4840;
+  --accent: #d9a446;
+  --accent-ink: #1d1b18;
+  --accent-text: #7a4b0c;
+  --accent-soft: #f6e7c9;
+  --ok: #1e6b38;
+  --weak: #7f5600;
+  --none: #a8322a;
+  --ok-bg: #e1efe4;
+  --weak-bg: #f6ecd3;
+  --none-bg: #f8e3df;
+  --chart-bg: #f5f2ec;
+  /* производные (не текст — контраст не нормируется) */
+  --grid: rgba(29, 27, 24, 0.13);
+  --fresnel: rgba(217, 164, 70, 0.22);
+  --fresnel60: rgba(217, 164, 70, 0.38);
+  --terrain-top: #b3a985;
+  --terrain-bot: #ddd6c4;
+  --terrain-line: #6b5f3a;
+  --chart-los: #a8701a; /* линия визирования на светлом графике — темнее акцента */
+  --shadow: 0 2px 10px rgba(40, 30, 15, 0.18);
+  --shadow-lg: 0 8px 30px rgba(40, 30, 15, 0.25);
+  --scrim: rgba(20, 18, 15, 0.45);
+  --hover: rgba(29, 27, 24, 0.06);
+  --grip: #a9a194;
+  --danger-line: #d6a39c;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="day"]) {
+    /* @tokens night */
+  --bg: #171614;
+  --panel: #23211e;
+  --panel-2: #2c2a26;
+  --field: #1b1a17;
+  --line: #3d3a35;
+  --line-strong: #6b655c;
+  --text: #eee9e0;
+  --muted: #b8b0a3;
+  --accent: #d6a24c;
+  --accent-ink: #1a1309;
+  --accent-text: #e3b566;
+  --accent-soft: #3a3020;
+  --ok: #74d18f;
+  --weak: #e8c160;
+  --none: #f4907f;
+  --ok-bg: #1c3324;
+  --weak-bg: #382e15;
+  --none-bg: #3d201c;
+  --chart-bg: #1b1a17;
+    --grid: rgba(238, 233, 224, 0.09);
+    --fresnel: rgba(214, 162, 76, 0.14);
+    --fresnel60: rgba(214, 162, 76, 0.25);
+    --terrain-top: #6b6450;
+    --terrain-bot: #2a2823;
+    --terrain-line: #b8ab83;
+    --chart-los: #d6a24c;
+    --shadow: 0 3px 14px rgba(0, 0, 0, 0.5);
+    --shadow-lg: 0 10px 36px rgba(0, 0, 0, 0.6);
+    --scrim: rgba(0, 0, 0, 0.55);
+    --hover: rgba(255, 255, 255, 0.05);
+    --grip: #645f56;
+    --danger-line: #6e3530;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="night"] {
+  /* @tokens night */
+  --bg: #171614;
+  --panel: #23211e;
+  --panel-2: #2c2a26;
+  --field: #1b1a17;
+  --line: #3d3a35;
+  --line-strong: #6b655c;
+  --text: #eee9e0;
+  --muted: #b8b0a3;
+  --accent: #d6a24c;
+  --accent-ink: #1a1309;
+  --accent-text: #e3b566;
+  --accent-soft: #3a3020;
+  --ok: #74d18f;
+  --weak: #e8c160;
+  --none: #f4907f;
+  --ok-bg: #1c3324;
+  --weak-bg: #382e15;
+  --none-bg: #3d201c;
+  --chart-bg: #1b1a17;
+  --grid: rgba(238, 233, 224, 0.09);
+  --fresnel: rgba(214, 162, 76, 0.14);
+  --fresnel60: rgba(214, 162, 76, 0.25);
+  --terrain-top: #6b6450;
+  --terrain-bot: #2a2823;
+  --terrain-line: #b8ab83;
+  --chart-los: #d6a24c;
+  --shadow: 0 3px 14px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 10px 36px rgba(0, 0, 0, 0.6);
+  --scrim: rgba(0, 0, 0, 0.55);
+  --hover: rgba(255, 255, 255, 0.05);
+  --grip: #645f56;
+  --danger-line: #6e3530;
+  color-scheme: dark;
+}
+/* Общие для обеих тем */
+:root {
+  --warn: var(--weak); /* старые имена — алиасы */
+  --bad: var(--none);
+  --digit: var(--none); /* выделение километровых цифр СК-42 */
+  /* статусы НА КАРТЕ (линия связи, растр зоны): насыщенные, одинаковые в обеих темах — подложка от темы не зависит.
+     = STATUS_MAP в theme.ts (проверяет тест); текстовые --ok/--weak/--none — отдельно. */
+  --map-ok: #3fae5f;
+  --map-weak: #e0a530;
+  --map-none: #d9473a;
+  --font-ui: "Golos Text", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  --r: 10px;
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+}

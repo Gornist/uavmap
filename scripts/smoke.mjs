@@ -101,12 +101,14 @@ async function scenario() {
   await step('поставить пульт (Проверить связь)', async () => {
     await ev(`document.getElementById('btnLink').click(); true`);
     await waitFor(`!document.getElementById('linkStrip').hidden`);
-    await waitFor(`/Упр\\.|запас|рельеф|Прицел на пульте/.test(document.getElementById('lsStatus').textContent)`);
+    await waitFor(`/Связь|грани|Нет |ниже рельефа|Считаю|рельеф|Прицел на пульте/.test(document.getElementById('lsStatus').textContent)`);
   });
   await step('связь до креста после сдвига 3 км на северо-восток', async () => {
     await ev(`(() => { const m = window.__map, c = m.getCenter(); m.jumpTo({ center: [c.lng + 0.03, c.lat + 0.02] }); return true; })()`);
-    await waitFor(`/Упр\\.|запас/.test(document.getElementById('lsStatus').textContent)`);
-    return ev(`document.getElementById('lsStatus').textContent`);
+    await waitFor(`/Упр\\.|Запас/.test(document.getElementById('lsStatus').textContent)`);
+    const t = await ev(`document.getElementById('lsStatus').textContent`);
+    if (!/[✓⚠✕]/.test(t) || !/км/.test(t)) throw new Error('нет вердикта со значком и дальности: ' + t);
+    return t;
   });
   await step('строка связи показывает обе линии', async () => {
     // На этой трассе дрон на 100 м оказывается ниже рельефа (прочерки) — поднимаем его, чтобы увидеть запасы.
@@ -114,8 +116,10 @@ async function scenario() {
     await waitFor(`/Упр\\.\\s*[+−]\\d/.test(document.getElementById('lsStatus').textContent)`);
     const t = await ev(`document.getElementById('lsStatus').textContent`);
     if (!/Упр\.\s*[+−]\d/.test(t) || !/Видео\s*[+−]\d/.test(t)) throw new Error('нет обеих линий: ' + t);
+    const big = await ev(`document.querySelector('#lsStatus .verdict-big')?.className || ''`);
+    if (!/status-(ok|weak|none)/.test(big)) throw new Error('у вердикта нет класса статуса: ' + big);
     const hl = await ev(`document.getElementById('hereLink').textContent`);
-    if (!/упр\..*видео/i.test(hl)) throw new Error('плашка «До пульта» без обеих линий: ' + hl);
+    if (!/До пульта.*[✓⚠✕]/.test(hl)) throw new Error('плашка «До пульта» без вердикта: ' + hl);
     return t;
   });
   await shot('2-link');
@@ -127,11 +131,18 @@ async function scenario() {
   });
   await shot('3-profile');
 
-  await step('профиль: вердикт и таблицы по обеим линиям', async () => {
+  await step('профиль: вердикт, объяснение, 3 цифры и таблицы по обеим линиям в «Подробнее»', async () => {
     const v = await ev(`document.querySelector('#shBody .verdict')?.textContent || ''`);
-    if (!/Управление/.test(v) || !/видео/.test(v)) throw new Error('вердикт без двух линий: ' + v);
+    if (!/[✓⚠✕]/.test(v)) throw new Error('вердикт без значка: ' + v);
+    const why = await ev(`document.querySelector('#shBody .verdict-why')?.textContent || ''`);
+    if (why.length < 10) throw new Error('нет объяснения вердикта');
+    const keys = await ev(`document.querySelectorAll('#shBody .kv-key > div').length`);
+    if (keys !== 3) throw new Error('ключевых цифр не 3: ' + keys);
+    if (await ev(`[...document.querySelectorAll('#shBody details.details')].some(d => d.open)`)) throw new Error('«Подробнее» раскрыто по умолчанию');
+    await ev(`document.querySelectorAll('#shBody details.details').forEach(d => d.open = true); true`);
     if (!(await ev(`!!document.getElementById('tblPV') && [...document.querySelectorAll('#tblH th')].some(t => /Видео/.test(t.textContent))`))) throw new Error('нет колонки/таблицы видео');
-    return v;
+    if (!(await ev(`/Упр\\./.test(document.querySelector('#shBody details .kv')?.textContent || '') || /упр\\./.test(document.querySelector('#shBody details .kv')?.textContent || '')`))) throw new Error('в «Подробнее» нет данных по управлению');
+    return `${v} — ${why}`;
   });
   await ev(`(() => { const i = document.getElementById('inDrone'); i.value = '100'; i.dispatchEvent(new Event('input')); return true; })()`);
   await step('зона покрытия 10 км', async () => {
@@ -141,9 +152,13 @@ async function scenario() {
     const t0 = Date.now();
     await waitFor(`!!window.__map.getLayer('cov-raster')`, 60000);
     const sec = ((Date.now() - t0) / 1000).toFixed(1);
-    const hdr = await ev(`[...document.querySelectorAll('#shBody table.rt th')].map(t => t.textContent).join('|')`);
+    await waitFor(`/Связь держится до/.test(document.querySelector('#shBody .cov-result')?.textContent || '')`, 5000);
+    const sum = await ev(`document.querySelector('#shBody .cov-result').textContent`);
+    // Таблица — в свёрнутом «Подробнее»: раскрываем, как пользователь.
+    await ev(`(() => { const d = [...document.querySelectorAll('#shBody details.details')].find(x => /Подробнее/.test(x.querySelector('summary').textContent)); if (d) d.open = true; return true; })()`);
+    const hdr = await ev(`[...document.querySelectorAll('#shBody details[open] table.rt th')].map(t => t.textContent).join('|')`);
     if (!/Видео/.test(hdr)) throw new Error('в таблице зоны нет колонки «Видео»: ' + hdr);
-    return `${sec} с, строк в таблице: ${await ev(`document.querySelectorAll('#shBody table.rt tr').length - 1`)}, колонки: ${hdr}`;
+    return `${sec} с, «${sum}», строк в таблице: ${await ev(`document.querySelectorAll('#shBody table.rt tr').length - 1`)}, колонки: ${hdr}`;
   });
   await sleep(800);
   await shot('4-coverage');
@@ -169,6 +184,19 @@ async function scenario() {
   });
   await step('меню: нет прокрутки и кнопки ≥ 44 px', () => checkLayout('меню'));
   await shot('5-menu');
+  await step('тема: переключатель День / Ночь / Авто в настройках', async () => {
+    await ev(`document.querySelector('.dr-back')?.click(); true`);
+    await ev(`[...document.querySelectorAll('.dr-item')].find(b => /Настройки/.test(b.textContent)).click(); true`);
+    const pick = (t) => ev(`(() => { const b = [...document.querySelectorAll('#drBody .seg button')].find(x => x.textContent.trim() === '${t}'); if (!b) return false; b.click(); return true; })()`);
+    if (!(await pick('Ночь'))) throw new Error('нет кнопки «Ночь»');
+    await sleep(300);
+    const night = await ev(`document.documentElement.dataset.theme`);
+    await pick('День'); await sleep(300);
+    const day = await ev(`document.documentElement.dataset.theme`);
+    await pick('Авто');
+    if (night !== 'night' || day !== 'day') throw new Error(`data-theme: ${night} / ${day}`);
+    return 'night → day → авто';
+  });
 
   if (mode === 'mobile') {
     await ev(`document.getElementById('drClose').click(); true`);

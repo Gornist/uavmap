@@ -10,6 +10,9 @@ export function drawProfile(cv: HTMLCanvasElement, r: LinkResult, labels: { a: s
   ctx.clearRect(0, 0, W, H);
   const css = getComputedStyle(document.documentElement);
   const col = (n: string) => css.getPropertyValue(n).trim();
+  // Шрифты и цвета — из CSS-переменных темы (styles/theme.css), поэтому график следует Дневной/Ночной теме.
+  const mono = col('--font-mono') || 'ui-monospace, Menlo, monospace';
+  const ui = col('--font-ui') || 'system-ui, sans-serif';
 
   const n = r.d.length - 1, D = r.dist;
   let lo = Infinity, hi = -Infinity;
@@ -19,13 +22,13 @@ export function drawProfile(cv: HTMLCanvasElement, r: LinkResult, labels: { a: s
   }
   const pad = (hi - lo) * 0.08 + 5;
   lo -= pad; hi += pad;
-  const L = 44, Rt = 10, T = 12, B = 24;
+  const L = 48, Rt = 10, T = 12, B = 24;
   const X = (d: number) => L + ((W - L - Rt) * d) / D;
   const Y = (h: number) => T + ((H - T - B) * (hi - h)) / (hi - lo);
 
   // сетка
   ctx.strokeStyle = col('--grid'); ctx.fillStyle = col('--muted');
-  ctx.font = '11px ui-monospace, Menlo, monospace'; ctx.lineWidth = 1;
+  ctx.font = `12px ${mono}`; ctx.lineWidth = 1;
   const stepH = niceStep((hi - lo) / 4), stepD = niceStep(D / 6);
   ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
   for (let h = Math.ceil(lo / stepH) * stepH; h <= hi; h += stepH) {
@@ -72,7 +75,7 @@ export function drawProfile(cv: HTMLCanvasElement, r: LinkResult, labels: { a: s
   }
 
   // линия визирования
-  ctx.strokeStyle = col('--accent'); ctx.lineWidth = 2;
+  ctx.strokeStyle = col('--chart-los') || col('--accent'); ctx.lineWidth = 2;
   ctx.setLineDash(r.los ? [] : [6, 4]);
   ctx.beginPath(); ctx.moveTo(X(0), Y(r.los_h[0])); ctx.lineTo(X(D), Y(r.los_h[n])); ctx.stroke();
   ctx.setLineDash([]);
@@ -89,7 +92,7 @@ export function drawProfile(cv: HTMLCanvasElement, r: LinkResult, labels: { a: s
     ctx.beginPath(); ctx.moveTo(X(d), Y(g)); ctx.lineTo(X(d), Y(h)); ctx.stroke();
     ctx.fillStyle = col('--accent'); ctx.beginPath(); ctx.arc(X(d), Y(h), 4, 0, 7); ctx.fill();
     ctx.fillStyle = col('--text'); ctx.textAlign = align; ctx.textBaseline = 'bottom';
-    ctx.font = 'bold 12px system-ui, sans-serif';
+    ctx.font = `600 13px ${ui}`;
     ctx.fillText(t, X(d) + (align === 'left' ? 6 : -6), Y(h) - 4);
   };
   mast(0, r.ground[0], r.los_h[0], labels.a, 'left');

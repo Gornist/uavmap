@@ -3,27 +3,28 @@
 import { S, $, h, map, center, toast, emit, on, field, BASES, applyMapStyle } from './app';
 import { applyContours } from './contours';
 import { saveNow, clearSaved, restoreProject, importText, toGeoJSON, toGPX, toKML, download } from './store';
-import { presetsFor, RadioParams, LineId, RadioPreset, budget, freeSpaceRange, radioHorizon } from './radio';
-import { applyPreset, setStation, removeStation, stationGround, altModeText } from './link';
+import { presetsFor, RadioParams, LineId, budget, freeSpaceRange, radioHorizon } from './radio';
+import { applyPreset, setStation, removeStation, stationGround, presetName, km } from './link';
 import { parseCoords, formatCoords, CoordFormat } from './coords';
-import { distance, fmtDist } from './geo';
+import { distance } from './geo';
 import { openMark } from './marks';
 import { openCoverageSheet } from './coverage';
 import { CLUTTER, clutterLoss, withClutter } from './clutter';
 import { openOfflineSheet } from './offline';
 import { openMyMapsSheet } from './mymaps';
+import { getTheme, setTheme, type ThemeChoice } from './theme';
 
 export type MenuSection = 'situation' | 'map' | 'calc' | 'files' | 'settings' | 'help';
 
 const MAX_FILE = 20 * 1024 * 1024;
 const REPO = 'https://github.com/Gornist/uavmap';
 const ITEMS: { id: MenuSection; ico: string; title: string; sub: string }[] = [
-  { id: 'situation', ico: '📍', title: 'Обстановка', sub: 'пульт, метки, маршруты, переход к координатам' },
+  { id: 'situation', ico: '📍', title: 'Обстановка', sub: 'пульт, метки, маршруты' },
   { id: 'map', ico: '🗺', title: 'Карта', sub: 'подложка, рельеф, подписи' },
-  { id: 'calc', ico: '📡', title: 'Расчёт', sub: 'аппаратура, частоты, высоты, зона покрытия' },
-  { id: 'files', ico: '📁', title: 'Файлы', sub: 'импорт, экспорт, резервная копия' },
-  { id: 'settings', ico: '⚙', title: 'Настройки', sub: 'координаты, сброс' },
-  { id: 'help', ico: '❓', title: 'Помощь', sub: 'как читать расчёт' },
+  { id: 'calc', ico: '📡', title: 'Расчёт', sub: 'аппаратура, местность, высота' },
+  { id: 'files', ico: '📁', title: 'Файлы', sub: 'офлайн, импорт, экспорт' },
+  { id: 'settings', ico: '⚙', title: 'Настройки', sub: 'тема, координаты, сброс' },
+  { id: 'help', ico: '❓', title: 'Помощь', sub: 'как пользоваться' },
 ];
 
 let current: MenuSection | null = null;
@@ -102,7 +103,7 @@ function situation(el: HTMLElement) {
   } else {
     const c = formatCoords(st.lat, st.lon, S.coordFormat);
     const info = h('<p class="hint"></p>');
-    info.textContent = `${c.label}: ${c.rows.map(([k, v]) => `${k} ${v.replace(/<\/?em>/g, '')}`).join(' · ')} · рельеф: ${stationGround !== null ? Math.round(stationGround) + ' м' : '…'}`;
+    info.textContent = `${c.label}: ${c.rows.map(([k, v]) => `${k} ${v.replace(/<\/?em>/g, '')}`).join(' · ')} · высота места: ${stationGround !== null ? Math.round(stationGround) + ' м' : '…'}`;
     el.appendChild(info);
     const ant = h(field('Антенна над землёй, м', '<input type="number" inputmode="decimal" min="0" max="100" step="0.5">'));
     const inp = ant.querySelector('input') as HTMLInputElement;
@@ -142,7 +143,7 @@ function situation(el: HTMLElement) {
     for (let i = 1; i < r.pts.length; i++) len += distance({ lon: r.pts[i - 1][0], lat: r.pts[i - 1][1] }, { lon: r.pts[i][0], lat: r.pts[i][1] });
     const li = h('<div class="li"><span class="t"></span><small></small><button class="mini" title="Переименовать">✎</button><button class="mini" title="Удалить">🗑</button></div>');
     li.querySelector('.t')!.textContent = r.name || 'Маршрут';
-    li.querySelector('small')!.textContent = fmtDist(len);
+    li.querySelector('small')!.textContent = km(len);
     li.addEventListener('click', () => {
       if (!r.pts.length) return;
       // Экстремумы циклом: spread по сотням тысяч точек превышает предел аргументов.
@@ -227,6 +228,7 @@ const RADIO_FIELDS: { key: keyof RadioParams; label: string; min: number; max: n
 ];
 
 let calcTab: LineId = 'rc';
+let advOpen = false; // «Для опытных» остаётся раскрытым при перерисовке раздела
 const lineRadio = (line: LineId) => (line === 'rc' ? S.radio : S.video.radio);
 const linePreset = (line: LineId) => (line === 'rc' ? S.presetId : S.video.presetId);
 /** Подписи полей для видео: передатчик — на дроне, приёмник — на земле. */
@@ -235,28 +237,6 @@ const VIDEO_LABELS: Partial<Record<keyof RadioParams, string>> = {
   txGainDbi: 'Усиление антенны дрона (VTX), дБи',
   rxGainDbi: 'Усиление антенны приёма на земле, дБи',
 };
-
-function presetList(el: HTMLElement, line: LineId) {
-  const group = (title: string | null, list: RadioPreset[]) => {
-    if (!list.length) return;
-    if (title) el.appendChild(h(`<p class="hint" style="margin:8px 0 2px"></p>`)).textContent = title;
-    const pl = h('<div class="list"></div>');
-    for (const p of list) {
-      const li = h(`<div class="li"${p.id === linePreset(line) ? ' style="border-color:var(--accent)"' : ''}><span class="t"></span><small></small></div>`);
-      li.querySelector('.t')!.textContent = p.name;
-      li.querySelector('small')!.textContent = p.note;
-      li.addEventListener('click', () => { applyPreset(p.id, line); render(); });
-      pl.appendChild(li);
-    }
-    el.appendChild(pl);
-  };
-  const all = presetsFor(line);
-  if (line === 'video') group(null, all);
-  else {
-    group(null, all.filter((p) => p.kind === 'rc'));
-    group('Телеметрия и общий канал (Wi-Fi)', all.filter((p) => p.kind !== 'rc'));
-  }
-}
 
 function lineParams(el: HTMLElement, line: LineId, upd: () => void) {
   const R = lineRadio(line);
@@ -280,51 +260,30 @@ function lineParams(el: HTMLElement, line: LineId, upd: () => void) {
 }
 
 function calc(el: HTMLElement) {
-  section(el, 'Радиолинии');
-  const tabs = h('<div class="seg"></div>');
-  for (const [id, t] of [['rc', 'Управление'], ['video', S.video.enabled ? 'Видео' : 'Видео (выкл.)']] as const) {
-    tabs.appendChild(button(t, calcTab === id ? 'on' : '', () => { calcTab = id; render(); }));
-  }
-  el.appendChild(tabs);
-  el.appendChild(h('<p class="hint">Пилот теряет видео раньше управления, поэтому считаются обе линии; дальность ограничивает слабейшая.</p>'));
-
-  const summary = h('<div class="kv"></div>');
-  const upd = () => {
-    const antH = S.station?.antH ?? 2;
-    const rc = withClutter(S.radio, S.clutter), vd = S.video.enabled ? withClutter(S.video.radio, S.clutter) : null;
-    const hz = radioHorizon(antH, S.droneH, S.radio.k);
-    const rng = (p: typeof rc) => { const fs = freeSpaceRange(p); return Number.isFinite(fs) ? fmtDist(fs) : '—'; };
-    const rows: [string, string][] = vd
-      ? [['Потенциал, упр. / видео', `${budget(rc).toFixed(1)} / ${budget(vd).toFixed(1)} дБ`],
-         ['Дальность в своб. пр-ве, упр. / видео', `${rng(rc)} / ${rng(vd)}`],
-         ['Дальность ограничивает', freeSpaceRange(vd) < freeSpaceRange(rc) ? 'видео' : 'управление'],
-         ['Радиогоризонт', fmtDist(hz)]]
-      : [['Энергетический потенциал', `${budget(rc).toFixed(1)} дБ`], ['Дальность в своб. пространстве', rng(rc)], ['Радиогоризонт', fmtDist(hz)]];
-    summary.innerHTML = '';
-    for (const [k, v] of rows) {
-      const d = h('<div><small></small><b></b></div>');
-      d.querySelector('small')!.textContent = k; d.querySelector('b')!.textContent = v;
-      summary.appendChild(d);
+  // ----- аппаратура: два выпадающих списка с человеческими названиями -----
+  section(el, 'Аппаратура');
+  const presetSelect = (line: LineId, label: string) => {
+    const row = h(field(label, '<select></select>'));
+    row.classList.add('col'); // подпись над списком: названия аппаратуры длинные
+    const sel = row.querySelector('select') as HTMLSelectElement;
+    const add = (value: string, text: string) => { const o = document.createElement('option'); o.value = value; o.textContent = text; sel.appendChild(o); };
+    if (line === 'video') add('off', 'Не учитывать видео');
+    for (const p of presetsFor(line)) add(p.id, presetName(p));
+    if (linePreset(line) === 'custom') add('custom', 'Свои параметры (вручную)');
+    sel.value = line === 'video' && !S.video.enabled ? 'off' : linePreset(line);
+    sel.addEventListener('change', () => {
+      if (sel.value === 'off') { S.video.enabled = false; emit('radio'); render(); return; }
+      if (sel.value === 'custom') { if (line === 'video') { S.video.enabled = true; emit('radio'); } render(); return; }
+      applyPreset(sel.value, line); render();
+    });
+    el.appendChild(row);
+    const p = presetsFor(line).find((x) => x.id === linePreset(line));
+    if (p && !(line === 'video' && !S.video.enabled)) {
+      const n = h('<p class="hint muted"></p>'); n.textContent = p.note; el.appendChild(n);
     }
   };
-
-  if (calcTab === 'video') {
-    const c = h('<label class="chk"><input type="checkbox"><span>Учитывать видео</span></label>');
-    const ci = c.querySelector('input') as HTMLInputElement;
-    ci.checked = S.video.enabled;
-    ci.addEventListener('change', () => { S.video.enabled = ci.checked; emit('radio'); render(); });
-    el.appendChild(c);
-  }
-  if (calcTab === 'video' && !S.video.enabled) {
-    el.appendChild(h('<p class="hint">Видео выключено: связь, профиль и зона считаются только по управлению.</p>'));
-  } else {
-    section(el, calcTab === 'rc' ? 'Аппаратура управления' : 'Аппаратура видео');
-    presetList(el, calcTab);
-    if (linePreset(calcTab) === 'custom') el.appendChild(h('<p class="hint">Параметры изменены вручную.</p>'));
-    el.appendChild(h('<p class="hint">Пресеты ориентировочные — подставьте паспортные данные своей аппаратуры.</p>'));
-    section(el, calcTab === 'rc' ? 'Параметры линии управления' : 'Параметры линии видео');
-    lineParams(el, calcTab, upd);
-  }
+  presetSelect('rc', 'Управление');
+  presetSelect('video', 'Видео');
 
   section(el, 'Местность у пульта');
   const cseg = h('<div class="seg"></div>');
@@ -335,19 +294,16 @@ function calc(el: HTMLElement) {
   }
   el.appendChild(cseg);
   const cur = CLUTTER.find((c) => c.id === S.clutter)!;
-  const ch = h('<p class="hint"></p>');
-  ch.textContent = `${cur.hint}: +${clutterLoss(S.clutter, S.radio.freqMHz).toFixed(1)} дБ на ${S.radio.freqMHz} МГц${S.video.enabled ? ` (видео: +${clutterLoss(S.clutter, S.video.radio.freqMHz).toFixed(1)} дБ на ${S.video.radio.freqMHz} МГц)` : ''} (по ITU-R P.833/P.2108; на низких частотах меньше). Общая для обеих линий, складывается с ручными «потерями на местности».`;
+  const ch = h('<p class="hint muted"></p>');
+  ch.textContent = `${cur.hint[0].toUpperCase()}${cur.hint.slice(1)}${clutterLoss(S.clutter, S.radio.freqMHz) ? ` — сигнал слабее на ${Math.round(clutterLoss(S.clutter, S.radio.freqMHz))} дБ` : ''}.`;
   el.appendChild(ch);
 
-  section(el, 'Высоты');
+  section(el, 'Высота дрона');
   const seg = h('<div class="seg"></div>');
-  for (const [m, t] of [['takeoff', 'над точкой взлёта'], ['terrain', 'над рельефом']] as const) {
+  for (const [m, t] of [['takeoff', 'Над точкой взлёта'], ['terrain', 'Над рельефом']] as const) {
     seg.appendChild(button(t, S.altMode === m ? 'on' : '', () => { S.altMode = m; emit('radio'); render(); }));
   }
   el.appendChild(seg);
-  const hn = h('<p class="hint"></p>');
-  hn.textContent = `Сейчас: высота дрона ${altModeText()}.`;
-  el.appendChild(hn);
   const dh = h(field('Высота дрона, м', '<input type="number" inputmode="decimal" min="0" max="5000" step="5">'));
   const di = dh.querySelector('input') as HTMLInputElement;
   di.value = String(S.droneH);
@@ -360,7 +316,52 @@ function calc(el: HTMLElement) {
   });
   el.appendChild(dh);
 
-  el.appendChild(h('<h4>Высоты для таблиц и зоны</h4>'));
+  el.appendChild(h('<div class="row"></div>')).appendChild(button('Зона покрытия…', 'primary', () => { close(); openCoverageSheet(); }));
+
+  // ----- для опытных: числовые параметры линий, высоты для таблиц, итог -----
+  const adv = document.createElement('details');
+  adv.className = 'details';
+  adv.open = advOpen;
+  adv.addEventListener('toggle', () => { advOpen = adv.open; });
+  const sum = document.createElement('summary');
+  sum.textContent = 'Для опытных';
+  adv.appendChild(sum);
+  el.appendChild(adv);
+
+  const summary = h('<div class="kv"></div>');
+  const upd = () => {
+    const antH = S.station?.antH ?? 2;
+    const rc = withClutter(S.radio, S.clutter), vd = S.video.enabled ? withClutter(S.video.radio, S.clutter) : null;
+    const hz = radioHorizon(antH, S.droneH, S.radio.k);
+    const rng = (p: typeof rc) => km(freeSpaceRange(p));
+    const rows: [string, string][] = vd
+      ? [['Дальность без рельефа, упр. / видео', `${rng(rc)} / ${rng(vd)}`],
+         ['Потенциал, упр. / видео', `${Math.round(budget(rc))} / ${Math.round(budget(vd))} дБ`],
+         ['Радиогоризонт', km(hz)]]
+      : [['Дальность без рельефа', rng(rc)], ['Энергетический потенциал', `${Math.round(budget(rc))} дБ`], ['Радиогоризонт', km(hz)]];
+    summary.innerHTML = '';
+    for (const [k, v] of rows) {
+      const d = h('<div><small></small><b class="num"></b></div>');
+      d.querySelector('small')!.textContent = k; d.querySelector('b')!.textContent = v;
+      summary.appendChild(d);
+    }
+  };
+  upd();
+  adv.appendChild(summary);
+
+  const tabs = h('<div class="seg"></div>');
+  for (const [id, t] of [['rc', 'Управление'], ['video', 'Видео']] as const) {
+    tabs.appendChild(button(t, calcTab === id ? 'on' : '', () => { calcTab = id; render(); }));
+  }
+  adv.appendChild(tabs);
+  if (calcTab === 'video' && !S.video.enabled) adv.appendChild(h('<p class="hint">Видео не учитывается — выберите его в списке «Видео» выше.</p>'));
+  else {
+    if (linePreset(calcTab) === 'custom') adv.appendChild(h('<p class="hint">Параметры изменены вручную.</p>'));
+    lineParams(adv, calcTab, upd);
+    adv.appendChild(h('<p class="hint">Пресеты ориентировочные — подставьте паспортные данные своей аппаратуры.</p>'));
+  }
+
+  adv.appendChild(h('<h4>Высоты для таблиц и зоны</h4>'));
   const chips = h('<div class="chips"></div>');
   const drawChips = () => {
     chips.innerHTML = '';
@@ -374,7 +375,7 @@ function calc(el: HTMLElement) {
     }
   };
   drawChips();
-  el.appendChild(chips);
+  adv.appendChild(chips);
   const add = h('<div class="row"><input type="number" inputmode="decimal" min="1" max="5000" placeholder="Новая высота, м" style="flex:3"></div>');
   const ai = add.querySelector('input') as HTMLInputElement;
   add.appendChild(button('Добавить', 'ghost', () => {
@@ -384,20 +385,14 @@ function calc(el: HTMLElement) {
     if (!S.coverage.heights.includes(v)) S.coverage.heights = [...S.coverage.heights, v].sort((a, b) => a - b);
     ai.value = ''; fire('radio'); drawChips();
   }));
-  el.appendChild(add);
-
-  section(el, 'Итог');
-  upd();
-  el.appendChild(summary);
-  el.appendChild(h('<p class="hint">Радиогоризонт — по высотам антенны пульта и дрона над землёй, без учёта рельефа.</p>'));
-  el.appendChild(button('Зона покрытия…', 'primary', () => { close(); openCoverageSheet(); }));
+  adv.appendChild(add);
 }
 
 // ---------- Файлы ----------
 
 function files(el: HTMLElement) {
   section(el, 'Офлайн');
-  el.appendChild(h('<p class="hint">Рельеф района можно скачать заранее — профиль, зона и горизонтали будут считаться без сети. Подложки офлайн — только из своих файлов (PMTiles): провайдеры спутника и OSM запрещают массовое скачивание.</p>'));
+  el.appendChild(h('<p class="hint">Скачайте рельеф района заранее — расчёт будет работать без сети.</p>'));
   const offRow = h('<div class="row"></div>');
   offRow.append(
     button('Офлайн-районы…', 'ghost', () => { close(); openOfflineSheet(); }),
@@ -406,7 +401,7 @@ function files(el: HTMLElement) {
   el.appendChild(offRow);
 
   section(el, 'Импорт');
-  el.appendChild(h('<p class="hint">GeoJSON, GPX или KML (до 20 МБ): метки и маршруты добавятся к текущим.</p>'));
+  el.appendChild(h('<p class="hint">GeoJSON, GPX или KML до 20 МБ — метки и маршруты добавятся к текущим.</p>'));
   el.appendChild(button('Импортировать файл…', 'primary', () => $('fileIn').click()));
   const fin = $('fileIn') as HTMLInputElement;
   fin.onchange = async () => {
@@ -436,7 +431,7 @@ function files(el: HTMLElement) {
   el.appendChild(row);
 
   section(el, 'Резервная копия проекта');
-  el.appendChild(h('<p class="hint">Всё хранится только на этом устройстве. Копия — полный проект одним файлом.</p>'));
+  el.appendChild(h('<p class="hint">Всё хранится только на этом устройстве; копия — весь проект одним файлом.</p>'));
   const row2 = h('<div class="row"></div>');
   const d = new Date(), p2 = (n: number) => String(n).padStart(2, '0');
   const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}`;
@@ -465,6 +460,13 @@ function files(el: HTMLElement) {
 // ---------- Настройки ----------
 
 function settings(el: HTMLElement) {
+  section(el, 'Тема');
+  const tseg = h('<div class="seg"></div>');
+  for (const [t, label] of [['auto', 'Авто'], ['day', 'День'], ['night', 'Ночь']] as [ThemeChoice, string][]) {
+    tseg.appendChild(button(label, getTheme() === t ? 'on' : '', () => { setTheme(t); render(); }));
+  }
+  el.appendChild(tseg);
+  el.appendChild(h('<p class="hint muted">Авто — по настройке телефона или времени суток.</p>'));
   section(el, 'Формат координат');
   const seg = h('<div class="seg"></div>');
   for (const [f, t] of [['sk42', 'СК-42'], ['dd', 'Градусы'], ['dms', 'Г°М′С″']] as [CoordFormat, string][]) {
@@ -489,32 +491,28 @@ function settings(el: HTMLElement) {
 function help(el: HTMLElement) {
   const blocks: [string, string[]][] = [
     ['Как пользоваться', [
-      '1. Наведите прицел на место пульта и нажмите «Проверить связь» → «Поставить пульт».',
-      '2. Двигайте карту: строка внизу показывает запас связи до точки под прицелом.',
-      '3. «Профиль» открывает разрез трассы с зоной Френеля и таблицы по высотам и аппаратуре.',
-      '4. «Зона покрытия» (раздел «Расчёт») закрашивает карту по запасу связи.',
+      '1. Наведите прицел на место пульта и нажмите «Проверить связь» — пульт встанет в прицел.',
+      '2. Двигайте карту: внизу видно, будет ли связь с дроном над прицелом и на какой высоте.',
+      '3. «Профиль» — разрез местности до прицела: что мешает и до какой высоты подняться.',
+      '4. «Зона» закрашивает карту: зелёный — связь есть, жёлтый — на грани, красный — нет.',
     ]],
-    ['Запас в дБ', [
-      'Запас — на сколько дБ принимаемый сигнал выше чувствительности приёмника. Линий две: управление и видео, у каждой свой запас; общий статус и цвет линии на карте — по худшей.',
-      'Не меньше желаемого запаса — связь уверенная. От 0 до желаемого — на грани, возможны срывы. Меньше 0 — связи нет.',
+    ['Связь есть / на грани / нет', [
+      'Линий две — управление и видео; итог считается по худшей. Видео обычно пропадает раньше.',
+      '«Запас» — насколько сигнал сильнее минимально нужного (в дБ). Запас не меньше желаемого — связь есть; меньше — на грани, возможны срывы; ниже нуля — связи нет.',
     ]],
-    ['Зона Френеля', [
-      'Радиоволна идёт не лучом, а «трубкой» вокруг линии визирования. Если препятствия закрывают более 40 % радиуса первой зоны Френеля, потери растут. Поэтому важно, чтобы свободными оставались не менее 60 %.',
+    ['Высота дрона', [
+      '«Над точкой взлёта» — как показывает пульт: высота от земли у пульта.',
+      '«Над рельефом» — дрон держит высоту над землёй под собой.',
     ]],
-    ['Режимы высоты', [
-      '«Над точкой взлёта» — высота дрона отсчитывается от рельефа под пультом, абсолютная высота полёта постоянна.',
-      '«Над рельефом» — дрон повторяет рельеф, держа заданную высоту над землёй под собой.',
-    ]],
-    ['Ограничения модели', [
-      'Учитываются свободное пространство, дифракция на рельефе (ITU-R P.526, метод Дейгу) и кривизна Земли с коэффициентом рефракции k.',
-      'Не моделируются лес, здания, помехи, диаграммы направленности антенн и погода — для них задайте «потери на местности». Пресеты аппаратуры ориентировочные. Расчёт — оценка, а не гарантия связи.',
+    ['Что не учитывается', [
+      'Лес, здания, помехи, погода и направленность антенн. Для леса или посёлка у пульта выберите «Местность у пульта». Расчёт — оценка, а не гарантия связи.',
     ]],
     ['Источники данных', [
-      'Рельеф: Mapzen Terrain Tiles (AWS Open Data). Снимки и подписи: Esri. Топокарта: OpenTopoMap, OpenStreetMap.',
+      'Рельеф: Mapzen Terrain Tiles (AWS Open Data). Снимки и подписи: Esri. Топокарта: OpenTopoMap, OpenStreetMap. Модель: ITU-R P.526-15.',
     ]],
   ];
   for (const [t, ps] of blocks) {
     section(el, t);
-    for (const s of ps) { const p = h('<p class="hint" style="font-size:13px"></p>'); p.textContent = s; el.appendChild(p); }
+    for (const s of ps) { const p = h('<p class="hint"></p>'); p.textContent = s; el.appendChild(p); }
   }
 }

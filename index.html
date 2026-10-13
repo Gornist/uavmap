@@ -28,14 +28,14 @@
 
   <section id="infoCard" class="card">
     <div class="ic-head">
-      <span>Высота здесь</span>
+      <span title="Высота рельефа под прицелом">Высота</span>
       <b id="hereH">—</b><small>м</small>
       <button id="infoToggle" class="mini" title="Свернуть">−</button>
     </div>
     <div id="infoBody">
       <div class="ic-coords" id="hereCoords"></div>
       <div id="hereLink" class="ic-link" hidden></div>
-      <button class="ic-more" id="btnPoint">Все данные точки…</button>
+      <button class="ic-more" id="btnPoint">Точка: координаты, профиль…</button>
     </div>
   </section>
 
@@ -49,15 +49,15 @@
   <!-- строка «связь до креста» -->
   <div id="linkStrip" hidden>
     <div class="ls-tabs">
-      <button data-ls="link" class="on">Связь до креста</button>
-      <button data-ls="zone">Зона покрытия</button>
+      <button data-ls="link" class="on">Связь</button>
+      <button data-ls="zone">Зона</button>
       <button data-ls="best">Где встать</button>
       <button id="lsClose" class="ls-x" title="Скрыть">×</button>
     </div>
-    <div class="ls-status" id="lsStatus">Двигайте карту — прицел покажет связь</div>
+    <div class="ls-status" id="lsStatus" aria-live="polite">Двигайте карту — прицел покажет связь</div>
     <div class="ls-inputs">
-      <label><span><b class="l-s">А · пульт</b><b class="l-l">А · антенна пульта</b></span><input id="inAnt" type="number" inputmode="decimal" min="0" step="0.5"/><i>м</i></label>
-      <label><span><b class="l-s">Б · дрон</b><b class="l-l">Б · дрон</b> <em id="altModeLbl"></em></span><input id="inDrone" type="number" inputmode="decimal" min="0" step="5"/><i>м</i></label>
+      <label><span><b class="l-s">Антенна</b><b class="l-l">Антенна пульта</b></span><input id="inAnt" type="number" inputmode="decimal" min="0" step="0.5"/><i>м</i></label>
+      <label><span><b class="l-s">Дрон</b><b class="l-l">Дрон</b> <em id="altModeLbl"></em></span><input id="inDrone" type="number" inputmode="decimal" min="0" step="5"/><i>м</i></label>
       <button id="btnProfile" class="primary">Профиль</button>
     </div>
   </div>
@@ -85,7 +85,7 @@
     <div class="dr-head">
       <div>
         <div class="logo big">РАДИУС</div>
-        <div class="dr-sub">Радиовидимость дрона · рельеф · зона Френеля · радиогоризонт</div>
+        <div class="dr-sub">Где будет связь с дроном</div>
       </div>
       <button class="mini" id="drClose">✕</button>
     </div>

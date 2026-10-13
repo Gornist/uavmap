@@ -3,11 +3,11 @@
 import './styles/coverage.css';
 import type { ImageSource } from 'maplibre-gl';
 import { S, h, map, setGeo, fc, line, toast, openSheet, closeSheet, progress, on, persist } from './app';
-import { destination, lonLatToPixel, pixelToLonLat, fmtDist, LatLon } from './geo';
+import { destination, lonLatToPixel, pixelToLonLat, LatLon } from './geo';
 import { rasterIndex } from './coverageRaster';
 import { fetchGrid, demPlan, demPixelM, demQualityHint, DemMissingError, DemGrid } from './elevation';
 import { budget, freeSpaceRange } from './radio';
-import { setStation, altModeText, effRadio, effVideo } from './link';
+import { setStation, effRadio, effVideo, km as fmtKm, ICON, statusRgb, onThemeChange } from './link';
 import { emptyResult, mergeChunk, sectorCrop, splitRays } from './coverageCore';
 import type { CoverageChunk, CoverageLine, CoverageResult } from './coverageCore';
 // ?worker: Vite выбирает формат сам — модуль в dev, классический воркер в сборке (Chrome 68 не умеет module workers).
@@ -94,6 +94,8 @@ export function initCoverage(): void {
   };
   on('station', markStale);
   on('radio', markStale);
+  // Смена темы может сменить цвета статусов: перерисовать растр (кеш цветов в link.ts сбрасывается раньше — его подписка создаётся при импорте).
+  onThemeChange(() => { if (shown) redraw(); rerender?.(); });
 }
 
 function revokeLater(url: string | null) {
@@ -170,14 +172,15 @@ function paint(c: Shown): HTMLCanvasElement {
   const nH = c.heights.length, HS = c.rays * c.res.samples;
   const sel = Math.min(S.coverage.heightIdx, nH - 1);
   const minh = S.coverage.show === 'minh';
+  const col = statusRgb(); // цвета статусов из темы (--ok/--weak/--none)
+  const cOk = col.ok, cWeak = col.weak, cNone = col.none;
   for (let p = 0, o = 0; p < idx.length; p++, o += 4) {
     const k = idx[p];
     if (k < 0) continue;
     if (!minh) {
       const lv = level(sel * HS + k);
-      if (lv === 2) { px[o] = 79; px[o + 1] = 191; px[o + 2] = 114; px[o + 3] = 255; }
-      else if (lv === 1) { px[o] = 227; px[o + 1] = 185; px[o + 2] = 72; px[o + 3] = 255; }
-      else { px[o] = 229; px[o + 1] = 72; px[o + 2] = 77; px[o + 3] = 70; }
+      const cc = lv === 2 ? cOk : lv === 1 ? cWeak : cNone;
+      px[o] = cc[0]; px[o + 1] = cc[1]; px[o + 2] = cc[2]; px[o + 3] = lv === 0 ? 70 : 255;
     } else {
       let hk = -1;
       for (let hi = 0; hi < nH; hi++) if (level(hi * HS + k) === 2) { hk = hi; break; }
@@ -410,6 +413,19 @@ function hint(text: string, cls = 'hint') {
   return d;
 }
 
+// Раскрытые блоки шторки переживают перерисовку.
+let openSettings = false, openMore = false;
+function details(title: string, isOpen: boolean, onToggle: (v: boolean) => void): { el: HTMLDetailsElement; body: HTMLElement } {
+  const el = document.createElement('details');
+  el.className = 'details';
+  el.open = isOpen;
+  const s = document.createElement('summary');
+  s.textContent = title;
+  el.appendChild(s);
+  el.addEventListener('toggle', () => onToggle(el.open));
+  return { el, body: el };
+}
+
 export function openCoverageSheet(): void {
   const body = openSheet('Зона покрытия', '', () => { if (sheetBody === body) { sheetBody = null; rerender = null; } });
   sheetBody = body;
@@ -441,72 +457,20 @@ function render() {
   // Радиус и высоты — входные данные расчёта: прежний результат устаревает.
   const saveInput = () => { inputsRev++; if (shown) stale = true; save(); };
 
-  body.appendChild(sec('Радиус расчёта'));
+  // ----- главное: радиус, высота, «Рассчитать», результат -----
+  body.appendChild(sec('Радиус'));
   body.appendChild(chips(RADII.map((km) => ({
     text: `${km} км`, on: cov.radius === km * 1000, click: () => { cov.radius = km * 1000; saveInput(); },
   }))));
 
-  body.appendChild(sec('Высоты дрона над ' + (S.altMode === 'takeoff' ? 'точкой взлёта' : 'рельефом') + ', м'));
-  const hs = chips(cov.heights.map((v, i) => ({
-    text: `${v} ×`, cls: 'x', click: () => {
-      if (cov.heights.length <= 1) { toast('Нужна хотя бы одна высота'); return; }
-      cov.heights.splice(i, 1);
-      cov.heightIdx = Math.min(cov.heightIdx, cov.heights.length - 1);
-      saveInput();
-    },
-  })));
-  body.appendChild(hs);
-  const add = h('<div class="cov-add"><input type="number" inputmode="numeric" min="1" max="5000" placeholder="м"><button type="button" class="ghost">Добавить</button></div>');
-  const inp = add.querySelector('input')!;
-  add.querySelector('button')!.onclick = () => {
-    const v = Math.round(Number(inp.value));
-    if (!(v >= 1 && v <= 5000)) { toast('Высота от 1 до 5000 м'); return; }
-    if (cov.heights.includes(v)) { toast('Такая высота уже есть'); return; }
-    if (cov.heights.length >= 8) { toast('Не больше 8 высот'); return; }
-    cov.heights.push(v);
-    cov.heights.sort((a, b) => a - b);
-    saveInput();
-  };
-  body.appendChild(add);
-  body.appendChild(hint(`Отсчёт высоты: ${altModeText()}.`));
-
-  body.appendChild(sec('Показывать'));
-  const seg = h('<div class="seg"><button type="button">Запас на высоте</button><button type="button">Мин. высота полёта</button></div>');
-  const [b1, b2] = Array.from(seg.querySelectorAll('button'));
-  (cov.show === 'margin' ? b1 : b2).classList.add('on');
-  b1.onclick = () => { cov.show = 'margin'; persist(); redraw(); render(); };
-  b2.onclick = () => { cov.show = 'minh'; persist(); redraw(); render(); };
-  body.appendChild(seg);
-
-  if (shown?.resV) {
-    body.appendChild(sec('Линия'));
-    const ls = h('<div class="seg"></div>');
-    for (const [id, t] of [['rc', 'Управление'], ['video', 'Видео'], ['both', 'Обе (по худшей)']] as const) {
-      const b = h('<button type="button"></button>');
-      b.textContent = t;
-      if (cov.line === id) b.classList.add('on');
-      b.onclick = () => { cov.line = id; persist(); redraw(); render(); };
-      ls.appendChild(b);
-    }
-    body.appendChild(ls);
-  }
-
   if (cov.show === 'margin') {
+    body.appendChild(sec(`Высота дрона ${S.altMode === 'takeoff' ? 'над точкой взлёта' : 'над рельефом'}`));
     const hsel = shown ? shown.heights : cov.heights;
     body.appendChild(chips(hsel.map((v, i) => ({
       text: `${v} м`, on: i === Math.min(cov.heightIdx, hsel.length - 1),
       click: () => { cov.heightIdx = i; persist(); redraw(); render(); },
     }))));
   }
-
-  body.appendChild(sec('Прозрачность накладки'));
-  const op = h(`<input type="range" class="cov-opacity" min="0.1" max="1" step="0.05" value="${cov.opacity}">`) as HTMLInputElement;
-  op.oninput = () => {
-    cov.opacity = Number(op.value);
-    if (map.getLayer('cov-raster')) map.setPaintProperty('cov-raster', 'raster-opacity', cov.opacity);
-  };
-  op.onchange = persist;
-  body.appendChild(op);
 
   const row = h('<div class="row"></div>');
   if (running) {
@@ -518,72 +482,149 @@ function render() {
     r.onclick = () => { void start(); };
     row.appendChild(r);
     if (shown) {
-      const x = h('<button type="button" class="ghost">Убрать</button>');
+      const x = h('<button type="button" class="ghost">Убрать с карты</button>');
       x.onclick = () => clearCoverage();
       row.appendChild(x);
     }
   }
   body.appendChild(row);
 
+  if (shown?.prelim) body.appendChild(hint('Черновой расчёт — точный идёт, картинка обновится.', 'cov-prelim'));
+  if (shown && stale) body.appendChild(hint('Пульт или настройки изменились — нажмите «Рассчитать» ещё раз.', 'cov-stale'));
+  if (shown) renderSummary(body, shown);
+
+  // ----- настройки зоны -----
+  const st = details('Настройки зоны', openSettings, (v) => { openSettings = v; });
+  const sb = st.body;
+  sb.appendChild(sec('Высоты для расчёта, м'));
+  sb.appendChild(chips(cov.heights.map((v, i) => ({
+    text: `${v} ×`, cls: 'x', click: () => {
+      if (cov.heights.length <= 1) { toast('Нужна хотя бы одна высота'); return; }
+      cov.heights.splice(i, 1);
+      cov.heightIdx = Math.min(cov.heightIdx, cov.heights.length - 1);
+      saveInput();
+    },
+  }))));
+  const add = h('<div class="cov-add"><input type="number" inputmode="numeric" min="1" max="5000" placeholder="м"><button type="button" class="ghost">Добавить</button></div>');
+  const inp = add.querySelector('input')!;
+  add.querySelector('button')!.onclick = () => {
+    const v = Math.round(Number(inp.value));
+    if (!(v >= 1 && v <= 5000)) { toast('Высота от 1 до 5000 м'); return; }
+    if (cov.heights.includes(v)) { toast('Такая высота уже есть'); return; }
+    if (cov.heights.length >= 8) { toast('Не больше 8 высот'); return; }
+    cov.heights.push(v);
+    cov.heights.sort((a, b) => a - b);
+    saveInput();
+  };
+  sb.appendChild(add);
+
+  sb.appendChild(sec('Что закрашивать'));
+  const seg = h('<div class="seg"><button type="button">Связь на высоте</button><button type="button">Нужную высоту</button></div>');
+  const [b1, b2] = Array.from(seg.querySelectorAll('button'));
+  (cov.show === 'margin' ? b1 : b2).classList.add('on');
+  b1.onclick = () => { cov.show = 'margin'; persist(); redraw(); render(); };
+  b2.onclick = () => { cov.show = 'minh'; persist(); redraw(); render(); };
+  sb.appendChild(seg);
+
+  if (shown?.resV) {
+    sb.appendChild(sec('По какой линии'));
+    const ls = h('<div class="seg"></div>');
+    for (const [id, t] of [['rc', 'Управление'], ['video', 'Видео'], ['both', 'Обе']] as const) {
+      const b = h('<button type="button"></button>');
+      b.textContent = t;
+      if (cov.line === id) b.classList.add('on');
+      b.onclick = () => { cov.line = id; persist(); redraw(); render(); };
+      ls.appendChild(b);
+    }
+    sb.appendChild(ls);
+  }
+
+  sb.appendChild(sec('Прозрачность'));
+  const op = h(`<input type="range" class="cov-opacity" min="0.1" max="1" step="0.05" value="${cov.opacity}">`) as HTMLInputElement;
+  op.oninput = () => {
+    cov.opacity = Number(op.value);
+    if (map.getLayer('cov-raster')) map.setPaintProperty('cov-raster', 'raster-opacity', cov.opacity);
+  };
+  op.onchange = persist;
+  sb.appendChild(op);
   const q = demQualityHint(S.station.lat);
-  if (q) body.appendChild(hint(q));
-  body.appendChild(hint(S.video.enabled
-    ? `Дальность в свободном пространстве без рельефа: управление ${fmtDist(freeSpaceRange(effRadio()))}, видео ${fmtDist(freeSpaceRange(effVideo()))}`
-    : `Дальность в свободном пространстве без рельефа: ${fmtDist(freeSpaceRange(effRadio()))}`));
-  if (shown?.prelim) body.appendChild(hint('Предварительно: грубая сетка (лучей ×¼, шаг ×2) — точный расчёт идёт, результат обновится.', 'cov-prelim'));
-  if (shown && stale) body.appendChild(hint('Пульт, радиопараметры или набор линий изменились — результат устарел, пересчитайте.', 'cov-stale'));
-  if (shown) renderResult(body, shown);
+  if (q) sb.appendChild(hint(q));
+  body.appendChild(st.el);
+
+  // ----- подробности -----
+  if (shown) {
+    const more = details('Подробнее', openMore, (v) => { openMore = v; });
+    renderTable(more.body, shown);
+    more.body.appendChild(hint(S.video.enabled
+      ? `Без рельефа связь держалась бы до: управление ${fmtKm(freeSpaceRange(effRadio()))}, видео ${fmtKm(freeSpaceRange(effVideo()))}.`
+      : `Без рельефа связь держалась бы до ${fmtKm(freeSpaceRange(effRadio()))}.`));
+    body.appendChild(more.el);
+  }
+
   const done = h('<div class="row"><button type="button" class="ghost">Закрыть</button></div>');
   done.querySelector('button')!.onclick = closeSheet;
   body.appendChild(done);
 }
 
-function renderResult(body: HTMLElement, c: Shown) {
+/** Главный результат словами + легенда. */
+function renderSummary(body: HTMLElement, c: Shown) {
   const line = lineOf(c);
+  if (S.coverage.show === 'margin') {
+    const sel = Math.min(S.coverage.heightIdx, c.heights.length - 1);
+    const st = stats(c, line)[sel];
+    const res = h('<div class="verdict-big cov-result"></div>');
+    res.textContent = `Связь держится до ${fmtKm(st.median)} (в среднем) — максимум ${fmtKm(st.max)}`;
+    body.appendChild(res);
+    const who = line === 'both' ? 'по худшей из двух линий' : line === 'video' ? 'по видео' : 'по управлению';
+    body.appendChild(hint(`Дрон на ${c.heights[sel]} м, ${who}.`, 'hint muted'));
+  }
   const legend = h('<div class="legend"></div>');
-  const okTxt = line === 'both' ? 'обе линии ≥ своего запаса' : `запас ≥ ${line === 'video' ? c.fadeV : c.fade} дБ`;
-  const items = S.coverage.show === 'margin'
-    ? [['#4fbf72', okTxt], ['#e3b948', line === 'both' ? 'худшая линия на грани' : 'на грани'], ['#e5484d', line === 'both' ? 'одна из линий потеряна' : 'нет связи']]
-    : c.heights.map((v, i) => [PALETTE[c.heights.length === 1 ? 0 : Math.round((i / (c.heights.length - 1)) * (PALETTE.length - 1))], `от ${v} м`]);
-  for (const [col, txt] of items) {
+  const col = statusRgb();
+  const css = (s: 'ok' | 'weak' | 'none') => `rgb(${col[s].join(',')})`;
+  const items: [string, string][] = S.coverage.show === 'margin'
+    ? [[css('ok'), `${ICON.ok} зелёный — связь есть`], [css('weak'), `${ICON.weak} жёлтый — на грани`], [css('none'), `${ICON.none} красный — нет связи`]]
+    : c.heights.map((v, i) => [PALETTE[c.heights.length === 1 ? 0 : Math.round((i / (c.heights.length - 1)) * (PALETTE.length - 1))], `связь от ${v} м`] as [string, string]);
+  for (const [cl, txt] of items) {
     const sp = document.createElement('span');
     const i = document.createElement('i');
-    i.style.background = col;
+    i.style.background = cl;
     sp.append(i, txt);
     legend.appendChild(sp);
   }
   body.appendChild(legend);
+}
 
+function renderTable(body: HTMLElement, c: Shown) {
   const cols: { name: string; line: Line }[] = c.resV
     ? [{ name: 'Упр.', line: 'rc' }, { name: 'Видео', line: 'video' }, { name: 'Обе', line: 'both' }]
     : [{ name: '', line: 'rc' }];
   const sts = cols.map((x) => stats(c, x.line));
   const t = h(c.resV
     ? '<table class="rt"><thead><tr><th>Высота</th><th>Упр.</th><th>Видео</th><th>Обе</th></tr></thead><tbody></tbody></table>'
-    : '<table class="rt"><thead><tr><th>Высота</th><th>Медиана</th><th>Макс.</th><th>Площадь</th></tr></thead><tbody></tbody></table>');
+    : '<table class="rt"><thead><tr><th>Высота</th><th>В среднем</th><th>Максимум</th><th>Площадь</th></tr></thead><tbody></tbody></table>');
   const tb = t.querySelector('tbody')!;
   const sel = Math.min(S.coverage.heightIdx, c.heights.length - 1);
   c.heights.forEach((hv, i) => {
     const tr = document.createElement('tr');
     if (S.coverage.show === 'margin' && i === sel) tr.classList.add('sel');
-    const td = (txt: string) => { const x = document.createElement('td'); x.textContent = txt; tr.appendChild(x); return x; };
+    const td = (txt: string) => { const x = document.createElement('td'); x.className = 'num'; x.textContent = txt; tr.appendChild(x); return x; };
     td(`${hv} м`);
     if (c.resV) {
       for (const st of sts) {
-        const x = td(fmtDist(st[i].median));
+        const x = td(fmtKm(st[i].median));
         const sm = document.createElement('small');
-        sm.textContent = `макс. ${fmtDist(st[i].max)} · ${Math.round(st[i].share * 100)}%`;
+        sm.textContent = `макс. ${fmtKm(st[i].max)} · ${Math.round(st[i].share * 100)}%`;
         x.append(document.createElement('br'), sm);
       }
     } else {
       const st = sts[0][i];
-      td(fmtDist(st.median)); td(fmtDist(st.max)); td(`${Math.round(st.share * 100)}%`);
+      td(fmtKm(st.median)); td(fmtKm(st.max)); td(`${Math.round(st.share * 100)}%`);
     }
     tr.onclick = () => { S.coverage.show = 'margin'; S.coverage.heightIdx = i; persist(); redraw(); render(); };
     tb.appendChild(tr);
   });
   body.appendChild(t);
   body.appendChild(hint(c.resV
-    ? 'В ячейке: медиана до первого обрыва по лучам, ниже — максимум и доля круга с уверенной связью. «Обе» — по худшей линии (минимум запасов относительно своих порогов).'
-    : 'Медиана — до первого обрыва по лучам; площадь — доля круга с уверенной связью.'));
+    ? 'В ячейке: дальность до первого обрыва в среднем по направлениям, ниже — максимум и доля круга, где связь есть. «Обе» — по худшей линии. Нажмите строку, чтобы показать эту высоту.'
+    : 'В среднем — до первого обрыва по направлениям; площадь — доля круга, где связь есть. Нажмите строку, чтобы показать эту высоту.'));
 }

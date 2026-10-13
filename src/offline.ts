@@ -315,7 +315,7 @@ export function openOfflineSheet(): void {
   function render() {
     body.innerHTML = '';
     const o = origin();
-    body.appendChild(h(`<div class="off-sum">Центр района: ${o.src} (${o.lat.toFixed(4)}, ${o.lon.toFixed(4)})</div>`));
+    body.appendChild(h(`<div class="off-sum">Рельеф вокруг: ${o.src === 'пульт' ? 'пульта' : 'прицела'}. Радиус:</div>`));
     const chips = h('<div class="chips"></div>');
     for (const km of RADII_KM) {
       const b = h(`<button class="${km === selKm ? 'on' : ''}">${km} км</button>`);
@@ -324,15 +324,15 @@ export function openOfflineSheet(): void {
     }
     body.appendChild(chips);
     const checks = h(`<div class="off-checks">
-      <label><input type="checkbox" id="offCalc" ${selCalc ? 'checked' : ''}><span>Для расчёта (профиль, зона покрытия)<small>тайлы того зума, который выберет расчёт</small></span></label>
-      <label><input type="checkbox" id="offView" ${selView ? 'checked' : ''}><span>Для карты (горизонтали, отмывка)<small>зумы ${VIEW_Z0}–${VIEW_Z1} по границам района</small></span></label></div>`);
+      <label><input type="checkbox" id="offCalc" ${selCalc ? 'checked' : ''}><span>Для расчёта связи</span></label>
+      <label><input type="checkbox" id="offView" ${selView ? 'checked' : ''}><span>Для карты (горизонтали, отмывка)<small>масштабы ${VIEW_Z0}–${VIEW_Z1}</small></span></label></div>`);
     (checks.querySelector('#offCalc') as HTMLInputElement).onchange = (e) => { selCalc = (e.target as HTMLInputElement).checked; recompute(); render(); };
     (checks.querySelector('#offView') as HTMLInputElement).onchange = (e) => { selView = (e.target as HTMLInputElement).checked; recompute(); render(); };
     body.appendChild(checks);
     const avgNote = measuredAvg ? `средний тайл ${fmtBytes(measuredAvg)} (замер)` : `средний тайл ~${fmtBytes(DEFAULT_TILE_BYTES)} (оценка)`;
     body.appendChild(h(plan.busy
       ? '<div class="hint">Считаю…</div>'
-      : `<div class="off-sum">Тайлов: ${plan.n}, к скачиванию: ${plan.newN} (~${fmtBytes(plan.need)}). ${avgNote}.<br>Свободно: ${Number.isFinite(plan.free) ? fmtBytes(plan.free) : 'неизвестно'}</div>`));
+      : `<div class="off-sum">Скачать ~${fmtBytes(plan.need)} · свободно ${Number.isFinite(plan.free) ? fmtBytes(plan.free) : 'неизвестно'}</div><div class="hint muted">Тайлов: ${plan.n}, новых: ${plan.newN}; ${avgNote}.</div>`));
     if (plan.msg) body.appendChild(h(`<div class="off-warn">${escapeHtml(plan.msg)}</div>`));
     const row = h('<div class="row"></div>');
     if (job) {
@@ -354,7 +354,7 @@ export function openOfflineSheet(): void {
       row.appendChild(go);
     }
     body.appendChild(row);
-    body.appendChild(h('<div class="hint">Данные: Mapzen Terrain Tiles (AWS Open Data). Базовые карты (спутник, схемы) не скачиваются — только рельеф.</div>'));
+    body.appendChild(h('<div class="hint">Скачивается только рельеф (Mapzen Terrain Tiles); спутник и схемы — нет.</div>'));
 
     body.appendChild(h('<div class="off-sec">Скачанные районы</div>'));
     const list = loadAreas();
