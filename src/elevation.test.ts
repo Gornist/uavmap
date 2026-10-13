@@ -103,6 +103,13 @@ describe('sampleRay (максимум в окне)', () => {
     expect(out[1]).toBe(500);
     for (const k of [1, 2]) expect(sampleGrid(g, ox + 4 * k, oy)).toBeLessThan(400);
   });
+  it('хребет ближе полушага от пульта попадает в out[1] (ревью Codex: зазор у антенны)', () => {
+    // шаг 8 px, хребет в 1 px от пульта на восток — раньше окно out[1] начиналось с 4 px и его пропускало
+    const { g, lat, lon, mpp } = rayGrid((x) => (x === 20 + 1 ? 500 : 100));
+    const out = new Float64Array(4);
+    sampleRay(g, lat, lon, 90, 8 * mpp, 4, out);
+    expect(out[1]).toBe(500);
+  });
   it('ровная поверхность: везде та же высота, концы точные', () => {
     const { g, lat, lon, mpp } = rayGrid(() => 123.5);
     const out = new Float64Array(10);

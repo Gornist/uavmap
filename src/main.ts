@@ -1,10 +1,11 @@
 // Точка входа: собирает модули. Владелец: карточка 1A (docs/PLAN.md).
+import './polyfills'; // первым: старые Chrome/WebView на пультах
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
 import './styles/main.css';
 import maplibregl from 'maplibre-gl';
 import { S, $, h, map, center, fc, toast, openSheet, closeSheet, sheetOpen, on, emit, persist, applyMapStyle } from './app';
-import { setStation, initStation, updateLive, showProfile, findBestSpot, altModeText } from './link';
+import { setStation, initStation, updateLive, liveFollow, showProfile, findBestSpot, altModeText } from './link';
 import { initMarks, addMarkAtCenter } from './marks';
 import { initRuler, toggleRuler } from './ruler';
 import { initCoverage, openCoverageSheet } from './coverage';
@@ -42,12 +43,24 @@ async function refreshHeight() {
   renderHere();
 }
 
-function throttle(fn: () => void, ms: number) {
-  let t = 0, pending = false;
-  return () => {
-    if (t) { pending = true; return; }
+/**
+ * Планировщик: fn вызывается через debounceMs после последнего poke() и, пока движение не прекращается,
+ * не реже чем раз в maxWaitMs; now() — немедленно (на moveend). Очереди нет: один отложенный вызов.
+ */
+function scheduler(fn: () => void, debounceMs: number, maxWaitMs: number) {
+  let tDeb = 0, tMax = 0, last = 0;
+  const run = () => {
+    clearTimeout(tDeb); clearTimeout(tMax); tDeb = tMax = 0;
+    last = performance.now();
     fn();
-    t = window.setTimeout(() => { t = 0; if (pending) { pending = false; fn(); } }, ms);
+  };
+  return {
+    poke() {
+      clearTimeout(tDeb);
+      tDeb = window.setTimeout(run, debounceMs);
+      if (!tMax) tMax = window.setTimeout(run, Math.max(0, maxWaitMs - (performance.now() - last)));
+    },
+    now: run,
   };
 }
 
@@ -162,8 +175,8 @@ function locate() {
 function addLinkLayers() {
   map.addSource('link', { type: 'geojson', data: fc() });
   map.addLayer({ id: 'ov-link-casing', type: 'line', source: 'link', paint: { 'line-color': '#000', 'line-width': 6, 'line-opacity': 0.45 } });
-  map.addLayer({ id: 'ov-link', type: 'line', source: 'link', filter: ['==', ['get', 'dash'], 0], paint: { 'line-color': ['get', 'color'], 'line-width': 3 } });
-  map.addLayer({ id: 'ov-link-dash', type: 'line', source: 'link', filter: ['==', ['get', 'dash'], 1], paint: { 'line-color': ['get', 'color'], 'line-width': 3, 'line-dasharray': [2, 2] } });
+  map.addLayer({ id: 'ov-link', type: 'line', source: 'link', filter: ['==', ['get', 'dash'], 0], paint: { 'line-color': ['get', 'color'], 'line-width': 3, 'line-opacity': ['coalesce', ['get', 'op'], 1] } });
+  map.addLayer({ id: 'ov-link-dash', type: 'line', source: 'link', filter: ['==', ['get', 'dash'], 1], paint: { 'line-color': ['get', 'color'], 'line-width': 3, 'line-opacity': ['coalesce', ['get', 'op'], 1], 'line-dasharray': [2, 2] } });
 }
 
 initMenu();
@@ -184,16 +197,26 @@ function start() {
 if (map.isStyleLoaded()) start(); else map.once('style.load', start);
 
 renderHere();
-const liveThrottled = throttle(() => { if (S.station) updateLive(); }, 200);
-const heightThrottled = throttle(refreshHeight, 250);
-map.on('move', () => { renderHere(); liveThrottled(); heightThrottled(); });
+// Расчёт связи: после паузы 130 мс и при долгом перетаскивании не чаще 4 раз/с; высота — каждые ≤150 мс.
+const liveCalc = scheduler(() => { if (S.station) updateLive(); }, 130, 250);
+const heightCalc = scheduler(refreshHeight, 60, 150);
+let followRaf = 0;
+map.on('move', () => {
+  renderHere();
+  // Линия и азимут/дальность следуют за крестом на каждом кадре, без расчёта.
+  if (!followRaf) followRaf = requestAnimationFrame(() => { followRaf = 0; liveFollow(); });
+  if (S.station) liveCalc.poke();
+  heightCalc.poke();
+});
 map.on('moveend', () => {
   const c = map.getCenter();
   S.map.center = [c.lng, c.lat];
   S.map.zoom = map.getZoom();
   persist();
-  refreshHeight();
-  if (S.station) updateLive();
+  cancelAnimationFrame(followRaf); followRaf = 0;
+  liveFollow();
+  heightCalc.now();
+  if (S.station) liveCalc.now();
 });
 on('coords', renderHere);
 

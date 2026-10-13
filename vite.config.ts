@@ -8,8 +8,9 @@ export default defineConfig(({ command, mode }) => {
   const pwaDev = loadEnv(mode, '.', 'VITE_').VITE_PWA_DEV === '1';
   return {
     base: command === 'build' ? '/uavmap/' : '/',
-    worker: { format: 'es' },
-    build: { target: 'es2022', sourcemap: true },
+    worker: { format: 'iife' }, // классический воркер: module workers только с Chrome 80
+    // chrome68: пульты-планшеты без Google Play живут на старом Chrome/WebView — транспилируем и зависимости.
+    build: { target: ['es2017', 'chrome68'], sourcemap: true },
     test: { environment: 'node', include: ['src/**/*.test.ts'] },
     plugins: [
       VitePWA({

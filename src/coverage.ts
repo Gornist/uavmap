@@ -3,16 +3,25 @@
 import './styles/coverage.css';
 import type { ImageSource } from 'maplibre-gl';
 import { S, h, map, setGeo, fc, line, toast, openSheet, closeSheet, progress, on, persist } from './app';
-import { destination, distance, bearing, lonLatToPixel, pixelToLonLat, fmtDist, LatLon } from './geo';
-import { fetchGrid, demPlan, demPixelM, demQualityHint, DemMissingError } from './elevation';
+import { destination, lonLatToPixel, pixelToLonLat, fmtDist, LatLon } from './geo';
+import { rasterIndex } from './coverageRaster';
+import { fetchGrid, demPlan, demPixelM, demQualityHint, DemMissingError, DemGrid } from './elevation';
 import { budget, freeSpaceRange } from './radio';
 import { setStation, altModeText, effRadio, effVideo } from './link';
-import type { CoverageJob, CoverageResult } from './coverageCore';
+import { emptyResult, mergeChunk, sectorCrop, splitRays } from './coverageCore';
+import type { CoverageChunk, CoverageLine, CoverageResult } from './coverageCore';
+// ?worker: Vite выбирает формат сам — модуль в dev, классический воркер в сборке (Chrome 68 не умеет module workers).
+import CoverageWorker from './coverage.worker?worker';
 
 const RADII = [5, 10, 15, 25, 40];
 const MAX_TILES = 256; // ≈ 64 МБ Float32
 const CANVAS = 768;
 const RZ = 20; // «виртуальный» зум для равномерных меркаторских пикселей растра
+// Воркеров на расчёт: ядро оставляем странице. Лучи делятся на части (по 3 на воркер — для выравнивания нагрузки),
+// каждой части — вырезка мозаики под её сектор (≈ 1/8 площади), так что память почти не растёт с числом воркеров.
+const POOL = Math.min(4, Math.max(1, (navigator.hardwareConcurrency || 2) - 1));
+const PARTS_PER_WORKER = 3;
+const PRELIM_TILES = 16; // предварительный проход: грубый рельеф не больше стольких тайлов
 const PALETTE = ['#b8e986', '#7ed957', '#2fbf8f', '#22a3b8', '#3b7fd6', '#5a5bd0', '#7b3fbf', '#9c27a0'];
 
 interface Shown {
@@ -21,6 +30,7 @@ interface Shown {
   fade: number; // порог, с которым считался firstLoss — растр и статистика используют его же
   resV: CoverageResult | null; // линия «Видео» (null — при расчёте она была выключена)
   fadeV: number;
+  prelim: boolean; // предварительный грубый проход (лучей ×¼, шаг ×2), полный ещё считается
 }
 
 type Line = 'rc' | 'video' | 'both';
@@ -90,10 +100,14 @@ function revokeLater(url: string | null) {
   if (url) setTimeout(() => URL.revokeObjectURL(url), 5000); // даём MapLibre дочитать картинку
 }
 
+/** Пул воркеров живёт между расчётами (запуск воркера — десятки мс); прерывается только идущий расчёт. */
+function ensurePool() {
+  while (workers.length < POOL) workers.push(new CoverageWorker());
+}
+
 function cancelRun() {
   runId++;
-  workers.forEach((w) => w.terminate());
-  workers = [];
+  if (running) { workers.forEach((w) => w.terminate()); workers = []; }
   running = false;
   progress(null);
 }
@@ -124,44 +138,56 @@ function layoutRaster(c: Shown) {
   return { coords: [nw, ne, se, sw] as Quad, x0, y0, wx, wy, w: wPx, hh: hPx };
 }
 
+// Геометрия пикселей растра кешируется: смена высоты/линии/режима её не пересчитывает.
+let pixCache: { key: string; idx: Int32Array } | null = null;
+function pixelIndex(c: Shown, L: NonNullable<typeof rasterBounds>): Int32Array {
+  const g = { lat: c.center.lat, lon: c.center.lon, radius: c.radius, rays: c.rays, step: c.step, samples: c.res.samples, x0: L.x0, y0: L.y0, wx: L.wx, wy: L.wy, w: L.w, h: L.hh, z: RZ };
+  const key = Object.values(g).join();
+  if (pixCache?.key !== key) pixCache = { key, idx: rasterIndex(g) };
+  return pixCache.idx;
+}
+
+let paintMs = 0;
 function paint(c: Shown): HTMLCanvasElement {
+  const t0 = performance.now();
   const L = rasterBounds!;
   const cv = document.createElement('canvas');
   cv.width = L.w; cv.height = L.hh;
   const ctx = cv.getContext('2d')!;
   const img = ctx.createImageData(L.w, L.hh);
   const px = img.data;
-  const { samples } = c.res;
-  const level = levelAt(c, lineOf(c));
-  const nH = c.heights.length, rays = c.rays;
+  const idx = pixelIndex(c, L);
+  const ln = lineOf(c);
+  const a = ln !== 'video' ? c.res.margins : null;
+  const b = ln !== 'rc' && c.resV ? c.resV.margins : null;
+  const fa = c.fade, fb = c.fadeV;
+  const level = (o: number) => {
+    let l = 2;
+    if (a) l = lvl(a[o], fa);
+    if (b) l = Math.min(l, lvl(b[o], fb));
+    return l;
+  };
+  const nH = c.heights.length, HS = c.rays * c.res.samples;
   const sel = Math.min(S.coverage.heightIdx, nH - 1);
   const minh = S.coverage.show === 'minh';
-  const p: LatLon = { lat: 0, lon: 0 };
-  for (let j = 0; j < L.hh; j++) {
-    const py = L.y0 + ((j + 0.5) * L.wy) / L.hh;
-    for (let i = 0; i < L.w; i++) {
-      const [lon, lat] = pixelToLonLat(L.x0 + ((i + 0.5) * L.wx) / L.w, py, RZ);
-      p.lat = lat; p.lon = lon;
-      const d = distance(c.center, p);
-      const sIdx = Math.round(d / c.step);
-      if (d > c.radius || sIdx >= samples) continue;
-      const r = Math.round((bearing(c.center, p) / 360) * rays) % rays;
-      const o = (j * L.w + i) * 4;
-      if (!minh) {
-        const lv = level(sel, r, sIdx);
-        if (lv === 2) { px[o] = 79; px[o + 1] = 191; px[o + 2] = 114; px[o + 3] = 255; }
-        else if (lv === 1) { px[o] = 227; px[o + 1] = 185; px[o + 2] = 72; px[o + 3] = 255; }
-        else { px[o] = 229; px[o + 1] = 72; px[o + 2] = 77; px[o + 3] = 70; }
-      } else {
-        let k = -1;
-        for (let hi = 0; hi < nH; hi++) if (level(hi, r, sIdx) === 2) { k = hi; break; }
-        if (k < 0) { px[o] = px[o + 1] = px[o + 2] = 128; px[o + 3] = 40; continue; }
-        const col = PAL_RGB[nH === 1 ? 0 : Math.round((k / (nH - 1)) * (PAL_RGB.length - 1))];
-        px[o] = col[0]; px[o + 1] = col[1]; px[o + 2] = col[2]; px[o + 3] = 255;
-      }
+  for (let p = 0, o = 0; p < idx.length; p++, o += 4) {
+    const k = idx[p];
+    if (k < 0) continue;
+    if (!minh) {
+      const lv = level(sel * HS + k);
+      if (lv === 2) { px[o] = 79; px[o + 1] = 191; px[o + 2] = 114; px[o + 3] = 255; }
+      else if (lv === 1) { px[o] = 227; px[o + 1] = 185; px[o + 2] = 72; px[o + 3] = 255; }
+      else { px[o] = 229; px[o + 1] = 72; px[o + 2] = 77; px[o + 3] = 70; }
+    } else {
+      let hk = -1;
+      for (let hi = 0; hi < nH; hi++) if (level(hi * HS + k) === 2) { hk = hi; break; }
+      if (hk < 0) { px[o] = px[o + 1] = px[o + 2] = 128; px[o + 3] = 40; continue; }
+      const col = PAL_RGB[nH === 1 ? 0 : Math.round((hk / (nH - 1)) * (PAL_RGB.length - 1))];
+      px[o] = col[0]; px[o + 1] = col[1]; px[o + 2] = col[2]; px[o + 3] = 255;
     }
   }
   ctx.putImageData(img, 0, 0);
+  paintMs = performance.now() - t0;
   return cv;
 }
 
@@ -212,6 +238,55 @@ function tilesFor(box: { w: number; e: number; n: number; s: number }, z: number
   return cols * rows;
 }
 
+/** Посчитать все лучи частями в пуле воркеров; результат по каждой линии собран в полные массивы. */
+let chunkSeq = 0;
+function runPass(id: number, base: Omit<CoverageChunk, 'grid' | 'r0' | 'r1'>, grid: DemGrid, parts: number, onProgress?: (f: number) => void): Promise<CoverageResult[]> {
+  ensurePool();
+  const nH = base.heights.length, nS = Math.floor(base.radius / base.step) + 1;
+  const out = base.lines.map(() => emptyResult(nH, base.rays, nS));
+  const queue = splitRays(base.rays, parts);
+  let left = queue.length, doneRays = 0, failed = false;
+  const inFlight = new Map<number, number>(); // часть → посчитано лучей
+  const report = () => {
+    if (!onProgress) return;
+    let x = doneRays;
+    inFlight.forEach((v) => { x += v; });
+    onProgress(x / base.rays);
+  };
+  return new Promise((resolve, reject) => {
+    const fail = (msg: string) => { if (id === runId && !failed) { failed = true; reject(new Error(msg)); } };
+    const next = (wk: Worker) => {
+      const part = queue.shift();
+      if (!part || failed || id !== runId) return;
+      const [r0, r1] = part, cid = ++chunkSeq;
+      const chunk: CoverageChunk = { ...base, grid: sectorCrop(grid, base.lat, base.lon, base.rays, r0, r1, base.radius, base.step), r0, r1 };
+      wk.onmessage = (ev: MessageEvent<{ id: number; progress?: number; done?: CoverageResult[]; error?: string }>) => {
+        const m = ev.data;
+        if (id !== runId || failed || m.id !== cid) return;
+        if (m.progress !== undefined) { inFlight.set(cid, m.progress * (r1 - r0)); report(); return; }
+        inFlight.delete(cid);
+        if (m.error || !m.done) { fail(m.error || 'нет результата'); return; }
+        m.done.forEach((r, li) => mergeChunk(out[li], r, nH, base.rays, r0, r1));
+        doneRays += r1 - r0;
+        report();
+        if (--left === 0) resolve(out); else next(wk);
+      };
+      wk.onerror = (ev) => fail(ev.message || 'сбой воркера');
+      wk.postMessage({ id: cid, chunk }, [chunk.grid.data.buffer]);
+    };
+    workers.forEach(next);
+  });
+}
+
+/** Показать результат (предварительный или окончательный). */
+function show(c: Shown, rev: number) {
+  shown = c;
+  stale = rev !== inputsRev; // входные данные менялись во время расчёта
+  S.coverage.heightIdx = Math.min(S.coverage.heightIdx, c.heights.length - 1);
+  redraw();
+  rerender?.();
+}
+
 async function start() {
   if (running || !S.station) return;
   const st = { ...S.station };
@@ -234,56 +309,60 @@ async function start() {
   // Снимок радиопараметров до await: иначе старый пульт смешается с новыми настройками.
   const radio = { ...effRadio() }, mode = S.altMode; // копия: effRadio() может вернуть сам S.radio
   const vRadio = S.video.enabled ? { ...effVideo() } : null;
+  // Частота влияет на дифракцию, поэтому у видео свой прогон; обе линии считаются в одной части на одной вырезке.
+  const lines: CoverageLine[] = [radio, ...(vRadio ? [vRadio] : [])].map((rp) => ({ freqMHz: rp.freqMHz, budget: budget(rp), k: rp.k, fade: rp.fadeMarginDb }));
+  const rays = heights.length <= 2 ? 720 : 360;
+  const base = { lat: center.lat, lon: center.lon, antH: st.antH, heights, mode, radius, step, rays, exact: false, lines };
+  const mkShown = (r: CoverageResult[], stp: number, ry: number, prelim: boolean): Shown => ({
+    res: r[0], resV: r[1] ?? null, center, radius, step: stp, rays: ry, heights, fade: lines[0].fade, fadeV: lines[1]?.fade ?? 0, prelim,
+  });
   running = true;
+  const T0 = performance.now();
+  const stats: Record<string, number> = { z, step, rays };
   progress(0, 'Загрузка рельефа…');
   rerender?.();
+  const corners = [
+    { lat: box.n, lon: box.w }, { lat: box.n, lon: box.e },
+    { lat: box.s, lon: box.e }, { lat: box.s, lon: box.w },
+  ];
+  // Предварительный проход (лучей ×¼, шаг ×2): на точном рельефе, если он уже в кеше, иначе — на грубом
+  // (несколько тайлов, запрашиваются первыми), пока точный догружается. Без грубого (офлайн) — ждём точный.
+  const stepP = step * 2, raysP = rays / 4;
+  let zc = Math.max(8, z - 2);
+  while (zc > 8 && tilesFor(box, zc) > PRELIM_TILES) zc--;
+  const coarseP = zc < z ? fetchGrid(corners, zc, Math.ceil(stepP / demPixelM(center.lat, zc)) + 2) : null;
+  let computing = false;
+  const fineP = fetchGrid(corners, z, pad, (d, t) => { if (id === runId && !computing) progress(d / t, `Загрузка рельефа ${d}/${t}`); });
+  fineP.catch(() => undefined); // ошибку разберём ниже, при ожидании
   try {
-    const grid = await fetchGrid([
-      { lat: box.n, lon: box.w }, { lat: box.n, lon: box.e },
-      { lat: box.s, lon: box.e }, { lat: box.s, lon: box.w },
-    ], z, pad);
+    const gP = await Promise.race(coarseP ? [fineP, coarseP.catch(() => fineP)] : [fineP]);
     if (id !== runId) return;
-    const rays = heights.length <= 2 ? 720 : 360;
-    const mkJob = (rp: typeof radio, g: typeof grid): CoverageJob => ({
-      grid: g, lat: center.lat, lon: center.lon, antH: st.antH, heights, mode,
-      radius, step, rays, freqMHz: rp.freqMHz, budget: budget(rp), k: rp.k, fade: rp.fadeMarginDb,
-    });
-    // Частота влияет на дифракцию, поэтому у видео отдельный прогон; линии считаются параллельно в двух воркерах
-    // (каждому — своя копия сетки: буфер передаётся воркеру, а не копируется).
-    const jobs = [mkJob(radio, vRadio ? { ...grid, data: grid.data.slice() } : grid)];
-    if (vRadio) jobs.push(mkJob(vRadio, grid));
-    const progs = jobs.map(() => 0);
+    stats.prelimZ = gP.z;
+    computing = true;
+    progress(0, 'Предварительный расчёт…');
+    const resP = await runPass(id, { ...base, step: stepP, rays: raysP }, gP, POOL);
+    if (id !== runId) return;
+    show(mkShown(resP, stepP, raysP, true), rev);
+    stats.prelim = performance.now() - T0;
+    computing = false;
+    const grid = await fineP;
+    if (id !== runId) return;
+    const T1 = performance.now();
+    stats.dem = T1 - T0;
+    computing = true;
     progress(0, 'Расчёт…');
-    const runWorker = (job: CoverageJob, idx: number) => new Promise<CoverageResult>((resolve, reject) => {
-      const wk = new Worker(new URL('./coverage.worker.ts', import.meta.url), { type: 'module' });
-      workers.push(wk);
-      wk.onmessage = (ev: MessageEvent<{ progress?: number; done?: CoverageResult; error?: string }>) => {
-        if (id !== runId) return;
-        const m = ev.data;
-        if (m.progress !== undefined) {
-          progs[idx] = m.progress;
-          const p = progs.reduce((x, y) => x + y, 0) / jobs.length;
-          progress(p, `Расчёт ${Math.round(p * 100)}%`);
-          return;
-        }
-        wk.terminate();
-        if (m.error) reject(new Error(m.error)); else if (m.done) resolve(m.done);
-      };
-      wk.onerror = (ev) => { if (id === runId) { wk.terminate(); reject(new Error(ev.message)); } };
-      wk.postMessage(job, [job.grid.data.buffer]);
-    });
-    const [res, resV] = await Promise.all(jobs.map(runWorker));
+    const res = await runPass(id, base, grid, POOL * PARTS_PER_WORKER, (f) => progress(f, `Расчёт ${Math.round(f * 100)}%`));
     if (id !== runId) return;
-    workers = []; running = false; progress(null);
-    shown = { res, resV: resV ?? null, center, radius, step, rays, heights, fade: jobs[0].fade, fadeV: jobs[1]?.fade ?? 0 };
-    stale = rev !== inputsRev; // входные данные менялись во время расчёта
-    S.coverage.heightIdx = Math.min(S.coverage.heightIdx, heights.length - 1);
-    redraw();
-    rerender?.();
+    const T2 = performance.now();
+    running = false; progress(null);
+    show(mkShown(res, step, rays, false), rev);
+    stats.calc = T2 - T1;
+    stats.total = performance.now() - T0;
+    stats.paint = paintMs;
+    if (import.meta.env.DEV) (window as unknown as { __covStats: unknown }).__covStats = stats;
   } catch (err) {
     if (id !== runId) return;
-    workers.forEach((w) => w.terminate()); workers = [];
-    running = false; progress(null);
+    cancelRun();
     toast(err instanceof DemMissingError ? err.message : `Ошибка расчёта: ${err instanceof Error ? err.message : err}`, 4000);
     rerender?.();
   }
@@ -335,6 +414,7 @@ export function openCoverageSheet(): void {
   const body = openSheet('Зона покрытия', '', () => { if (sheetBody === body) { sheetBody = null; rerender = null; } });
   sheetBody = body;
   rerender = render;
+  ensurePool(); // воркеры успеют загрузиться, пока выбирают параметры
   render();
 }
 
@@ -450,6 +530,7 @@ function render() {
   body.appendChild(hint(S.video.enabled
     ? `Дальность в свободном пространстве без рельефа: управление ${fmtDist(freeSpaceRange(effRadio()))}, видео ${fmtDist(freeSpaceRange(effVideo()))}`
     : `Дальность в свободном пространстве без рельефа: ${fmtDist(freeSpaceRange(effRadio()))}`));
+  if (shown?.prelim) body.appendChild(hint('Предварительно: грубая сетка (лучей ×¼, шаг ×2) — точный расчёт идёт, результат обновится.', 'cov-prelim'));
   if (shown && stale) body.appendChild(hint('Пульт, радиопараметры или набор линий изменились — результат устарел, пересчитайте.', 'cov-stale'));
   if (shown) renderResult(body, shown);
   const done = h('<div class="row"><button type="button" class="ghost">Закрыть</button></div>');

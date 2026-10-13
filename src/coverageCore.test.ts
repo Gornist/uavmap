@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { computeCoverage, CoverageJob } from './coverageCore';
+import { computeChunk, computeCoverage, CoverageJob, emptyResult, lossThreshold, mergeChunk, sectorCrop, splitRays } from './coverageCore';
 import { DemGrid, sampleGrid, sampleRay } from './elevation';
 import { destination, lonLatToPixel } from './geo';
-import { analyzeLink, budget, DEFAULT_RADIO, freeSpaceRange, fspl } from './radio';
+import { analyzeLink, budget, DEFAULT_RADIO, DEFAULT_VIDEO, freeSpaceRange, fspl } from './radio';
 
 const LAT = 55.75, LON = 37.62, Z = 12;
 const SIZE = 1024;                    // ≈ ±11 км при 21.9 м/px на этой широте
@@ -223,4 +223,60 @@ describe('Зона и профиль: холмистый рельеф, все в
       }
     });
   }
+});
+
+describe('ускорения: части лучей, вырезки сетки и отсечение «заведомо нет связи» дают тот же результат', () => {
+  const hills = (dx: number, dy: number) => 150 + 70 * Math.sin(dx / 23) * Math.cos(dy / 31) + 25 * Math.sin((dx + dy) / 7);
+  const g = grid(hills);
+  const lvl = (m: number, fade: number) => (m >= fade ? 2 : m >= 0 ? 1 : 0);
+  const V = { ...DEFAULT_VIDEO };
+  const lines = [
+    { freqMHz: P.freqMHz, budget: BUDGET, k: P.k, fade: P.fadeMarginDb },
+    { freqMHz: V.freqMHz, budget: budget(V), k: V.k, fade: V.fadeMarginDb },   // свободное пространство кончается ≈ 6.5 км
+    { freqMHz: 868, budget: BUDGET + 10, k: 4 / 3, fade: -3 },                  // отрицательный запас на замирания
+  ];
+  const heights = [5, 30, 120, 400];
+  for (const mode of ['takeoff', 'terrain'] as const) {
+    it(`режим ${mode}: 5 частей × вырезки × exact=false ≡ полный последовательный расчёт`, () => {
+      const rays = 36, radius = 10000, step = 50;
+      const base = { grid: g, lat: LAT, lon: LON, antH: 2, heights, mode, radius, step, rays };
+      const full = lines.map((ln) => computeCoverage({ ...base, ...ln }));
+      const parts = lines.map(() => emptyResult(heights.length, rays, full[0].samples));
+      for (const [r0, r1] of splitRays(rays, 5)) {
+        const crop = sectorCrop(g, LAT, LON, rays, r0, r1, radius, step);
+        expect(crop.data.length).toBeLessThan(g.data.length);
+        const res = computeChunk({ ...base, grid: crop, r0, r1, exact: false, lines });
+        res.forEach((r, li) => mergeChunk(parts[li], r, heights.length, rays, r0, r1));
+      }
+      lines.forEach((ln, li) => {
+        const a = full[li], b = parts[li], thr = lossThreshold(ln.fade);
+        let pruned = 0, badLvl = 0, badBound = 0;
+        expect(b.firstLoss).toEqual(a.firstLoss);
+        expect(b.ground0).toBe(a.ground0);
+        for (let i = 0; i < a.margins.length; i++) {
+          if (lvl(b.margins[i], ln.fade) !== lvl(a.margins[i], ln.fade)) badLvl++;
+          if (b.margins[i] !== a.margins[i]) {
+            // Где не считалось точно — верхняя оценка ниже порога «нет связи».
+            pruned++;
+            if (!(b.margins[i] < thr && b.margins[i] >= a.margins[i])) badBound++;
+          }
+        }
+        expect(badLvl).toBe(0);
+        expect(badBound).toBe(0);
+        if (li === 1) expect(pruned).toBeGreaterThan(a.margins.length / 4);
+      });
+    });
+  }
+  it('вырезка под сектор при exact=true даёт те же числа, что и вся мозаика', () => {
+    const job0 = job(g, { heights, rays: 20, radius: 9000, step: 60 });
+    const full = computeCoverage(job0);
+    const part = emptyResult(heights.length, 20, full.samples);
+    for (const [r0, r1] of splitRays(20, 3)) mergeChunk(part, computeCoverage({ ...job0, grid: sectorCrop(g, LAT, LON, 20, r0, r1, 9000, 60), r0, r1 }), heights.length, 20, r0, r1);
+    expect(part.margins).toEqual(full.margins);
+    expect(part.firstLoss).toEqual(full.firstLoss);
+  });
+  it('splitRays покрывает все лучи без пропусков', () => {
+    expect(splitRays(10, 3)).toEqual([[0, 3], [3, 6], [6, 10]]);
+    expect(splitRays(2, 5)).toEqual([[0, 1], [1, 2]]);
+  });
 });

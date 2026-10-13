@@ -70,7 +70,8 @@ export interface DemGrid {
   data: Float32Array;
 }
 
-export async function fetchGrid(points: LatLon[], z: number, pad = 2): Promise<DemGrid> {
+/** onTile(готово, всего) — после каждого тайла (для индикатора загрузки). */
+export async function fetchGrid(points: LatLon[], z: number, pad = 2, onTile?: (done: number, total: number) => void): Promise<DemGrid> {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const p of points) {
     const [x, y] = lonLatToPixel(p.lon, p.lat, z);
@@ -82,9 +83,11 @@ export async function fetchGrid(points: LatLon[], z: number, pad = 2): Promise<D
   const width = cols * TILE, height = rows * TILE;
   const data = new Float32Array(width * height);
   const jobs: Promise<void>[] = [];
-  let missing = 0;
+  let missing = 0, done = 0;
+  const total = cols * rows;
   for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++) {
     jobs.push(getTile(z, tx, ty).then((t) => {
+      onTile?.(++done, total);
       if (!t) { missing++; return; }
       const ox = (tx - tx0) * TILE, oy = (ty - ty0) * TILE;
       for (let r = 0; r < TILE; r++) data.set(t.subarray(r * TILE, r * TILE + TILE), (oy + r) * width + ox);
@@ -166,7 +169,7 @@ function rayNode(g: DemGrid, sf: number, cf: number, st: number, ct: number, l1:
 
 /**
  * Высоты вдоль луча из пульта: out[0] — билинейно в точке пульта, out[k] (k = 1..nS-1) — максимум
- * в окне ±step/2 вокруг расстояния k·step. Азимут — начальный (дуга большого круга).
+ * в окне ±step/2 вокруг расстояния k·step (у out[1] окно начинается от пульта). Азимут — начальный (дуга большого круга).
  */
 export function sampleRay(g: DemGrid, lat: number, lon: number, azDeg: number, step: number, nS: number, out: Float64Array): void {
   const w = g.width, h = g.height, d = g.data;
@@ -175,7 +178,8 @@ export function sampleRay(g: DemGrid, lat: number, lon: number, azDeg: number, s
   out[0] = sampleGrid(g, ox, oy);
   if (nS < 2) return;
   const f1 = lat * D2R, sf = Math.sin(f1), cf = Math.cos(f1), t = azDeg * D2R, st = Math.sin(t), ct = Math.cos(t), l1 = lon * D2R;
-  rayNode(g, sf, cf, st, ct, l1, step / 2);
+  // Окно первого отсчёта начинается от самого пульта (как в profile): ближнее препятствие не выпадает.
+  rayNode(g, sf, cf, st, ct, l1, 0);
   let ax = RX, ay = RY;
   for (let k = 1; k < nS; k++) {
     rayNode(g, sf, cf, st, ct, l1, (k + 0.5) * step);
@@ -211,7 +215,10 @@ export async function profile(a: LatLon, b: LatLon, n: number, z: number): Promi
   // Границы окон на трассе (координаты узлов): i-й отсчёт охватывает [bx[i], bx[i+1]].
   const bx = new Float64Array(n + 1), by = new Float64Array(n + 1);
   for (let i = 0; i <= n; i++) {
-    const p = interpolate(a, b, Math.min(1, Math.max(0, (i - 0.5) / n)));
+    // Крайние окна доходят до самих антенн (i = 1 → от пульта, i = n → до дрона): иначе препятствие
+    // в пределах полушага от антенны выпадает из выборки (ближний хребет у низкой антенны пульта).
+    const t = i <= 1 ? 0 : i >= n ? 1 : (i - 0.5) / n;
+    const p = interpolate(a, b, t);
     const [x, y] = lonLatToPixel(p.lon, p.lat, z);
     bx[i] = x - 0.5; by[i] = y - 0.5;
   }

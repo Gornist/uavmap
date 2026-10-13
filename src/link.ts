@@ -131,7 +131,7 @@ export interface LinkCalc {
  * Расчёт трассы пульт → target. null — пульта нет, его высота не загружена, точки совпадают
  * или пульт успели перенести, пока грузился профиль. При нехватке рельефа — DemMissingError.
  */
-export async function calcLink(target: LatLon, radio: RadioParams = effRadio(), video: RadioParams | null = effVideoOrNull()): Promise<LinkCalc | null> {
+export async function calcLink(target: LatLon, radio: RadioParams = effRadio(), video: RadioParams | null = effVideoOrNull(), maxN = 600): Promise<LinkCalc | null> {
   if (!S.station || stationGround === null) return null;
   // Снимок входных данных: после await глобальное состояние могло измениться.
   const rev = stationRev, groundA = stationGround, antH = S.station.antH;
@@ -139,7 +139,7 @@ export async function calcLink(target: LatLon, radio: RadioParams = effRadio(), 
   const dist = distance(a, target);
   if (dist < 5) return null;
   const { z, step } = demPlan(a.lat, dist);
-  const n = Math.max(16, Math.min(600, Math.round(dist / step)));
+  const n = Math.max(16, Math.min(maxN, Math.round(dist / step)));
   const elev = await profile(a, target, n, z);
   if (rev !== stationRev) return null;
   elev[0] = groundA;
@@ -153,23 +153,54 @@ export async function calcLink(target: LatLon, radio: RadioParams = effRadio(), 
 
 let liveBusy = false, livePending = false;
 export let lastLive: LinkCalc | null = null;
+/** Для живой строки хватает 200 отсчётов: запас расходится с полным профилем (до 600) не более чем на 0,2 дБ. */
+const LIVE_N = 200;
+const PENDING_COL = '#8b949e';
+if (import.meta.env.DEV) (window as unknown as { __liveStats: { calcs: number } }).__liveStats = { calcs: 0 };
+
+const linkLine = (a: S_Station, c: LatLon, props: Record<string, unknown>) =>
+  setGeo('link', fc([line([[a.lon, a.lat], [c.lon, c.lat]], props)]));
+type S_Station = { lat: number; lon: number };
+
+/**
+ * Мгновенная реакция на движение карты (без расчёта): линия пульт → прицел следует за крестом
+ * приглушённым цветом, в строке — азимут и дальность, запас «…» до прихода расчёта для этой точки.
+ */
+export function liveFollow() {
+  const st = S.station;
+  if (!st || stationGround === null) return;
+  const a = { lat: st.lat, lon: st.lon }, c = center();
+  const dist = distance(a, c);
+  if (dist < 5) { setGeo('link', fc()); return; }
+  linkLine(a, c, { color: PENDING_COL, dash: 0, op: 0.55 });
+  const az = bearing(a, c);
+  $('lsStatus').innerHTML = `Аз. ${az.toFixed(1)}° · ${fmtDist(dist)} · ${S.video.enabled ? 'Упр. … · Видео …' : 'запас …'}`;
+  const hl = $('hereLink');
+  if (!hl.hidden) hl.innerHTML = `До пульта <b>${fmtDist(dist)}</b>, аз. <b>${az.toFixed(0)}°</b><br>Дрон ${S.droneH} м: <b style="color:${PENDING_COL}">…</b>`;
+}
 
 export async function updateLive() {
   if (!S.station) { setGeo('link', fc()); $('hereLink').hidden = true; return; }
+  // Очередь не копим: пока идёт расчёт, помним только факт «нужен ещё один» — он возьмёт текущий прицел.
   if (liveBusy) { livePending = true; return; }
   liveBusy = true;
   const st = $('lsStatus'), hl = $('hereLink');
   try {
     const c = center();
+    if (import.meta.env.DEV) (window as unknown as { __liveStats: { calcs: number } }).__liveStats.calcs++;
     let r: LinkCalc | null;
-    try { r = await calcLink(c); } catch (e) {
+    try { r = await calcLink(c, effRadio(), effVideoOrNull(), LIVE_N); } catch (e) {
       if (!(e instanceof DemMissingError)) throw e;
+      if (distance(center(), c) > 2) return; // прицел уже ушёл — устаревший ответ
       lastLive = null;
       st.textContent = e.message; hl.hidden = true; setGeo('link', fc());
       return;
     }
-    lastLive = r;
     if (!S.station) { setGeo('link', fc()); hl.hidden = true; return; }
+    // Ревизия цели: пока считали, прицел мог уйти — расчёт для прежней точки не применяем
+    // (новый запрос уже запланирован движением карты).
+    if (distance(center(), c) > 2) return;
+    lastLive = r;
     if (!r) {
       st.innerHTML = stationGroundFailed ? 'Нет данных рельефа под пультом' : stationGround === null ? 'Загружаю высоту пульта…' : 'Прицел на пульте — сдвиньте карту';
       setGeo('link', fc()); hl.hidden = true;
@@ -183,7 +214,7 @@ export async function updateLive() {
       hl.hidden = false;
       const detail = res.belowGround ? '(ниже рельефа)' : vres ? `(упр. ${res.margin.toFixed(0)} / видео ${vres.margin.toFixed(0)} дБ)` : `(${res.margin.toFixed(0)} дБ)`;
       hl.innerHTML = `До пульта <b>${fmtDist(r.dist)}</b>, аз. <b>${r.az.toFixed(0)}°</b><br>Дрон ${S.droneH} м: <b style="color:${STATUS_COL[pair.status]}">${pairText(pair)}</b> ${detail}`;
-      setGeo('link', fc([line([[S.station.lon, S.station.lat], [c.lon, c.lat]], { color: STATUS_COL[pair.status], dash: res.los ? 0 : 1 })]));
+      linkLine(S.station, c, { color: STATUS_COL[pair.status], dash: res.los ? 0 : 1, op: 1 });
     }
   } finally {
     liveBusy = false;

@@ -145,6 +145,12 @@ function argmaxUnimodal(lo: number, hi: number, f: (i: number) => number): numbe
   return lo;
 }
 
+/** Индекс максимума вогнутой f на 1..hi по непрерывному максимуму x: берём лучший из ⌊x⌋, ⌈x⌉ (в пределах 1..hi). */
+function argmaxConcave(x: number, hi: number, f: (i: number) => number): number {
+  const a = Math.min(hi, Math.max(1, Math.floor(x))), b = Math.min(hi, a + 1);
+  return f(b) > f(a) ? b : a;
+}
+
 /**
  * Буллингтон для гладкого профиля (все hi = 0, § 4.5.2 перед ур. (64)) с равным шагом D/n — за O(log n).
  * При hi = 0 и hts, hrs ≥ 0 выражение (49) по di вогнуто, (53) — тоже, а ν из (51) унимодален
@@ -156,7 +162,8 @@ export function bullingtonSmooth(n: number, D: number, hts: number, hrs: number,
   hts = Math.max(hts, 0); hrs = Math.max(hrs, 0);
   const step = D / n, k2 = 1 / (2 * ae);
   const sT = (i: number) => { const di = i * step; return (di * (D - di) * k2 - hts) / di; };      // (49), hi = 0
-  const stim = sT(argmaxUnimodal(1, n - 1, sT));
+  // (49) при hi = 0 — вогнутая функция di с максимумом в di = √(2·ae·hts): дискретный максимум — в соседних узлах.
+  const stim = sT(argmaxConcave(Math.sqrt(hts / k2) / step, n - 1, sT));
   const str = (hrs - hts) / D;                                                                   // (50)
   const nu = (i: number) => {
     const di = i * step, dr = D - di;
@@ -165,7 +172,8 @@ export function bullingtonSmooth(n: number, D: number, hts: number, hrs: number,
   const caseLos = () => bullingtonTaper(knifeEdgeJ(nu(argmaxUnimodal(1, n - 1, nu))), D);
   if (stim < str) return caseLos();
   const sR = (i: number) => { const di = i * step, dr = D - di; return (di * dr * k2 - hrs) / dr; }; // (53), hi = 0
-  const srim = sR(argmaxUnimodal(1, n - 1, sR));
+  // (53) при hi = 0 — вогнутая, максимум в D − di = √(2·ae·hrs).
+  const srim = sR(argmaxConcave(n - Math.sqrt(hrs / k2) / step, n - 1, sR));
   const vb = bullingtonPointNu(stim, srim, hts, hrs, D, lambda);
   return vb === null ? caseLos() : bullingtonTaper(knifeEdgeJ(vb), D);
 }
