@@ -21,12 +21,33 @@ export function setLocalDemProvider(fn: LocalDemProvider | null) {
   clearDemCache();
 }
 
-function fromNetwork(z: number, x: number, y: number): Promise<Float32Array | null> {
-  return fetch(demTileUrl(z, x, y))
-    .then((r) => (r.ok ? r.blob() : Promise.reject(r.status)))
-    .then((b) => createImageBitmap(b))
-    .then(decode)
-    .catch(() => null);
+// На слабой мобильной сети отдельный запрос может зависнуть навсегда — без таймаута вся загрузка зоны
+// стоит на «35/36». Зависший или оборванный запрос повторяем один раз; ответ сервера с ошибкой — нет.
+const NET_TIMEOUT_MS = 20000;
+const NET_TRIES = 2;
+
+function fetchBlob(url: string): Promise<Blob> {
+  const ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, rej) => { timer = setTimeout(() => { ac?.abort(); rej(new Error('timeout')); }, NET_TIMEOUT_MS); });
+  const req = fetch(url, ac ? { signal: ac.signal } : undefined)
+    .then((r) => (r.ok ? r.blob() : Promise.reject(r.status)));
+  return Promise.race([req, timeout]).then(
+    (b) => { clearTimeout(timer); return b; },
+    (e) => { clearTimeout(timer); throw e; },
+  );
+}
+
+async function fromNetwork(z: number, x: number, y: number): Promise<Float32Array | null> {
+  const url = demTileUrl(z, x, y);
+  for (let i = 0; i < NET_TRIES; i++) {
+    try {
+      return decode(await createImageBitmap(await fetchBlob(url)));
+    } catch (e) {
+      if (typeof e === 'number') return null; // HTTP-статус: тайла нет, повтор не поможет
+    }
+  }
+  return null;
 }
 
 function decode(img: ImageBitmap): Float32Array {

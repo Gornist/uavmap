@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { DemGrid, DemMissingError, sampleGrid, sampleRay, demPlan, demPixelM, demQualityHint } from './elevation';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { DemGrid, DemMissingError, sampleGrid, sampleRay, demPlan, demPixelM, demQualityHint, fetchGrid } from './elevation';
 import { lonLatToPixel, R_EARTH } from './geo';
 
 /** Сетка 4×3 с линейным полем f(x, y) = 10·x + 100·y (x,y — индексы ячеек): билинейная интерполяция точна. */
@@ -124,5 +124,49 @@ describe('demQualityHint', () => {
     expect(demQualityHint(55, 59)).toBeNull();
     expect(demQualityHint(55, 61)).toContain('60°');
     expect(demQualityHint(-57)).not.toBeNull();
+  });
+});
+
+describe('загрузка тайлов: зависший запрос', () => {
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+  // Terrarium: R*256 + G + B/256 − 32768 → пиксель (128, 100, 0) = 100 м.
+  function stubCanvas() {
+    vi.stubGlobal('createImageBitmap', async () => ({}));
+    vi.stubGlobal('OffscreenCanvas', class {
+      getContext() {
+        return { drawImage() {}, getImageData: () => ({ data: new Uint8ClampedArray(256 * 256 * 4).map((_, i) => [128, 100, 0, 255][i % 4]) }) };
+      }
+    });
+  }
+
+  it('повторяет запрос, зависший дольше таймаута, и не ждёт вечно', async () => {
+    vi.useFakeTimers();
+    stubCanvas();
+    let calls = 0;
+    vi.stubGlobal('fetch', () => (++calls === 1 ? new Promise(() => {}) : Promise.resolve({ ok: true, blob: async () => new Blob() })));
+    const g = fetchGrid([{ lat: 10.123, lon: 20.456 }], 10, 0);
+    await vi.advanceTimersByTimeAsync(21000);
+    const r = await g;
+    expect(calls).toBe(2);
+    expect(r.data[0]).toBe(100);
+  });
+
+  it('ответ сервера с ошибкой не повторяет — сразу «нет данных»', async () => {
+    stubCanvas();
+    let calls = 0;
+    vi.stubGlobal('fetch', async () => { calls++; return { ok: false, status: 404 }; });
+    await expect(fetchGrid([{ lat: 11.5, lon: 21.5 }], 10, 0)).rejects.toBeInstanceOf(DemMissingError);
+    expect(calls).toBe(1);
+  });
+
+  it('два зависания подряд — ошибка «нет данных», а не вечная загрузка', async () => {
+    vi.useFakeTimers();
+    stubCanvas();
+    vi.stubGlobal('fetch', () => new Promise(() => {}));
+    const g = fetchGrid([{ lat: 12.5, lon: 22.5 }], 10, 0);
+    const done = expect(g).rejects.toBeInstanceOf(DemMissingError);
+    await vi.advanceTimersByTimeAsync(41000);
+    await done;
   });
 });
