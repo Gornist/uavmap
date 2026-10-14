@@ -34,9 +34,6 @@ export function initCoverage(): void {
   pill = createPill();
   document.body.appendChild(pill);
   setCoverageListener(onChange);
-  window.addEventListener('resize', placePill);
-  const card = document.getElementById('infoCard');
-  if (card && 'ResizeObserver' in window) new ResizeObserver(placePill).observe(card);
 }
 
 function onChange() {
@@ -307,14 +304,6 @@ function createPill(): HTMLElement {
   return el;
 }
 
-/** Плашка под карточкой рельефа справа: не заходит на строку связи и нижнюю панель. */
-function placePill() {
-  if (!pill || pill.hidden) return;
-  const card = document.getElementById('infoCard');
-  const r = card && !card.hidden ? card.getBoundingClientRect() : null;
-  pill.style.top = r && r.height ? `${Math.round(r.bottom + 6)}px` : '';
-}
-
 function renderPill() {
   const el = pill;
   if (!el) return;
@@ -354,5 +343,4 @@ function renderPill() {
     main.appendChild(n);
   }
   main.setAttribute('aria-label', `Зона покрытия: ${t.textContent}. Открыть`);
-  placePill();
 }

@@ -49,6 +49,30 @@ const waitFor = async (expr, ms = 20000) => {
 
 
 const touch = (type, x, y) => send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y, id: 1 }] });
+const mouse = (type, x, y) => send('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons: type === 'mouseReleased' ? 0 : 1, clickCount: 1 });
+/** Центр элемента в координатах окна. */
+const centerOf = async (sel) => JSON.parse(await ev(`JSON.stringify((() => { const r = document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect(); return [Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2)]; })())`));
+/** Настоящее нажатие (палец на телефоне, мышь на десктопе), с перетаскиванием по точкам path. */
+const gesture = async (x, y, path = []) => {
+  if (mode === 'mobile') {
+    await touch('touchStart', x, y);
+    for (const [px, py] of path) { await sleep(30); await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: px, y: py, id: 1 }] }); }
+    await sleep(60); await touch('touchEnd');
+  } else {
+    await mouse('mousePressed', x, y);
+    for (const [px, py] of path) { await sleep(30); await mouse('mouseMoved', px, py); }
+    const [ex, ey] = path.length ? path[path.length - 1] : [x, y];
+    await mouse('mouseReleased', ex, ey);
+  }
+};
+/** Высота дрона через высотомер: нажатие на подпись дрона → точное число в диалоге. */
+const setDrone = async (v) => {
+  const [x, y] = await centerOf('#altimeter .alt-lbl');
+  const hit = await ev(`(() => { const e = document.elementFromPoint(${x}, ${y}); return e ? (e.id || e.className) : 'нет'; })()`);
+  await gesture(x, y);
+  await waitFor(`!!document.querySelector('.dlg input')`, 3000).catch(() => { throw new Error(`нет диалога высоты; под пальцем ${hit} (${x},${y})`); });
+  await ev(`(() => { const i = document.querySelector('.dlg input'); i.value = '${v}'; document.querySelector('.dlg .primary').click(); return true; })()`);
+};
 const rectsCheck = `(() => {
   const vw = innerWidth, vh = innerHeight, bad = [];
   for (const b of document.querySelectorAll('button')) {
@@ -61,7 +85,7 @@ const rectsCheck = `(() => {
 })()`;
 const noScroll = `(() => document.documentElement.scrollWidth <= innerWidth && document.body.scrollWidth <= innerWidth ? '' : 'scrollWidth ' + document.documentElement.scrollWidth + ' > ' + innerWidth)()`;
 const overlapCheck = `(() => {
-  const ids = ['topLeft', 'infoCard', 'rightBar', 'linkStrip', 'bottomBar', 'cross'];
+  const ids = ['topLeft', 'crossChip', 'altimeter', 'rightBar', 'linkStrip', 'bottomBar', 'cross'];
   const r = ids.map((id) => { const e = document.getElementById(id); if (!e || e.hidden) return null; const q = e.getBoundingClientRect(); return q.width ? [id, q] : null; }).filter(Boolean);
   const bad = [];
   for (let i = 0; i < r.length; i++) for (let j = i + 1; j < r.length; j++) {
@@ -95,7 +119,7 @@ async function scenario() {
   await send('Page.navigate', { url: URL_ });
 
   await step('карта загрузилась', () => waitFor(`!!window.__map && window.__map.isStyleLoaded()`));
-  await step('высота в плашке', async () => { await waitFor(`/\\d/.test(document.getElementById('hereH').textContent)`); return ev(`document.getElementById('hereH').textContent + ' м'`); });
+  await step('высота в чипе под прицелом', async () => { await waitFor(`/Рельеф \\d+ м/.test(document.getElementById('crossChipText').textContent)`); return ev(`document.getElementById('crossChipText').textContent`); });
   await shot('1-start');
 
   await step('пустое состояние: «Поставьте пульт» и «Пульт здесь»', async () => {
@@ -104,6 +128,7 @@ async function scenario() {
     if (!/Поставьте пульт/.test(t) || !/Пульт здесь/.test(t) || !/По GPS/.test(t)) throw new Error('нет пустого состояния: ' + t);
     await ev(`document.getElementById('btnStHere').click(); true`);
     await waitFor(`!document.getElementById('lsMain').hidden`);
+    await waitFor(`!document.getElementById('altimeter').hidden`, 3000);
     await waitFor(`/Связь|грани|Нет |ниже склона|Считаю|рельеф|Прицел на пульте/.test(document.getElementById('lsStatus').textContent)`);
   });
   await step('связь до креста после сдвига 3 км на северо-восток', async () => {
@@ -115,25 +140,45 @@ async function scenario() {
   });
   await step('строка связи показывает обе линии', async () => {
     // На этой трассе дрон на 100 м оказывается ниже рельефа (прочерки) — поднимаем его, чтобы увидеть запасы.
-    await ev(`(() => { const i = document.getElementById('inDrone'); i.value = '1500'; i.dispatchEvent(new Event('input')); return true; })()`);
+    const chip = await ev(`document.getElementById('crossChipText').textContent`);
+    if (!/(выше|ниже) пульта|Вровень/.test(chip)) throw new Error('чип не относительно пульта: ' + chip);
+    await setDrone(1500);
     await waitFor(`/Упр\\.\\s*[+−]\\d/.test(document.getElementById('lsStatus').textContent)`);
     const t = await ev(`document.getElementById('lsStatus').textContent`);
     if (!/Упр\.\s*[+−]\d/.test(t) || !/Видео\s*[+−]\d/.test(t)) throw new Error('нет обеих линий: ' + t);
     const big = await ev(`document.querySelector('#lsStatus .ls-verdict')?.className || ''`);
     if (!/status-(ok|weak|none)/.test(big)) throw new Error('у вердикта нет класса статуса: ' + big);
     const need = await ev(`document.querySelector('#lsStatus .ls-need')?.textContent || ''`);
-    if (!/Управление/.test(need) || !/Видео/.test(need) || !/(от \d+ м|не добьёт|любой высоты)/.test(need)) throw new Error('нет нужной высоты по линиям: ' + need);
+    if (!/(Поднимите до \d+ м|держ|не добьёт|даже на|Даже на)/.test(need)) throw new Error('нет подсказки по высоте: ' + need);
     if (/−99|ниже рельефа|поднимите дрон/i.test(t)) throw new Error('служебный текст в строке: ' + t);
     // Вердикт — одна строка, не обрезан (высота строки по содержимому).
     const clip = await ev(`(() => { const e = document.getElementById('linkStrip'); return e.scrollHeight > e.clientHeight + 1; })()`);
     if (clip) throw new Error('строка связи обрезана');
     return t;
   });
-  await step('ввод высоты: неверное значение возвращается', async () => {
-    await ev(`(() => { const i = document.getElementById('inDrone'); i.value = '9000'; i.dispatchEvent(new Event('input')); i.dispatchEvent(new Event('change')); return true; })()`);
-    const v = await ev(`document.getElementById('inDrone').value`);
-    if (v !== '1500') throw new Error('поле дрона после 9000: ' + v);
-    return 'дрон 9000 → ' + v;
+  await step('высотомер: полосы, неверная высота не принимается', async () => {
+    const lv = await ev(`[...document.querySelectorAll('#altimeter .alt-band')].map(b => b.className.replace('alt-band alt-', '')).join(',')`);
+    if (!/ok|weak|none/.test(lv)) throw new Error('нет цветных полос: ' + lv);
+    await setDrone(9000);
+    await sleep(200);
+    const v = await ev(`+document.getElementById('altimeter').getAttribute('aria-valuenow')`);
+    if (v !== 1500) throw new Error('высота после 9000: ' + v);
+    return `полосы ${lv}; дрон 9000 → ${v}`;
+  });
+  await step('высотомер: перетаскивание меняет высоту и строку связи', async () => {
+    const [x, y] = await centerOf('#altimeter .alt-lbl');
+    const [tx, ty] = await centerOf('#altimeter .alt-track');
+    const th = await ev(`document.querySelector('#altimeter .alt-track').getBoundingClientRect().height`);
+    const yTo = Math.round(ty + th * 0.35); // ниже середины шкалы
+    await gesture(x, y, [[x, y + 10], [tx, Math.round((y + yTo) / 2)], [tx, yTo]]);
+    await sleep(300);
+    const v = await ev(`+document.getElementById('altimeter').getAttribute('aria-valuenow')`);
+    const lbl = await ev(`document.querySelector('#altimeter .alt-lbl').textContent`);
+    if (!(v < 1500) || !lbl.includes(String(v))) throw new Error(`после перетаскивания: droneH ${v}, подпись «${lbl}»`);
+    await waitFor(`/(Поднимите до \\d+ м|держ|не добьёт|даже на|Даже на)/.test(document.querySelector('#lsStatus .ls-need')?.textContent || '')`);
+    await setDrone(1500);
+    await waitFor(`/1500/.test(document.querySelector('#altimeter .alt-lbl').textContent)`, 3000);
+    return `дрон → ${v} м`;
   });
   await shot('2-link');
 
@@ -179,7 +224,7 @@ async function scenario() {
     if (await ev(`document.querySelectorAll('.bs-mk').length`)) throw new Error('ромбы не убраны после закрытия');
     return n ? `вариантов: ${n}` : txt.slice(0, 80);
   });
-  await ev(`(() => { const i = document.getElementById('inDrone'); i.value = '100';i.dispatchEvent(new Event('input')); return true; })()`);
+  await setDrone(100);
   await step('зона покрытия 10 км', async () => {
     await ev(`document.getElementById('btnZone').click(); true`);
     await sleep(300);
@@ -219,7 +264,7 @@ async function scenario() {
     const bad = await ev(`(() => {
       const p = document.getElementById('covPill').getBoundingClientRect(), out = [];
       if (p.left < 0 || p.top < 0 || p.right > innerWidth || p.bottom > innerHeight) out.push('за экраном');
-      for (const id of ['topLeft', 'infoCard', 'rightBar', 'linkStrip', 'bottomBar', 'cross']) {
+      for (const id of ['topLeft', 'crossChip', 'altimeter', 'rightBar', 'linkStrip', 'bottomBar', 'cross']) {
         const e = document.getElementById(id); if (!e || e.hidden) continue;
         const r = e.getBoundingClientRect(); if (!r.width) continue;
         if (p.left < r.right - 1 && r.left < p.right - 1 && p.top < r.bottom - 1 && r.top < p.bottom - 1) out.push(id);

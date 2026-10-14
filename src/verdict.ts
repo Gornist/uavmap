@@ -54,3 +54,49 @@ export function needText(n: LineNeed): string {
 /** Нужная высота по каждой линии одной строкой; каждая часть — со значком и цветом текущего статуса линии. */
 export const needLinesHtml = (lines: LineNeed[]) =>
   lines.map((l) => `<span class="${stCls(l.status)}">${ICON[l.status]}\u00a0${needText(l)}</span>`).join(' · ');
+
+/** Нужные высоты трассы: управление, видео (null — не добьёт; undefined — видео выключено) и обе линии сразу. */
+export interface HeightNeeds { rc: number | null; video?: number | null; pair: number | null }
+/** Статус линий на текущей высоте: «не добьёт» (none) и «на грани» (weak) — разные советы. */
+export interface LinesNow { rc: LinkStatus; video?: LinkStatus }
+
+/** Предел поиска нужной высоты (minHeightForLink): «не добьёт» значит «не добьёт до этой высоты». */
+const SEARCH_MAX = 1500;
+
+/**
+ * Одна подсказка-действие для высоты дрона h: что будет, если подняться или можно ли снизиться.
+ * «Поднимите до 480 м — будет и видео», «Связь держится; можно снизиться до 210 м», «Даже на 1500 м …».
+ */
+export function heightHint(h: number, needs: HeightNeeds, videoName = 'Видео', now?: LinesNow): string {
+  // Поиск нужной высоты ограничен 1500 м: выше этого линия может работать — тогда её «нужная» — текущая высота.
+  const n = { ...needs };
+  const both = now && now.rc === 'ok' && (now.video === undefined || now.video === 'ok');
+  if (n.rc === null && now?.rc === 'ok') n.rc = h;
+  if (n.video === null && now?.video === 'ok') n.video = h;
+  if (n.pair === null && both) n.pair = h;
+  const lower = (to: number, what: string) => (to <= 0 ? `${what} на любой высоте` : to < h ? `${what}; можно снизиться до ${to} м` : what);
+  const top = `${SEARCH_MAX} м`;
+  if (n.rc === null) {
+    return now?.rc === 'weak' ? `Даже на ${top} управление на грани — подойдите ближе`
+      : `Управление не добьёт даже на ${top} — подойдите ближе или нажмите «Где встать»`;
+  }
+  if (n.video === undefined) return h < n.rc ? `Поднимите до ${n.rc} м — появится связь` : lower(n.rc, 'Связь держится');
+  const vn = videoName.charAt(0).toLowerCase() + videoName.slice(1); // «видео 5,8 ГГц» — единицы не трогаем
+  const noVideo = now?.video === 'weak' ? `${vn} на грани даже на ${top}` : `${vn} не добьёт даже на ${top}`;
+  if (h < n.rc) {
+    if (n.pair === null) return `Поднимите до ${n.rc} м — появится управление; ${noVideo}`;
+    return n.pair > n.rc ? `Поднимите до ${n.rc} м — появится управление, до ${n.pair} м — и видео` : `Поднимите до ${n.rc} м — появится связь`;
+  }
+  if (n.pair === null) return `${noVideo.charAt(0).toUpperCase()}${noVideo.slice(1)} — подойдите ближе`;
+  if (h < n.pair) return `Поднимите до ${n.pair} м — будет и видео`;
+  return lower(n.pair, 'Управление и видео держатся');
+}
+
+/** Высота места под прицелом словами: относительно пульта, если он стоит, иначе — над уровнем моря. */
+export function hereText(here: number | null, station: number | null, hasStation: boolean): string {
+  if (here === null) return 'Нет данных рельефа';
+  if (!hasStation || station === null) return `Рельеф ${Math.round(here)} м`;
+  const d = Math.round(here - station);
+  if (Math.abs(d) < 3) return 'Вровень с пультом';
+  return d > 0 ? `На ${d} м выше пульта` : `На ${-d} м ниже пульта`;
+}

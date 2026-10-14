@@ -19,19 +19,19 @@
       <circle cx="24" cy="24" r="1.6" fill="currentColor"/>
     </svg>
   </div>
-  <div id="crossLabel"></div>
+  <!-- под прицелом: высота места (относительно пульта, если он стоит); нажатие — «Точка» с координатами -->
+  <button id="crossChip" class="cross-chip" title="Точка: координаты, высота, профиль"><span id="crossChipText">Рельеф —</span><span class="cc-more" aria-hidden="true">›</span></button>
 
-  <section id="infoCard" class="card">
-    <div class="ic-head">
-      <span title="Высота рельефа под прицелом над уровнем моря">Рельеф</span>
-      <b id="hereH">—</b><small>м</small>
-      <button id="infoToggle" class="mini" title="Свернуть">−</button>
+  <!-- высотомер: высота дрона и связь на каждой высоте (altimeter.ts) -->
+  <div id="altimeter" class="altimeter" hidden role="slider" tabindex="0" aria-label="Высота дрона" aria-valuemin="0" aria-valuemax="5000">
+    <div class="alt-cap alt-name" aria-hidden="true">Дрон</div>
+    <div class="alt-track">
+      <div class="alt-bands"></div>
+      <div class="alt-ticks"></div>
+      <div class="alt-drone"><button type="button" class="alt-lbl" title="Нажмите, чтобы ввести точную высоту"></button></div>
     </div>
-    <div id="infoBody">
-      <div class="ic-coords" id="hereCoords"></div>
-      <button class="ic-more" id="btnPoint">Точка: координаты, профиль…</button>
-    </div>
-  </section>
+    <div class="alt-cap"></div>
+  </div>
 
   <div id="rightBar">
     <button class="round" id="zIn" title="Приблизить">+</button>
@@ -52,11 +52,7 @@
     </div>
     <div id="lsMain" hidden>
       <div class="ls-status" id="lsStatus" aria-live="polite"></div>
-      <div class="ls-inputs">
-        <label id="lblDrone"><span>Дрон, м <em id="altModeLbl"></em></span><input id="inDrone" type="number" inputmode="decimal" min="0" max="5000" step="5"/></label>
-        <label><span>Антенна, м</span><input id="inAnt" type="number" inputmode="decimal" min="0" max="100" step="0.5"/></label>
-        <button id="btnProfile" class="primary">Профиль</button>
-      </div>
+      <button id="btnProfile" class="ghost ls-prof">Профиль</button>
     </div>
   </div>
 

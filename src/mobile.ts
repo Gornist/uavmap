@@ -1,5 +1,5 @@
 // Мобильное поведение: шторка-лист (ручка, свайп вниз), долгое нажатие/правый клик по карте,
-// компактная плашка, inputmode для числовых полей. Стили — в styles/main.css.
+// inputmode для числовых полей. Стили — в styles/main.css.
 import { map, $, closeSheet } from './app';
 import type { LatLon } from './geo';
 
@@ -10,14 +10,6 @@ const portraitSheet = () => window.matchMedia('(max-width: 640px) and (orientati
 export function initMobile(opts: { onPointPress: (p: LatLon) => void }) {
   // Масштабирование жестом на iOS (user-scalable там игнорируется).
   for (const t of ['gesturestart', 'gesturechange']) document.addEventListener(t, (e) => e.preventDefault());
-
-  // Плашка «Высота здесь» на телефоне свёрнута по умолчанию; тап по шапке разворачивает.
-  const card = $('infoCard'), toggle = $('infoToggle');
-  if (window.matchMedia('(max-width: 640px), (max-height: 520px)').matches) {
-    card.classList.add('collapsed');
-    toggle.textContent = '+';
-  }
-  card.querySelector('.ic-head')!.addEventListener('click', (e) => { if (!(e.target as HTMLElement).closest('button')) toggle.click(); });
 
   initSheetDrag();
   initLongPress(opts.onPointPress);

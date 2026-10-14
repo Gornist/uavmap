@@ -89,14 +89,19 @@ function showStationSheet() {
   const b = openSheet('📡 Пульт', `
     <div class="kv">
       <div><small>Рельеф</small><b>${stationGround !== null ? Math.round(stationGround) + ' м' : '…'}</b></div>
-      <div><small>Антенна над землёй</small><b>${st.antH} м</b></div>
       <div><small>${c.label}</small><b>${c.short}</b></div>
     </div>
+    <label class="field st-ant"><span>Антенна над землёй, м</span><input id="stAnt" type="text" inputmode="decimal" value="${st.antH}"></label>
     <div class="row">
       <button class="ghost" id="stGo">Показать</button>
       <button class="ghost" id="stMove">Пульт сюда</button>
       <button class="danger" id="stDel">Убрать пульт</button>
     </div>`);
+  // Антенна пульта: 0–100 м; неверное значение откатывается с подсказкой.
+  const ant = b.querySelector('#stAnt') as HTMLInputElement;
+  const parseAnt = () => { const v = parseFloat(ant.value.replace(',', '.')); return Number.isFinite(v) && v >= 0 && v <= 100 ? v : null; };
+  ant.addEventListener('input', () => { const v = parseAnt(); if (v !== null && S.station && v !== S.station.antH) { S.station.antH = v; emit('station'); } });
+  ant.addEventListener('change', () => { if (parseAnt() === null) { ant.value = String(S.station?.antH ?? 2); toast('Антенна: от 0 до 100 м'); } });
   b.querySelector('#stGo')!.addEventListener('click', () => map.flyTo({ center: [st.lon, st.lat] }));
   b.querySelector('#stMove')!.addEventListener('click', () => { setStation(center()); toast('Пульт перенесён в прицел'); });
   b.querySelector('#stDel')!.addEventListener('click', () => {

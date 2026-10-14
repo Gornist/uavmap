@@ -1,13 +1,15 @@
 // Строка связи над нижней панелью: пока пульта нет — «Пульт здесь / По GPS»; с пультом — вердикт до прицела,
-// нужная высота по каждой линии, запасы и азимут, поля «Дрон» и «Антенна», «Профиль». Линия пульт → прицел
-// на карте и планировщик пересчёта при движении карты.
-import { S, $, map, center, setGeo, fc, line, toast, emit, on } from './app';
+// одна подсказка по высоте («Поднимите до 480 м — будет и видео»), мелко запасы и азимут, «Профиль».
+// Данные для высотомера (связь на каждой высоте), линия пульт → прицел и планировщик пересчёта при движении карты.
+import { S, $, map, center, setGeo, fc, line, toast, on } from './app';
 import { km, dB, escapeHtml } from './format';
 import { LatLon, distance, bearing } from './geo';
 import { DemMissingError } from './elevation';
-import { LinkResult } from './radio';
-import { ICON, stCls, pairVerdict, statusCss, needLinesHtml } from './verdict';
-import { setStation, stationGround, stationGroundFailed, effRadio, effVideoOrNull, calcLink, lineNeeds, LinkCalc } from './station';
+import { LinkResult, PairResult, RadioParams, analyzePair, minHeightsForPair } from './radio';
+import { ICON, stCls, pairVerdict, statusCss, heightHint, HeightNeeds, freqName } from './verdict';
+import { setStation, stationGround, stationGroundFailed, effRadio, effVideoOrNull, calcLink, heightFnFor, LinkCalc } from './station';
+import { setAltData, setAltPreview } from './altimeter';
+import { AltLevel } from './altScale';
 import { showProfile } from './profileSheet';
 import { openOfflineSheet } from './offline';
 
@@ -20,10 +22,33 @@ const linkLine = (a: LatLon, c: LatLon, props: Record<string, unknown>) =>
   setGeo('link', fc([line([[a.lon, a.lat], [c.lon, c.lat]], props)]));
 
 /** Третья строка (мелко): запасы линий и азимут. Прочерк вместо служебного запаса «дрон ниже склона». */
-function subLine(r: LinkCalc): string {
+function subLine(pair: PairResult, az: number): string {
   const m = (x: LinkResult) => `<span class="${stCls(x.status)} num">${x.belowGround ? '—' : dB(x.margin)}</span>`;
-  const lines = r.vres ? `Упр. ${m(r.res)} · Видео ${m(r.vres)}` : `Запас ${m(r.res)}`;
-  return `${lines} · аз. <span class="num">${Math.round(r.az) % 360}°</span>`;
+  const lines = pair.video ? `Упр. ${m(pair.rc)} · Видео ${m(pair.video)}` : `Запас ${m(pair.rc)}`;
+  return `${lines} · аз. <span class="num">${Math.round(az) % 360}°</span>`;
+}
+
+/** Последний расчёт трассы — для предпросмотра высоты на высотомере без нового профиля. */
+let last: { r: LinkCalc; radio: RadioParams; video: RadioParams | null; needs: HeightNeeds } | null = null;
+
+/** Связь на высоте hh для расчёта l (рельеф трассы тот же, меняется только высота дрона). */
+const pairAt = (l: NonNullable<typeof last>, hh: number) => analyzePair(l.r.elev, l.r.dist, l.r.hA, heightFnFor(l.r)(hh), l.radio, l.video);
+
+/** Вердикт, подсказка по высоте, запасы; линия на карте — цветом статуса. */
+function renderStrip(l: NonNullable<typeof last>, pair: PairResult, hh: number) {
+  const vName = l.video ? `Видео ${freqName(l.video.freqMHz)}` : undefined;
+  $('lsStatus').innerHTML = `<div class="ls-verdict ${stCls(pair.status)}">${ICON[pair.status]} ${pairVerdict(pair)} · <span class="num">${km(l.r.dist)}</span></div>`
+    + `<div class="ls-need">${escapeHtml(heightHint(hh, l.needs, vName, { rc: pair.rc.status, video: pair.video?.status }))}</div><div class="ls-sub muted">${subLine(pair, l.r.az)}</div>`;
+  if (S.station) linkLine(S.station, l.r.target, { color: statusCss(pair.status), dash: pair.rc.los ? 0 : 1, op: 1 });
+}
+
+/** Данные высотомера: какая связь на каждой высоте; склон — если дрон оказался бы ниже рельефа у прицела. */
+function altData(l: NonNullable<typeof last>) {
+  const fn = heightFnFor(l.r);
+  const level = (hh: number): AltLevel => (fn(hh) < l.r.groundB - 0.05 ? 'ground' : pairAt(l, hh).status);
+  const slope = Math.max(0, l.r.groundB - fn(0)); // высота склона над точкой отсчёта
+  const marks = [l.needs.rc, l.needs.video, l.needs.pair, slope].filter((v): v is number => typeof v === 'number');
+  return { level, marks };
 }
 
 /** Сообщение вместо вердикта; offline — добавить кнопку «Скачать район». */
@@ -48,6 +73,8 @@ export function liveFollow() {
   if (!st || stationGround === null) return;
   const a = { lat: st.lat, lon: st.lon }, c = center();
   const dist = distance(a, c);
+  // Прицел ушёл от посчитанной точки: полосы высотомера и предпросмотр — от старой цели, до нового расчёта шкала серая.
+  if (last && distance(last.r.target, c) > 2) { last = null; setAltData(null); }
   if (dist < 5) { setGeo('link', fc()); return; }
   linkLine(a, c, { color: PENDING_COL, dash: 0, op: 0.55 });
   const az = Math.round(bearing(a, c)) % 360;
@@ -71,9 +98,10 @@ export async function updateLive() {
       if (!(e instanceof DemMissingError)) throw e;
       if (distance(center(), c) > 2) return; // прицел уже ушёл — устаревший ответ
       stripMessage('Нет данных рельефа здесь', true); setGeo('link', fc());
+      last = null; setAltData(null);
       return;
     }
-    if (!S.station) { syncMode(); setGeo('link', fc()); return; }
+    if (!S.station) { syncMode(); setGeo('link', fc()); last = null; setAltData(null); return; }
     // Ревизия цели: пока считали, прицел мог уйти — расчёт для прежней точки не применяем
     // (новый запрос уже запланирован движением карты).
     if (distance(center(), c) > 2) return;
@@ -81,12 +109,12 @@ export async function updateLive() {
       if (stationGroundFailed) stripMessage('Нет данных рельефа под пультом', true);
       else stripMessage(stationGround === null ? 'Загружаю высоту пульта…' : 'Прицел на пульте — сдвиньте карту');
       setGeo('link', fc());
+      last = null; setAltData(null);
     } else {
-      const { res, pair } = r;
-      const needs = needLinesHtml(lineNeeds(r, radio, video));
-      $('lsStatus').innerHTML = `<div class="ls-verdict ${stCls(pair.status)}">${ICON[pair.status]} ${pairVerdict(pair)} · <span class="num">${km(r.dist)}</span></div>`
-        + `<div class="ls-need">${needs}</div><div class="ls-sub muted">${subLine(r)}</div>`;
-      linkLine(S.station, c, { color: statusCss(pair.status), dash: res.los ? 0 : 1, op: 1 });
+      const m = minHeightsForPair(r.elev, r.dist, r.hA, heightFnFor(r), radio, video);
+      last = { r, radio, video, needs: video ? m : { rc: m.rc, pair: m.pair } };
+      renderStrip(last, r.pair, S.droneH);
+      setAltData(altData(last));
     }
   } finally {
     liveBusy = false;
@@ -173,20 +201,7 @@ export function locate(): Promise<{ p: LatLon; accuracy: number } | null> {
   });
 }
 
-/** Число из поля в пределах [min, max]; иначе — вернуть прежнее значение и коротко подсказать. */
-function bindNumber(inp: HTMLInputElement, min: number, max: number, hint: string, get: () => number | null, set: (v: number) => void) {
-  const parse = () => { const v = parseFloat(inp.value.replace(',', '.')); return Number.isFinite(v) && v >= min && v <= max ? v : null; };
-  inp.addEventListener('input', () => { const v = parse(); if (v !== null && v !== get()) set(v); });
-  inp.addEventListener('change', () => {
-    if (parse() !== null) return;
-    const old = get();
-    inp.value = old === null ? '' : String(old);
-    toast(hint);
-  });
-}
-
 export function initLinkStrip() {
-  const inAnt = $<HTMLInputElement>('inAnt'), inDrone = $<HTMLInputElement>('inDrone');
 
   $('btnStHere').addEventListener('click', () => {
     closeOffer();
@@ -208,21 +223,12 @@ export function initLinkStrip() {
     else if (act === 'gps-close') closeOffer();
   });
 
-  const syncInputs = () => {
-    syncMode();
-    if (document.activeElement !== inAnt) inAnt.value = S.station ? String(S.station.antH) : '';
-    if (document.activeElement !== inDrone) inDrone.value = String(S.droneH);
-    const mode = S.altMode === 'takeoff' ? 'над взлётом' : 'над рельефом';
-    $('altModeLbl').textContent = mode;
-    $('lblDrone').title = `Высота дрона ${mode} (меню → Расчёт)`;
-  };
-  bindNumber(inAnt, 0, 100, 'Антенна: от 0 до 100 м', () => S.station?.antH ?? null, (v) => {
-    if (S.station) { S.station.antH = v; emit('station'); }
-  });
-  bindNumber(inDrone, 0, 5000, 'Высота дрона: от 0 до 5000 м', () => S.droneH, (v) => { S.droneH = v; emit('radio'); });
-  on('station', syncInputs);
-  on('radio', syncInputs);
-  syncInputs();
+  // Высотомер: пока тянут метку дрона — строка показывает связь на этой высоте (без нового профиля).
+  // Предпросмотр — только для той точки, что сейчас под прицелом (иначе показали бы связь чужой цели).
+  const fresh = () => !!last && !!S.station && distance(center(), last.r.target) <= 2;
+  setAltPreview((hh) => { if (fresh()) renderStrip(last!, pairAt(last!, hh), hh); }, () => { if (fresh()) renderStrip(last!, last!.r.pair, S.droneH); });
+  on('station', syncMode);
+  syncMode();
 
   $('btnProfile').addEventListener('click', () => showProfile());
 
@@ -235,5 +241,6 @@ export function initLinkStrip() {
 }
 
 // Пересчёт строки при смене пульта или радио (маркер пульта перерисовывает station.ts — он подписан раньше).
-on('station', () => updateLive());
+// Пульт сдвинули — прежняя трасса не годится и для предпросмотра высоты.
+on('station', () => { last = null; updateLive(); });
 on('radio', () => updateLive());

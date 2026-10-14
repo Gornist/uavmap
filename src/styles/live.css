@@ -49,13 +49,35 @@
 .ls-msg { font-size: 16px; font-weight: 600; }
 .ls-dl { margin-top: 6px; min-height: 44px; }
 
-.ls-inputs { display: flex; gap: 8px; align-items: stretch; }
-.ls-inputs label { display: flex; align-items: center; gap: 6px; flex: 1 1 0; min-width: 0; min-height: 44px; padding: 0 4px 0 10px; background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: 10px; }
-.ls-inputs label span { flex: 1 1 auto; font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ls-inputs label em { font-weight: 400; color: var(--muted); font-size: 13px; }
-.ls-inputs input { flex: none; width: 76px; min-height: 36px; padding: 4px 6px; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
-.ls-inputs button { flex: none; min-height: 44px; }
-.no-flexgap .ls-inputs > * + *, .no-flexgap .ls-acts > * + *, .no-flexgap .ls-offer > * + *, .no-flexgap .ls-inputs label > * + * { margin-left: 8px; }
+/* С пультом: слева вердикт, подсказка по высоте и запасы; справа «Профиль». Высоту дрона меняют на высотомере. */
+#lsMain { display: flex; align-items: center; gap: 10px; }
+#lsMain .ls-status { flex: 1 1 auto; min-width: 0; padding: 2px; }
+.ls-prof { flex: none; min-height: 44px; }
+.no-flexgap .ls-acts > * + *, .no-flexgap .ls-offer > * + *, .no-flexgap #lsMain > * + * { margin-left: 8px; }
+
+/* ---------- Чип под прицелом: высота места (относительно пульта); нажатие — «Точка» ---------- */
+.cross-chip { position: absolute; left: 50%; top: calc(50% + 30px); transform: translateX(-50%); z-index: 4; display: flex; align-items: center; gap: 6px; min-height: 36px; padding: 4px 8px 4px 12px; background: var(--panel); color: var(--text); border: 1px solid var(--line-strong); border-radius: 18px; box-shadow: var(--shadow); font-size: 14px; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cc-more { color: var(--muted); font-size: 18px; line-height: 1; }
+.no-flexgap .cross-chip > * + * { margin-left: 6px; }
+body.ruler-on .cross-chip { display: none; }
+@media (pointer: coarse) { .cross-chip { min-height: 44px; border-radius: 22px; } }
+
+/* ---------- Высотомер (altimeter.ts): справа, левее кнопок карты ---------- */
+.altimeter { position: absolute; z-index: 5; right: calc(66px + var(--safe-r)); top: calc(64px + var(--safe-t)); bottom: calc(var(--bar-h) + 20px + var(--safe-b)); width: 46px; display: flex; flex-direction: column; align-items: center; touch-action: none; -webkit-user-select: none; user-select: none; cursor: ns-resize; outline: none; }
+.altimeter[hidden], body.sheet-open .altimeter, body.ruler-on .altimeter { display: none; }
+.alt-cap { flex: none; margin-top: 4px; font-size: 12px; text-align: center; line-height: 1.2; font-weight: 600; color: #fff; white-space: nowrap; text-shadow: 0 0 3px #000, 0 0 2px #000, 0 0 1px #000; }
+.alt-track { position: relative; flex: 1 1 auto; width: 100%; background: rgba(20, 18, 15, 0.35); border: 2px solid rgba(20, 18, 15, 0.85); border-radius: 10px; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.55); }
+.alt-name { margin: 0 0 20px; }
+.alt-name + .alt-track + .alt-cap { margin-top: 20px; } /* бегунок у края шкалы не закрывает подписи */
+.altimeter:focus-visible .alt-track { box-shadow: 0 0 0 3px var(--accent); }
+.alt-bands { position: absolute; top: 0; right: 0; bottom: 0; left: 0; overflow: hidden; border-radius: 8px; }
+.alt-band { position: absolute; left: 0; right: 0; opacity: 0.92; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: #fff; text-shadow: 0 0 2px #000; }
+.alt-tick { position: absolute; left: 0; right: 0; transform: translateY(50%); text-align: center; font: 600 11px/1 var(--font-mono); color: #fff; text-shadow: 0 0 3px #000, 0 0 2px #000, 0 0 1px #000; pointer-events: none; }
+/* Бегунок — внутри шкалы (наружу ничего не торчит и не закрывает чип у прицела): число метров на белой плашке.
+ * Ширина — width: 100%: кнопка в Chrome 68 не растягивается от left/right. */
+.alt-drone { position: absolute; left: -5px; right: -5px; height: 0; }
+.alt-lbl { position: absolute; left: 0; width: 100%; top: 0; transform: translateY(-50%); height: 34px; padding: 0; background: #fff; color: #15130f; border: 2px solid #15130f; border-radius: 9px; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5); font: 700 14px/1 var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; letter-spacing: -0.5px; cursor: ns-resize; }
+@media (pointer: coarse) { .alt-lbl { height: 44px; } }
 
 /* ---------- «Где встать»: ромбы с номерами и цель ---------- */
 /* Позицию маркера задаёт MapLibre (position: absolute + transform) — здесь её не переопределяем. */
@@ -71,6 +93,11 @@ table.rt button.apply { padding: 6px 10px; font-size: 13px; min-height: 36px; wh
 table.rt td:last-child { width: 1%; }
 .prof-need { margin: 0 0 10px; font-weight: 600; }
 .prof-need span { white-space: nowrap; }
+
+/* Строка связи по центру шириной до 620 px заходит под высотомер, пока окно уже ~860 px: тогда высотомер — над строкой. */
+@media (max-width: 860px) {
+  .altimeter { bottom: calc(var(--bar-h) + var(--strip-h, 0px) + 14px + var(--safe-b)); }
+}
 
 /* ---------- Портрет телефона: панель — «вкладки» со значком над подписью ---------- */
 @media (max-width: 640px) {
@@ -88,12 +115,12 @@ table.rt td:last-child { width: 1%; }
   .ls-offer .primary { order: 2; flex: 1 1 100%; }
   .ls-verdict { font-size: 19px; }
   .ls-need { font-size: 14px; }
-  .ls-inputs { gap: 6px; }
-  .ls-inputs label { flex: 1 1 auto; padding: 0 2px 0 8px; gap: 4px; }
-  .ls-inputs label span { font-size: 13px; overflow: visible; }
-  .ls-inputs label em { display: none; }
-  .ls-inputs input { width: 54px; padding: 4px; }
-  .ls-inputs button { padding: 0 12px; }
+  .ls-prof { padding: 0 12px; }
+  /* строка связи на всю ширину — высотомер над ней */
+  .altimeter { right: calc(60px + var(--safe-r)); bottom: calc(var(--bar-h) + var(--strip-h, 0px) + 14px + var(--safe-b)); width: 42px; }
+  .cross-chip { font-size: 13px; padding: 4px 10px; max-width: calc(100vw - 216px - var(--safe-l) - var(--safe-r)); }
+  .cc-more { display: none; } /* узко: стрелка не влезает, чип и так кнопка */
+  #crossChipText { overflow: hidden; text-overflow: ellipsis; }
 }
 
 /* ---------- Ландшафт телефона: строка компактная, слева, не заходит на прицел ---------- */
@@ -104,16 +131,17 @@ table.rt td:last-child { width: 1%; }
   #linkStrip { left: calc(8px + var(--safe-l)); transform: none; width: min(380px, 44vw); padding: 6px 8px; }
   .ls-offer .ls-x { order: 1; }
   .ls-offer .primary { order: 2; flex: 1 1 100%; }
-  #crossLabel { top: auto; bottom: calc(50% + 28px); } /* подпись у прицела — над ним: снизу слева стоит строка связи */
+  .cross-chip { top: auto; bottom: calc(50% + 30px); } /* чип — над прицелом: снизу слева стоит строка связи */
+  /* кнопки карты здесь — ряд внизу справа; высотомер — у самого края над ними */
+  .altimeter { right: calc(12px + var(--safe-r)); top: calc(6px + var(--safe-t)); bottom: calc(var(--bar-h) + 62px + var(--safe-b)); }
+  .alt-name { margin-bottom: 18px; }
+  .alt-name + .alt-track + .alt-cap { margin-top: 18px; white-space: nowrap; align-self: flex-end; } /* у края экрана — растёт влево */
+  .alt-cap br { display: none; }
+  body:not(.sheet-open) .cov-pill { right: calc(70px + var(--safe-r)); } /* справа сверху — высотомер */
   .ls-status { padding: 0 2px 6px; }
   .ls-verdict { font-size: 17px; }
   .ls-need { font-size: 13px; margin-top: 1px; }
   .ls-sub { margin-top: 0; }
   .ls-empty p { font-size: 15px; margin-bottom: 6px; }
-  .ls-inputs { gap: 6px; }
-  .ls-inputs label { flex: 1 1 auto; padding: 0 2px 0 8px; gap: 4px; }
-  .ls-inputs label span { font-size: 13px; overflow: visible; }
-  .ls-inputs label em { display: none; }
-  .ls-inputs input { width: 54px; padding: 4px; }
-  .ls-inputs button { padding: 0 10px; }
+  .ls-prof { padding: 0 10px; }
 }

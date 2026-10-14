@@ -70,7 +70,7 @@ export interface DialogOptions<T> {
   title: string;
   text?: string;
   /** Поле ввода: начальное значение, подсказка, предел длины. */
-  input?: { value?: string; placeholder?: string; maxLength?: number; label?: string };
+  input?: { value?: string; placeholder?: string; maxLength?: number; label?: string; inputMode?: string };
   /** Кнопки слева направо; Enter нажимает кнопку с def: true (или последнюю). Отмена — Escape, клик мимо, «Отмена». */
   buttons: (DialogButton<T> & { def?: boolean })[];
   /** Подпись кнопки отмены; пустая строка — без кнопки (Escape всё равно отменяет). */
@@ -101,6 +101,7 @@ export function dialog<T>(o: DialogOptions<T>): Promise<DialogResult<T> | null> 
       inp.value = o.input.value ?? '';
       if (o.input.placeholder) inp.placeholder = o.input.placeholder;
       if (o.input.maxLength) inp.maxLength = o.input.maxLength;
+      if (o.input.inputMode) inp.setAttribute('inputmode', o.input.inputMode); // цифровая клавиатура на телефоне
       box.appendChild(lab);
     }
     const acts = h('<div class="dlg-acts"></div>');

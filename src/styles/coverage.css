@@ -16,7 +16,7 @@
 .rt td small { display: block; color: var(--muted); font-size: 13px; }
 
 /* Плашка зоны поверх карты (шторка закрыта): под карточкой рельефа справа, top задаёт coverageSheet.ts. */
-.cov-pill { position: absolute; top: calc(110px + var(--safe-t)); right: calc(10px + var(--safe-r)); z-index: 5; display: flex; align-items: stretch; max-width: calc(100% - 20px - var(--safe-l) - var(--safe-r)); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 22px; box-shadow: var(--shadow); }
+.cov-pill { position: absolute; top: calc(8px + var(--safe-t)); right: calc(10px + var(--safe-r)); z-index: 5; display: flex; align-items: stretch; max-width: calc(100% - 20px - var(--safe-l) - var(--safe-r)); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 22px; box-shadow: var(--shadow); }
 .cov-pill[hidden] { display: none; }
 .cov-pill button { background: transparent; border: 0; color: var(--text); min-height: 44px; }
 .cov-pill-main { display: flex; align-items: center; gap: 8px; white-space: nowrap; padding: 6px 4px 6px 14px; text-align: left; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 0; }

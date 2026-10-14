@@ -25,22 +25,13 @@ textarea.txt { min-height: 70px; resize: vertical; font: inherit; color: var(--t
   .seg button { font-size: 14px; }
   .maplibregl-compact { min-height: 44px; min-width: 44px; }
   .maplibregl-ctrl-attrib-button { width: 44px !important; height: 44px !important; }
-  #infoCard { top: calc(8px + var(--safe-t)); right: calc(10px + var(--safe-r)); }
   #toast { top: calc(64px + var(--safe-t)); }
   #progress { top: calc(64px + var(--safe-t)); }
   #rightBar { right: calc(10px + var(--safe-r)); }
-  .ic-head button.mini { margin: -6px -8px -6px 0; }
 }
 
-/* Узкий портрет телефона */
-@media (max-width: 640px) {
-  #infoCard { width: min(210px, calc(100vw - 190px)); padding: 4px 4px 4px 10px; }
-}
 /* Компактные плашки: узкий портрет и ландшафт телефона */
 @media (max-width: 640px), (max-height: 520px) and (orientation: landscape) {
-  .ic-head span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-  .ic-head small { margin-right: 0; }
-  .ic-coords { margin-top: 4px; }
   #rulerBar { width: calc(100% - 16px - var(--safe-l) - var(--safe-r)); padding: 6px 8px; }
   #rulerText { flex: 1 1 100%; min-width: 0; font-size: 13px; }
   #rulerBar button { flex: 1; }
@@ -64,7 +55,6 @@ textarea.txt { min-height: 70px; resize: vertical; font: inherit; color: var(--t
 /* Ландшафт телефона */
 @media (max-height: 520px) and (orientation: landscape) {
   #rightBar { top: auto; bottom: calc(var(--bar-h) + 8px + var(--safe-b)); transform: none; flex-direction: row; gap: 8px; }
-  #infoCard { width: 210px; }
   #rulerBar { left: calc(8px + var(--safe-l)); transform: none; width: min(380px, 44vw); }
   #drawer { padding-left: var(--safe-l); }
   .dr-head { padding-top: calc(10px + var(--safe-t)); }
