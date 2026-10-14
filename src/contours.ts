@@ -1,8 +1,6 @@
 // Горизонтали из DEM-тайлов (maplibre-contour): векторный источник + линии и подписи высот.
-import maplibregl from 'maplibre-gl';
-import mlcontour from 'maplibre-contour';
 import { map, S } from './app';
-import { DEM_URL } from './demTiles';
+import { contourTilesUrl } from './demSource';
 
 const LAYERS = ['contours-line', 'contours-line-major', 'contours-label'];
 
@@ -22,11 +20,10 @@ function beforeOverlay(): string | undefined {
 
 export function initContours() {
   if (map.getSource('contours')) return;
-  const dem = new mlcontour.DemSource({ url: DEM_URL, encoding: 'terrarium', maxzoom: 13, worker: true });
-  dem.setupMaplibre(maplibregl);
   map.addSource('contours', {
     type: 'vector',
-    tiles: [dem.contourProtocolUrl({ thresholds: THRESHOLDS, contourLayer: 'contours', elevationKey: 'ele', levelKey: 'level', extent: 4096, buffer: 1 })],
+    // общий источник рельефа, с повтором зависших тайлов (demSource.ts)
+    tiles: [contourTilesUrl({ thresholds: THRESHOLDS, contourLayer: 'contours', elevationKey: 'ele', levelKey: 'level', extent: 4096, buffer: 1 })],
     maxzoom: 15,
   });
   const vis = S.map.contours ? 'visible' : 'none';

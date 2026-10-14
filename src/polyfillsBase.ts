@@ -25,6 +25,19 @@ if (!(String.prototype as any).matchAll) { // Chrome 73
   };
 }
 
+// Blob/File.arrayBuffer() и .text() — с Chrome 76. Нужны общему протоколу рельефа maplibre-contour (отмывка),
+// импорту своих карт, меток и восстановлению проекта из файла.
+if (typeof Blob !== 'undefined' && typeof FileReader !== 'undefined') {
+  const read = <T>(b: Blob, how: 'readAsArrayBuffer' | 'readAsText') => new Promise<T>((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result as T);
+    r.onerror = () => reject(r.error);
+    r[how](b);
+  });
+  if (!(Blob.prototype as any).arrayBuffer) (Blob.prototype as any).arrayBuffer = function (this: Blob) { return read<ArrayBuffer>(this, 'readAsArrayBuffer'); };
+  if (!(Blob.prototype as any).text) (Blob.prototype as any).text = function (this: Blob) { return read<string>(this, 'readAsText'); };
+}
+
 if (!(Array.prototype as any).flat) { // Chrome 69
   (Array.prototype as any).flat = function (this: unknown[], depth = 1): unknown[] {
     return depth < 1 ? this.slice() : this.reduce<unknown[]>((a, v) => a.concat(Array.isArray(v) ? (v as any).flat(depth - 1) : v), []);

@@ -1,7 +1,8 @@
 // Общее ядро: состояние, карта, мелкие помощники интерфейса.
 import maplibregl, { Map as MLMap, StyleSpecification, RasterSourceSpecification } from 'maplibre-gl';
 import { load, save, State } from './store';
-import { DEM_URL } from './demTiles';
+import { HILLSHADE_DEM_URL } from './demSource';
+import { reliable, NET_PROTO, netProtocol } from './netTiles';
 import type { LatLon } from './geo';
 import { initTheme, resolvedTheme, MAP_THEME, THEMES } from './theme';
 
@@ -44,27 +45,38 @@ function reliefPaint(): Record<string, Record<string, unknown>> {
   };
 }
 
+maplibregl.addProtocol(NET_PROTO, netProtocol); // до создания карты
+
+/** Проявление новых тайлов: короче стандартных 300 мс — карта появляется быстрее, но без резкого мигания. */
+const FADE_MS = 150;
+
 /** Яркость подложки: пользовательское затемнение × приглушение ночной темы. */
 const baseBrightness = () => (1 - S.map.dim) * MAP_THEME[resolvedTheme()].baseBrightness;
 
 function style(): StyleSpecification {
   const sources: StyleSpecification['sources'] = {
     // maxzoom 13 — как у офлайн-районов и горизонталей; на крупных масштабах MapLibre растягивает z13.
-    dem: { type: 'raster-dem', tiles: [DEM_URL], tileSize: 256, maxzoom: 13, encoding: 'terrarium', attribution: 'Рельеф © Mapzen, AWS' },
-    roads: { type: 'raster', tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}'], tileSize: 256, maxzoom: 19 },
-    places: { type: 'raster', tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'], tileSize: 256, maxzoom: 19 },
+    // Тайлы — из общего источника (demSource.ts): отмывка не качает их второй раз после горизонталей и расчётов.
+    dem: { type: 'raster-dem', tiles: [HILLSHADE_DEM_URL], tileSize: 256, maxzoom: 13, encoding: 'terrarium', attribution: 'Рельеф © Mapzen, AWS' },
+    // Растровые тайлы — через загрузчик с таймаутом (netTiles.ts): зависший запрос не держит тайл минутами.
+    roads: { type: 'raster', tiles: [reliable('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}')], tileSize: 256, maxzoom: 19 },
+    places: { type: 'raster', tiles: [reliable('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}')], tileSize: 256, maxzoom: 19 },
   };
   const layers: StyleSpecification['layers'] = [{ id: 'bg', type: 'background', paint: { 'background-color': MAP_THEME[resolvedTheme()].bg } }];
   for (const [id, b] of Object.entries(BASES)) {
-    sources[id] = { type: 'raster', tiles: b.tiles, tileSize: 256, maxzoom: b.max, attribution: b.attr };
-    layers.push({ id: `base-${id}`, type: 'raster', source: id, layout: { visibility: id === S.map.base ? 'visible' : 'none' }, paint: { 'raster-brightness-max': baseBrightness() } });
+    sources[id] = { type: 'raster', tiles: b.tiles.map(reliable), tileSize: 256, maxzoom: b.max, attribution: b.attr };
+    layers.push({ id: `base-${id}`, type: 'raster', source: id, layout: { visibility: id === S.map.base ? 'visible' : 'none' }, paint: { 'raster-brightness-max': baseBrightness(), 'raster-fade-duration': FADE_MS } });
   }
   layers.push(
     { id: 'hillshade', type: 'hillshade', source: 'dem', layout: { visibility: S.map.hillshade ? 'visible' : 'none' }, paint: reliefPaint().hillshade as Record<string, string | number> },
-    { id: 'roads', type: 'raster', source: 'roads', layout: { visibility: S.map.labels ? 'visible' : 'none' }, paint: { 'raster-opacity': 0.85 } },
-    { id: 'places', type: 'raster', source: 'places', layout: { visibility: S.map.labels ? 'visible' : 'none' } },
+    { id: 'roads', type: 'raster', source: 'roads', layout: { visibility: S.map.labels ? 'visible' : 'none' }, paint: { 'raster-opacity': 0.85, 'raster-fade-duration': FADE_MS } },
+    { id: 'places', type: 'raster', source: 'places', layout: { visibility: S.map.labels ? 'visible' : 'none' }, paint: { 'raster-fade-duration': FADE_MS } },
   );
-  return { version: 8, glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf', sources, layers };
+  // Глифы подписей горизонталей (цифры и «м») — свои, в public/fonts: тот же сервер, офлайн-кеш оболочки.
+  // С внешнего сервера на старте глиф мог не прийти, и в старом Chrome его ошибку нельзя переслать воркеру
+  // MapLibre (DataCloneError) — тогда все тайлы горизонталей с подписями ждали его вечно.
+  const glyphs = `${location.origin}${import.meta.env.BASE_URL}fonts/{fontstack}/{range}.pbf`;
+  return { version: 8, glyphs, sources, layers };
 }
 
 export const map: MLMap = new maplibregl.Map({
@@ -76,6 +88,10 @@ export const map: MLMap = new maplibregl.Map({
   dragRotate: false,
   pitchWithRotate: false,
   maxPitch: 0,
+  // Плотность отрисовки не выше 2: растровые тайлы на 3× чётче не станут, а GPU рисовал бы в 2,25 раза больше пикселей.
+  pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+  renderWorldCopies: false, // одна копия мира — меньше тайлов на мелких масштабах
+  fadeDuration: FADE_MS, // подписи горизонталей
 });
 map.touchZoomRotate.disableRotation();
 map.addControl(new maplibregl.ScaleControl({ maxWidth: 140, unit: 'metric' }), 'bottom-left');
@@ -89,7 +105,7 @@ export function addBase(id: string, def: BaseDef, sourceSpec: Partial<RasterSour
   const layers = map.getStyle().layers;
   const bg = layers.findIndex((l) => l.id === 'bg');
   map.addLayer(
-    { id: `base-${id}`, type: 'raster', source: id, layout: { visibility: id === S.map.base ? 'visible' : 'none' }, paint: { 'raster-brightness-max': baseBrightness() } },
+    { id: `base-${id}`, type: 'raster', source: id, layout: { visibility: id === S.map.base ? 'visible' : 'none' }, paint: { 'raster-brightness-max': baseBrightness(), 'raster-fade-duration': FADE_MS } },
     layers[bg + 1]?.id,
   );
 }

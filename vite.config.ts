@@ -10,6 +10,8 @@ export default defineConfig(({ command, mode }) => {
   return {
     base: command === 'build' ? '/uavmap/' : '/',
     worker: { format: 'iife' }, // классический воркер: module workers только с Chrome 80
+    // CSP-сборка MapLibre: без встроенного кода воркера (~70 КБ) — воркер грузится отдельным файлом (polyfills.ts).
+    resolve: { alias: [{ find: /^maplibre-gl$/, replacement: 'maplibre-gl/dist/maplibre-gl-csp.js' }] },
     // chrome68: пульты-планшеты без Google Play живут на старом Chrome/WebView — транспилируем и зависимости.
     build: { target: ['es2017', 'chrome68'], sourcemap: true },
     test: { environment: 'node', include: ['src/**/*.test.ts'] },
@@ -40,7 +42,7 @@ export default defineConfig(({ command, mode }) => {
         },
         injectManifest: {
           rollupFormat: 'iife',
-          globPatterns: ['**/*.{js,css,html,svg,png,webmanifest,woff2}'], // woff2 — шрифты интерфейса офлайн,
+          globPatterns: ['**/*.{js,css,html,svg,png,webmanifest,woff2,pbf}'], // woff2 — шрифты интерфейса, pbf — глифы карты, офлайн,
           globIgnores: ['**/*.map'],
           maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
         },

@@ -6,6 +6,8 @@ export const DEM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/
 /** Начало адреса тайла (до {z}) — по нему Service Worker узнаёт запросы рельефа. */
 export const DEM_PREFIX = DEM_URL.slice(0, DEM_URL.indexOf('{z}'));
 export const DEM_MAX_Z = 15;
+/** Детальнее z13 в общем источнике тайлов (demSource.ts) нет — как у офлайн-районов; профили и зона на наших широтах — z ≤ 13. */
+export const SHARED_DEM_MAX_Z = 13;
 export const TILE = 256;
 
 export const demTileUrl = (z: number, x: number, y: number) =>

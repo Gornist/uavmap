@@ -3,7 +3,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import './polyfillsBase'; // первым — до MapLibre (globalThis, fromEntries и т. д.)
 import maplibregl from 'maplibre-gl';
-// Воркер MapLibre той же версии (CSP-сборка) как отдельный файл — для обёртки на старых браузерах.
+// Воркер MapLibre той же версии (CSP-сборка; сама библиотека — тоже CSP, см. vite.config.ts) отдельным файлом:
+// на новых браузерах — напрямую, на старых — через обёртку.
 import cspWorkerUrl from 'maplibre-gl/dist/maplibre-gl-csp-worker.js?url';
 // postMessage(msg, { transfer }) — с Chrome 77. MapLibre 4 шлёт так и со страницы, и из своего воркера.
 // На старых браузерах: на странице оборачиваем Worker.prototype.postMessage, а воркер MapLibre
@@ -22,6 +23,8 @@ if (typeof Worker !== 'undefined' && !optionsFormSupported()) {
   const flat = `if(!Array.prototype.flat){Array.prototype.flat=function(d){d=d===undefined?1:d;return d<1?this.slice():this.reduce(function(a,v){return a.concat(Array.isArray(v)?v.flat(d-1):v)},[])};Array.prototype.flatMap=function(f,t){return this.map(f,t).flat(1)};}`;
   const src = flat + `(function(){var p=self.postMessage.bind(self);self.postMessage=function(m,o){if(o&&!Array.isArray(o)&&typeof o==='object')return p(m,o.transfer||[]);return o===undefined?p(m):p(m,o)};})();importScripts(${JSON.stringify(abs)});`;
   maplibregl.setWorkerUrl(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+} else {
+  maplibregl.setWorkerUrl(new URL(cspWorkerUrl, location.href).href);
 }
 
 export {};

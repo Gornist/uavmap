@@ -1,7 +1,7 @@
 // Высоты рельефа из открытых тайлов Terrarium (Mapzen/AWS Open Data, SRTM/ASTER/GMTED и др.).
 // Значение = R*256 + G + B/256 − 32768 (метры над уровнем моря).
 import { LatLon, lonLatToPixel, interpolate, destination, R_EARTH, D2R } from './geo';
-import { DEM_MAX_Z, TILE, demTileUrl, demTileSpan, demTileCount } from './demTiles';
+import { DEM_MAX_Z, SHARED_DEM_MAX_Z, TILE, demTileUrl, demTileSpan, demTileCount } from './demTiles';
 
 // Кеш тайлов — LRU по порядку Map: при обращении тайл переставляется в конец, вытесняется самый давний.
 // 200 тайлов × 256 КБ (Float32 256×256) ≈ 50 МБ. Мозаику зоны (до 256 тайлов) держат свои ссылки — кеш её не ограничивает.
@@ -11,6 +11,14 @@ const cache = new Map<string, Promise<Float32Array | null>>();
 /** Свой источник высот тайла (например, из HGT пользователя). null — нет покрытия, идём в сеть. */
 export type LocalDemProvider = (z: number, x: number, y: number) => Promise<Float32Array | null> | Float32Array | null;
 let localDem: LocalDemProvider | null = null;
+
+/**
+ * Общий источник тайлов до z13 (demSource.ts регистрирует его на странице): тайл, который уже скачал и разобрал
+ * воркер горизонталей/отмывки, не качаем и не разбираем второй раз. В воркере зоны и в тестах его нет — свой fetch.
+ */
+export type SharedDem = (z: number, x: number, y: number) => Promise<{ width: number; height: number; data: Float32Array }>;
+let sharedDem: SharedDem | null = null;
+export function setSharedDem(fn: SharedDem | null) { sharedDem = fn; }
 
 /** Сбросить кеш тайлов (после смены своих данных рельефа). */
 function clearDemCache() { cache.clear(); }
@@ -23,7 +31,7 @@ export function setLocalDemProvider(fn: LocalDemProvider | null) {
 
 // На слабой мобильной сети отдельный запрос может зависнуть навсегда — без таймаута вся загрузка зоны
 // стоит на «35/36». Зависший или оборванный запрос повторяем один раз; ответ сервера с ошибкой — нет.
-const NET_TIMEOUT_MS = 20000;
+const NET_TIMEOUT_MS = 10000;
 const NET_TRIES = 2;
 
 function fetchBlob(url: string): Promise<Blob> {
@@ -38,7 +46,11 @@ function fetchBlob(url: string): Promise<Blob> {
   );
 }
 
-async function fromNetwork(z: number, x: number, y: number): Promise<Float32Array | null> {
+/** Сколько ждать общий источник, прежде чем параллельно идти своим запросом. */
+const SHARED_WAIT_MS = 250;
+
+/** Свой запрос со страницы (видит Service Worker и офлайн-кеш); один повтор при зависании/обрыве. */
+async function ownFetch(z: number, x: number, y: number): Promise<Float32Array | null> {
   const url = demTileUrl(z, x, y);
   for (let i = 0; i < NET_TRIES; i++) {
     try {
@@ -48,6 +60,31 @@ async function fromNetwork(z: number, x: number, y: number): Promise<Float32Arra
     }
   }
   return null;
+}
+
+/** Первый непустой результат из двух; null — если оба пустые. */
+function firstOf(a: Promise<Float32Array | null>, b: Promise<Float32Array | null>): Promise<Float32Array | null> {
+  return new Promise((resolve) => {
+    let left = 2;
+    const take = (v: Float32Array | null) => { if (v) resolve(v); else if (--left === 0) resolve(null); };
+    a.then(take); b.then(take);
+  });
+}
+
+async function fromNetwork(z: number, x: number, y: number): Promise<Float32Array | null> {
+  if (!sharedDem || z > SHARED_DEM_MAX_Z) return ownFetch(z, x, y);
+  // До z13 — общий источник: тайл уже мог скачать и разобрать воркер горизонталей/отмывки, разбор не в главном потоке.
+  // Не отдал (сбой или старый Chrome: воркер из blob не видит Service Worker и офлайн-кеш) — свой запрос.
+  // Ответ общего источника ограничен по времени: воркер мог его потерять — тогда «нет» вместо вечного ожидания.
+  const shared = Promise.race([
+    sharedDem(z, x, y).then((t) => (t.width === TILE && t.height === TILE ? t.data : null), () => null),
+    new Promise<null>((r) => setTimeout(() => r(null), NET_TIMEOUT_MS)),
+  ]);
+  const quick = await Promise.race([shared, new Promise<undefined>((r) => setTimeout(r, SHARED_WAIT_MS))]);
+  if (quick) return quick;
+  if (quick === null) return ownFetch(z, x, y);
+  // Воркер занят горизонталями и отмывкой нового участка — трасса не ждёт его очередь: свой запрос параллельно, кто первый.
+  return firstOf(shared, ownFetch(z, x, y));
 }
 
 function decode(img: ImageBitmap): Float32Array {
@@ -123,7 +160,7 @@ export function sampleGrid(g: DemGrid, gx: number, gy: number): number {
 }
 
 /** Высота в точке или null, если рельеф недоступен. */
-export async function elevationAt(p: LatLon, z = 14): Promise<number | null> {
+export async function elevationAt(p: LatLon, z = SHARED_DEM_MAX_Z): Promise<number | null> {
   // Нет тайла на z (например, офлайн: районы качаются до z13–z12) — пробуем уровни грубее.
   for (let zz = z; zz >= Math.min(z, 11); zz--) {
     try {

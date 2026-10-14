@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DemGrid, DemMissingError, sampleGrid, sampleRay, demPlan, demPixelM, demQualityHint, fetchGrid } from './elevation';
+import { DemGrid, DemMissingError, sampleGrid, sampleRay, demPlan, demPixelM, demQualityHint, fetchGrid, setSharedDem } from './elevation';
 import { lonLatToPixel, R_EARTH } from './geo';
 
 /** Сетка 4×3 с линейным полем f(x, y) = 10·x + 100·y (x,y — индексы ячеек): билинейная интерполяция точна. */
@@ -168,5 +168,56 @@ describe('загрузка тайлов: зависший запрос', () => {
     const done = expect(g).rejects.toBeInstanceOf(DemMissingError);
     await vi.advanceTimersByTimeAsync(41000);
     await done;
+  });
+});
+
+describe('общий источник тайлов (demSource) и запасной запрос', () => {
+  afterEach(() => { setSharedDem(null); vi.unstubAllGlobals(); });
+  const tile = (v: number) => ({ width: 256, height: 256, data: new Float32Array(256 * 256).fill(v) });
+
+  it('тайл из общего источника — свой запрос не нужен', async () => {
+    let fetched = 0;
+    vi.stubGlobal('fetch', async () => { fetched++; return { ok: false, status: 500 }; });
+    setSharedDem(async () => tile(321));
+    const g = await fetchGrid([{ lat: 30.5, lon: 30.5 }], 10, 0);
+    expect(g.data[0]).toBe(321);
+    expect(fetched).toBe(0);
+  });
+
+  it('общий источник не отдал (старый Chrome офлайн, сбой) — берём своим запросом', async () => {
+    vi.stubGlobal('createImageBitmap', async () => ({}));
+    vi.stubGlobal('OffscreenCanvas', class {
+      getContext() { return { drawImage() {}, getImageData: () => ({ data: new Uint8ClampedArray(256 * 256 * 4).map((_, i) => [128, 100, 0, 255][i % 4]) }) }; }
+    });
+    let fetched = 0;
+    vi.stubGlobal('fetch', async () => { fetched++; return { ok: true, blob: async () => new Blob() }; });
+    setSharedDem(async () => { throw new Error('offline'); });
+    const g = await fetchGrid([{ lat: 31.5, lon: 31.5 }], 10, 0);
+    expect(g.data[0]).toBe(100);
+    expect(fetched).toBe(1);
+  });
+
+  it('общий источник занят дольше 250 мс — свой запрос параллельно, берём первый', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('createImageBitmap', async () => ({}));
+    vi.stubGlobal('OffscreenCanvas', class {
+      getContext() { return { drawImage() {}, getImageData: () => ({ data: new Uint8ClampedArray(256 * 256 * 4).map((_, i) => [128, 100, 0, 255][i % 4]) }) }; }
+    });
+    let fetched = 0;
+    vi.stubGlobal('fetch', async () => { fetched++; return { ok: true, blob: async () => new Blob() }; });
+    setSharedDem(() => new Promise(() => {})); // очередь воркера не двигается
+    const g = fetchGrid([{ lat: 33.5, lon: 33.5 }], 10, 0);
+    await vi.advanceTimersByTimeAsync(300);
+    expect((await g).data[0]).toBe(100);
+    expect(fetched).toBe(1);
+    vi.useRealTimers();
+  });
+
+  it('выше z13 общий источник не спрашиваем', async () => {
+    let shared = 0;
+    vi.stubGlobal('fetch', async () => ({ ok: false, status: 404 }));
+    setSharedDem(async () => { shared++; return tile(1); });
+    await expect(fetchGrid([{ lat: 32.5, lon: 32.5 }], 14, 0)).rejects.toBeInstanceOf(DemMissingError);
+    expect(shared).toBe(0);
   });
 });

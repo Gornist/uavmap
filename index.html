@@ -7,6 +7,9 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <title>Радиус — радиовидимость дрона</title>
+  <!-- соединения к серверам тайлов открываем заранее: на мобильной сети DNS и TLS — заметная часть первой загрузки карты -->
+  <link rel="preconnect" href="https://server.arcgisonline.com" crossorigin />
+  <link rel="preconnect" href="https://s3.amazonaws.com" crossorigin />
 </head>
 <body>
   <div id="map"></div>
