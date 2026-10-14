@@ -21,7 +21,7 @@ describe('defaults', () => {
   });
   it('разумные значения', () => {
     const d = defaults();
-    expect(d.v).toBe(1);
+    expect(d.v).toBe(2); // v2: отмывка рельефа по умолчанию (миграция в migrate)
     expect(d.station).toBeNull();
     expect(d.droneH).toBeGreaterThan(0);
     expect(d.coverage.heights.length).toBeGreaterThan(0);
@@ -369,5 +369,26 @@ describe('зона: миграция старых проектов (heights/heig
     try {
       expect(load().coverage).toMatchObject({ compare: true, heights: [40, 400] });
     } finally { vi.unstubAllGlobals(); }
+  });
+});
+
+describe('миграция v1 → v2: отмывка рельефа по умолчанию', () => {
+  it('старый проект (v1, отмывка выключена прежним умолчанием) — включаем', async () => {
+    const { restoreProject } = await import('./store');
+    const st = restoreProject(JSON.stringify({ v: 1, map: { base: 'topo', hillshade: false, contours: true } }));
+    expect(st.map.hillshade).toBe(true);
+    expect(st.map.base).toBe('topo');
+    expect(st.v).toBe(2);
+  });
+  it('проект без версии — тоже старый', async () => {
+    const { restoreProject } = await import('./store');
+    expect(restoreProject(JSON.stringify({ map: { hillshade: false } })).map.hillshade).toBe(true);
+  });
+  it('v2: выбор пользователя «без отмывки» сохраняется', async () => {
+    const { restoreProject } = await import('./store');
+    expect(restoreProject(JSON.stringify({ v: 2, map: { hillshade: false } })).map.hillshade).toBe(false);
+  });
+  it('новый проект — отмывка включена', () => {
+    expect(defaults().map.hillshade).toBe(true);
   });
 });

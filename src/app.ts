@@ -27,13 +27,30 @@ export const BASES: Record<string, BaseDef> = {
   osm: { name: 'Схема (OSM)', tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'], max: 19, attr: '© участники OpenStreetMap' },
 };
 
+/**
+ * Отмывка и горизонтали под подложку. Цвет нейтральный (белый на спутнике, тёмно-коричневый на светлых топо/схеме):
+ * жёлтый и красный на карте остаются за связью. Отмывка на спутнике мягче — у снимка свои тени.
+ */
+function reliefPaint(): Record<string, Record<string, unknown>> {
+  const sat = S.map.base === 'sat';
+  const ink = sat ? '#ffffff' : '#4a3a2a';
+  return {
+    hillshade: sat
+      ? { 'hillshade-exaggeration': 0.35, 'hillshade-shadow-color': 'rgba(0, 0, 0, 0.6)', 'hillshade-highlight-color': 'rgba(255, 255, 255, 0.22)' }
+      : { 'hillshade-exaggeration': 0.5, 'hillshade-shadow-color': 'rgba(40, 30, 20, 0.55)', 'hillshade-highlight-color': 'rgba(255, 255, 255, 0.35)' },
+    'contours-line': { 'line-color': ink, 'line-opacity': sat ? 0.2 : 0.3 },
+    'contours-line-major': { 'line-color': ink, 'line-opacity': sat ? 0.5 : 0.55 },
+    'contours-label': { 'text-color': sat ? 'rgba(255, 255, 255, 0.9)' : '#3d2f22', 'text-halo-color': sat ? 'rgba(0, 0, 0, 0.65)' : 'rgba(255, 255, 255, 0.85)' },
+  };
+}
+
 /** Яркость подложки: пользовательское затемнение × приглушение ночной темы. */
 const baseBrightness = () => (1 - S.map.dim) * MAP_THEME[resolvedTheme()].baseBrightness;
 
 function style(): StyleSpecification {
   const sources: StyleSpecification['sources'] = {
     // maxzoom 13 — как у офлайн-районов и горизонталей; на крупных масштабах MapLibre растягивает z13.
-    dem: { type: 'raster-dem', tiles: [DEM_URL], tileSize: 256, maxzoom: 13, encoding: 'terrarium', attribution: 'Рельеф: Mapzen Terrain Tiles (AWS Open Data)' },
+    dem: { type: 'raster-dem', tiles: [DEM_URL], tileSize: 256, maxzoom: 13, encoding: 'terrarium', attribution: 'Рельеф © Mapzen, AWS' },
     roads: { type: 'raster', tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}'], tileSize: 256, maxzoom: 19 },
     places: { type: 'raster', tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'], tileSize: 256, maxzoom: 19 },
   };
@@ -43,7 +60,7 @@ function style(): StyleSpecification {
     layers.push({ id: `base-${id}`, type: 'raster', source: id, layout: { visibility: id === S.map.base ? 'visible' : 'none' }, paint: { 'raster-brightness-max': baseBrightness() } });
   }
   layers.push(
-    { id: 'hillshade', type: 'hillshade', source: 'dem', layout: { visibility: S.map.hillshade ? 'visible' : 'none' }, paint: { 'hillshade-exaggeration': 0.45, 'hillshade-shadow-color': '#000', 'hillshade-highlight-color': '#fff8' } },
+    { id: 'hillshade', type: 'hillshade', source: 'dem', layout: { visibility: S.map.hillshade ? 'visible' : 'none' }, paint: reliefPaint().hillshade as Record<string, string | number> },
     { id: 'roads', type: 'raster', source: 'roads', layout: { visibility: S.map.labels ? 'visible' : 'none' }, paint: { 'raster-opacity': 0.85 } },
     { id: 'places', type: 'raster', source: 'places', layout: { visibility: S.map.labels ? 'visible' : 'none' } },
   );
@@ -127,6 +144,7 @@ function overlayPaint(): Record<string, Record<string, unknown>> {
     'ov-ruler-live': { 'line-color': accent },
     'ov-ruler-pts': { 'circle-stroke-color': m.casing, 'circle-color': accent },
     'cov-edge': { 'line-color': accent },
+    ...reliefPaint(),
   };
 }
 function applyMapTheme() {

@@ -38,7 +38,7 @@ export const MARK_COLOR = '#e3a948';
 export const COV_MAX_HEIGHTS = 8;
 
 export const defaults = (): State => ({
-  v: 1,
+  v: 2,
   marks: [],
   routes: [],
   station: null,
@@ -48,7 +48,7 @@ export const defaults = (): State => ({
   presetId: 'elrs24',
   video: { enabled: true, radio: { ...DEFAULT_VIDEO }, presetId: DEFAULT_VIDEO_PRESET },
   coverage: { radius: 15000, compare: false, heights: [30, 60, 100, 150, 250, 400], show: 'margin', opacity: 0.6, line: 'both' },
-  map: { base: 'sat', labels: true, hillshade: false, contours: true, dim: 0.35, center: [40.2045, 43.6805], zoom: 12 },
+  map: { base: 'sat', labels: true, hillshade: true, contours: true, dim: 0.35, center: [40.2045, 43.6805], zoom: 12 },
   coordFormat: 'sk42',
   clutter: 'open',
 });
@@ -67,13 +67,20 @@ function merge<T>(base: T, over: unknown): T {
  * Миграция сырых данных до слияния с defaults (иначе не отличить старый формат от нового).
  * Зона: прежние проекты считали весь список высот и показывали выбранную heightIdx. Теперь показ — S.droneH,
  * список остаётся «Сравнить высоты»: у старого проекта сравнение включено, если высот было больше одной.
+ * v1 → v2: отмывка рельефа стала основой карты (горизонтали — редкие) — у старых проектов включаем её один раз:
+ * там она была выключена по прежнему умолчанию, а не выбором пользователя.
  */
 export function migrate(raw: unknown): unknown {
-  if (!isObj(raw) || !isObj(raw.coverage)) return raw;
-  const c = { ...raw.coverage };
-  if (typeof c.compare !== 'boolean' && ('heightIdx' in c || 'heights' in c)) c.compare = Array.isArray(c.heights) && c.heights.length > 1;
-  delete c.heightIdx;
-  return { ...raw, coverage: c };
+  if (!isObj(raw)) return raw;
+  let out: Record<string, unknown> = raw;
+  if (isObj(raw.coverage)) {
+    const c = { ...raw.coverage };
+    if (typeof c.compare !== 'boolean' && ('heightIdx' in c || 'heights' in c)) c.compare = Array.isArray(c.heights) && c.heights.length > 1;
+    delete c.heightIdx;
+    out = { ...out, coverage: c };
+  }
+  if (!(typeof raw.v === 'number' && raw.v >= 2) && isObj(raw.map)) out = { ...out, map: { ...raw.map, hillshade: true } };
+  return out;
 }
 
 export function load(): State {

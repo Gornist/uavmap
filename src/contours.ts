@@ -6,9 +6,12 @@ import { DEM_URL } from './demTiles';
 
 const LAYERS = ['contours-line', 'contours-line-major', 'contours-label'];
 
-/** Шаг горизонталей по зуму: [тонкие, утолщённые] в метрах. */
+/**
+ * Шаг горизонталей по зуму: [тонкие, утолщённые] в метрах. Форму рельефа даёт отмывка, поэтому линии редкие:
+ * на обычном масштабе — через 100 м, частые (20 м) — только при сильном приближении.
+ */
 const THRESHOLDS: Record<number, [number, number]> = {
-  0: [200, 1000], 9: [100, 500], 11: [50, 250], 13: [20, 100], 14: [10, 50],
+  0: [500, 1000], 9: [200, 1000], 11: [100, 500], 14: [20, 100],
 };
 
 /** Первый слой накладок (покрытие, связь, маршруты) — горизонтали вставляем под ним. */
@@ -29,12 +32,12 @@ export function initContours() {
   const vis = S.map.contours ? 'visible' : 'none';
   const before = beforeOverlay();
   const src = { source: 'contours', 'source-layer': 'contours' };
-  map.addLayer({ id: 'contours-line', type: 'line', ...src, filter: ['!=', ['get', 'level'], 1], layout: { visibility: vis }, paint: { 'line-color': '#e8a45c', 'line-opacity': 0.5, 'line-width': ['interpolate', ['linear'], ['zoom'], 9, 0.4, 15, 0.9] } }, before);
-  map.addLayer({ id: 'contours-line-major', type: 'line', ...src, filter: ['==', ['get', 'level'], 1], layout: { visibility: vis }, paint: { 'line-color': '#f0a050', 'line-opacity': 0.85, 'line-width': ['interpolate', ['linear'], ['zoom'], 9, 0.8, 15, 1.7] } }, before);
+  map.addLayer({ id: 'contours-line', type: 'line', ...src, filter: ['!=', ['get', 'level'], 1], layout: { visibility: vis }, paint: { 'line-width': ['interpolate', ['linear'], ['zoom'], 9, 0.4, 15, 0.9] } }, before);
+  map.addLayer({ id: 'contours-line-major', type: 'line', ...src, filter: ['==', ['get', 'level'], 1], layout: { visibility: vis }, paint: { 'line-width': ['interpolate', ['linear'], ['zoom'], 9, 0.7, 15, 1.4] } }, before);
   map.addLayer({
     id: 'contours-label', type: 'symbol', ...src, filter: ['==', ['get', 'level'], 1],
-    layout: { visibility: vis, 'symbol-placement': 'line', 'text-field': ['concat', ['to-string', ['get', 'ele']], ' м'], 'text-font': ['Noto Sans Regular'], 'text-size': 11, 'symbol-spacing': 320 },
-    paint: { 'text-color': '#ffd9a8', 'text-halo-color': 'rgba(30,18,8,0.9)', 'text-halo-width': 1.4 },
+    layout: { visibility: vis, 'symbol-placement': 'line', 'text-field': ['concat', ['to-string', ['get', 'ele']], ' м'], 'text-font': ['Noto Sans Regular'], 'text-size': 11, 'symbol-spacing': 420 },
+    paint: { 'text-halo-width': 1.2 }, // цвета — по подложке, в app.ts (overlayPaint)
   }, before);
 }
 
