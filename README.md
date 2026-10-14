@@ -46,7 +46,7 @@ node scripts/smoke.mjs http://localhost:5174/   # дымовой тест в hea
 
 ## Данные
 
-- Рельеф: [Mapzen Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) (AWS Open Data; SRTM, GMTED, ETOPO1 и др.).
+- Рельеф: [Mapterhorn](https://mapterhorn.com/) — Terrarium WebP 512 px (HTTP/2), Copernicus GLO-30 и национальные модели рельефа; лицензии источников — [mapterhorn.com/attribution](https://mapterhorn.com/attribution) (в основном CC BY 4.0 и общественное достояние).
 - Подложки: Esri World Imagery, OpenTopoMap (CC-BY-SA), OpenStreetMap. Соблюдайте условия использования провайдеров тайлов.
 
 ## Стек

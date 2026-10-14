@@ -6,6 +6,7 @@ import { S, map, center, openSheet, progress, toast, fc, setGeo } from './app';
 import { h, button, chips, confirmDialog } from './ui';
 import { fmtBytes, escapeHtml } from './format';
 import { destination } from './geo';
+import { DEM_SRC_ID } from './demTiles';
 import { OFFLINE_CACHE, OFFLINE_KEY, RADII_KM, DEFAULT_TILE_BYTES, Area, Tile, tileUrl, enumerateTiles, estimateBytes, planLayers, parseAreas, exclusiveKeys, keyToUrl } from './offlineCore';
 
 // ---------- Хранилище метаданных ----------
@@ -123,6 +124,8 @@ let renderFn: (() => void) | null = null;
 const cachesOk = () => typeof caches !== 'undefined' && typeof caches.open === 'function';
 
 async function runDownload(area: Area, reload: boolean) {
+  // Район с прежнего источника: его план уровней (мог быть z14) — под старые тайлы; перекачиваем по нынешнему плану.
+  if (area.src !== DEM_SRC_ID) area.layers = planLayers(area.lat, area.lon, area.km, area.calc, area.view);
   const tiles = enumerateTiles(area.lat, area.lon, area.layers);
   const ctl = new AbortController();
   job = { ctl, text: '0%' };
@@ -148,11 +151,15 @@ async function runDownload(area: Area, reload: boolean) {
   area.tiles = tiles.length;
   area.bytes = Math.round(res.bytes + res.skipped * avg);
   area.ts = Date.now();
+  area.src = DEM_SRC_ID;
   if (!res.aborted || res.done + res.skipped > 0) {
     const cur = loadAreas();
     const k = cur.findIndex((x) => x.id === area.id);
     if (k >= 0) cur[k] = area; else cur.push(area);
     saveAreas(cur);
+    // Скачанный район — данные, которые браузер не должен вытеснять при нехватке места (без запроса пользователю
+    // в Chrome; где не поддерживается — просто ничего).
+    void navigator.storage?.persist?.().catch(() => false);
   }
   const size = fmtBytes(Math.max(area.bytes, 1));
   toast(res.aborted
@@ -231,7 +238,7 @@ export function openOfflineSheet(): void {
         const tiles = enumerateTiles(o.lat, o.lon, layers).length;
         const area: Area = {
           id: `o${Date.now().toString(36)}`, name: `Район ${selKm} км · ${new Date().toLocaleDateString('ru-RU')}`,
-          lat: o.lat, lon: o.lon, km: selKm, calc: selCalc, view: selView, layers, tiles, bytes: 0, ts: Date.now(),
+          lat: o.lat, lon: o.lon, km: selKm, calc: selCalc, view: selView, layers, tiles, bytes: 0, ts: Date.now(), src: DEM_SRC_ID,
         };
         runDownload(area, false);
       };
@@ -245,7 +252,9 @@ export function openOfflineSheet(): void {
     if (!list.length) body.appendChild(h('<p class="hint">Пока нет.</p>'));
     for (const a of list) {
       const lv = [a.calc ? 'расчёт' : '', a.view ? 'карта' : ''].filter(Boolean).join(' + ');
-      const it = h(`<div class="off-item"><b>${escapeHtml(a.name)}</b><div class="off-meta">${a.km} км · ${lv} · ~${fmtBytes(a.bytes)}</div><div class="row"></div></div>`);
+      // Скачан с прежнего источника рельефа: эти тайлы приложение больше не читает — нужно перекачать.
+      const old = a.src !== DEM_SRC_ID ? '<div class="off-meta"><b>Рельеф обновился — нажмите «Обновить», чтобы район снова работал без сети</b></div>' : '';
+      const it = h(`<div class="off-item"><b>${escapeHtml(a.name)}</b><div class="off-meta">${a.km} км · ${lv} · ~${fmtBytes(a.bytes)}</div>${old}<div class="row"></div></div>`);
       const r = it.querySelector('.row')!;
       const mk = (t: string, cls: string, f: () => void) => r.appendChild(button(t, cls, f));
       mk('Показать', 'ghost', () => showAreaOnMap(a));

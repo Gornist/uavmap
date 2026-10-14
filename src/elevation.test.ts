@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DemGrid, DemMissingError, sampleGrid, sampleRay, demPlan, demPixelM, demQualityHint, fetchGrid, setSharedDem } from './elevation';
+import { DemGrid, DemMissingError, sampleGrid, sampleRay, demPlan, demPixelM, fetchGrid, setSharedDem, elevationAt } from './elevation';
 import { lonLatToPixel, R_EARTH } from './geo';
 
 /** Сетка 4×3 с линейным полем f(x, y) = 10·x + 100·y (x,y — индексы ячеек): билинейная интерполяция точна. */
@@ -119,23 +119,16 @@ describe('demPlan', () => {
   });
 });
 
-describe('demQualityHint', () => {
-  it('только севернее 60° и южнее 56°', () => {
-    expect(demQualityHint(55, 59)).toBeNull();
-    expect(demQualityHint(55, 61)).toContain('60°');
-    expect(demQualityHint(-57)).not.toBeNull();
-  });
-});
 
 describe('загрузка тайлов: зависший запрос', () => {
   afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
   // Terrarium: R*256 + G + B/256 − 32768 → пиксель (128, 100, 0) = 100 м.
   function stubCanvas() {
-    vi.stubGlobal('createImageBitmap', async () => ({}));
+    vi.stubGlobal('createImageBitmap', async () => ({ width: 512, height: 512 }));
     vi.stubGlobal('OffscreenCanvas', class {
       getContext() {
-        return { drawImage() {}, getImageData: () => ({ data: new Uint8ClampedArray(256 * 256 * 4).map((_, i) => [128, 100, 0, 255][i % 4]) }) };
+        return { drawImage() {}, getImageData: () => ({ data: new Uint8ClampedArray(512 * 512 * 4).map((_, i) => [128, 100, 0, 255][i % 4]) }) };
       }
     });
   }
@@ -173,7 +166,7 @@ describe('загрузка тайлов: зависший запрос', () => {
 
 describe('общий источник тайлов (demSource) и запасной запрос', () => {
   afterEach(() => { setSharedDem(null); vi.unstubAllGlobals(); });
-  const tile = (v: number) => ({ width: 256, height: 256, data: new Float32Array(256 * 256).fill(v) });
+  const tile = (v: number) => ({ width: 512, height: 512, data: new Float32Array(512 * 512).fill(v) });
 
   it('тайл из общего источника — свой запрос не нужен', async () => {
     let fetched = 0;
@@ -185,9 +178,9 @@ describe('общий источник тайлов (demSource) и запасно
   });
 
   it('общий источник не отдал (старый Chrome офлайн, сбой) — берём своим запросом', async () => {
-    vi.stubGlobal('createImageBitmap', async () => ({}));
+    vi.stubGlobal('createImageBitmap', async () => ({ width: 512, height: 512 }));
     vi.stubGlobal('OffscreenCanvas', class {
-      getContext() { return { drawImage() {}, getImageData: () => ({ data: new Uint8ClampedArray(256 * 256 * 4).map((_, i) => [128, 100, 0, 255][i % 4]) }) }; }
+      getContext() { return { drawImage() {}, getImageData: () => ({ data: new Uint8ClampedArray(512 * 512 * 4).map((_, i) => [128, 100, 0, 255][i % 4]) }) }; }
     });
     let fetched = 0;
     vi.stubGlobal('fetch', async () => { fetched++; return { ok: true, blob: async () => new Blob() }; });
@@ -199,9 +192,9 @@ describe('общий источник тайлов (demSource) и запасно
 
   it('общий источник занят дольше 250 мс — свой запрос параллельно, берём первый', async () => {
     vi.useFakeTimers();
-    vi.stubGlobal('createImageBitmap', async () => ({}));
+    vi.stubGlobal('createImageBitmap', async () => ({ width: 512, height: 512 }));
     vi.stubGlobal('OffscreenCanvas', class {
-      getContext() { return { drawImage() {}, getImageData: () => ({ data: new Uint8ClampedArray(256 * 256 * 4).map((_, i) => [128, 100, 0, 255][i % 4]) }) }; }
+      getContext() { return { drawImage() {}, getImageData: () => ({ data: new Uint8ClampedArray(512 * 512 * 4).map((_, i) => [128, 100, 0, 255][i % 4]) }) }; }
     });
     let fetched = 0;
     vi.stubGlobal('fetch', async () => { fetched++; return { ok: true, blob: async () => new Blob() }; });
@@ -213,7 +206,31 @@ describe('общий источник тайлов (demSource) и запасно
     vi.useRealTimers();
   });
 
-  it('выше z13 общий источник не спрашиваем', async () => {
+  it('виртуальный тайл 256 px — нужная четверть тайла источника 512 px', async () => {
+    // Значение = номер четверти (0..3) — проверяем, что каждый виртуальный тайл взял свою.
+    const t = new Float32Array(512 * 512);
+    for (let r = 0; r < 512; r++) for (let c = 0; c < 512; c++) t[r * 512 + c] = (c >= 256 ? 1 : 0) + (r >= 256 ? 2 : 0);
+    let calls = 0;
+    setSharedDem(async () => { calls++; return { width: 512, height: 512, data: t }; });
+    // Точка в правой нижней четверти виртуального уровня 11 → тайл источника z10.
+    const g = await fetchGrid([{ lat: 34.6, lon: 34.6 }], 11, 300); // запас 300 px — захватит соседние виртуальные тайлы
+    const vals = new Set(Array.from(g.data));
+    expect(vals.size).toBeGreaterThan(1);
+    for (const v of vals) expect([0, 1, 2, 3]).toContain(v);
+    // Виртуальные тайлы одного источника не качают его повторно.
+    const srcTiles = new Set<string>();
+    for (let ty = g.py0 / 256; ty < (g.py0 + g.height) / 256; ty++) for (let tx = g.px0 / 256; tx < (g.px0 + g.width) / 256; tx++) srcTiles.add(`${tx >> 1}/${ty >> 1}`);
+    expect(calls).toBe(srcTiles.size);
+  });
+
+  it('высота точки — с виртуального z13 (тайл источника z12), как у профиля и офлайн-районов', async () => {
+    const asked: number[] = [];
+    setSharedDem(async (z) => { asked.push(z); return tile(777); });
+    expect(await elevationAt({ lat: 35.7, lon: 35.7 })).toBe(777);
+    expect(asked[0]).toBe(12);
+  });
+
+  it('виртуальный z14 (источник z13, нет по всему миру) — общий источник не спрашиваем', async () => {
     let shared = 0;
     vi.stubGlobal('fetch', async () => ({ ok: false, status: 404 }));
     setSharedDem(async () => { shared++; return tile(1); });

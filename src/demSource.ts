@@ -17,7 +17,7 @@ import { setSharedDem } from './elevation';
  */
 export const demSource = new mlcontour.DemSource({
   url: DEM_URL, encoding: 'terrarium', maxzoom: SHARED_DEM_MAX_Z, worker: true,
-  cacheSize: 120, // разобранные тайлы в воркере: экран отмывки и горизонталей + трасса
+  cacheSize: 40, // разобранные тайлы 512 px (1 МБ каждый) в воркере: экран отмывки и горизонталей + трасса
   timeoutMs: 30000, // см. выше: ошибка из воркера на старых Chrome теряется — пусть лучше дождётся
 });
 demSource.setupMaplibre(maplibregl);

@@ -15,7 +15,7 @@
 //    по самому Lba (хвост (64)–(66) только добавляет потери).
 //  • r0..r1 — часть лучей (для параллельных воркеров), сетка может быть вырезкой мозаики под сектор.
 import { destination, lonLatToPixel, R_EARTH } from './geo';
-import { DemGrid, sampleGrid, sampleRay } from './elevation';
+import { DemGrid, sampleGrid, sampleRay, sampleRayPoints } from './elevation';
 import { C, clampK } from './radio';
 import { bullingtonPointNu, bullingtonTaper, deltaBullingtonTail, knifeEdgeJ, smoothSurfaceHeights } from './diffraction';
 
@@ -54,7 +54,13 @@ function pushHull(hull: Int32Array, n: number, y: Float64Array, i: number): numb
   return n + 1;
 }
 
-export function computeCoverage(j: CoverageJob, onProgress?: (frac: number) => void): CoverageResult {
+/**
+ * Рельеф лучей части r0..r1 (не зависит от частоты): g — максимум окна, gp — в точке дрона, [ro * nS + s].
+ * computeChunk считает его один раз на обе линии (управление и видео) — геометрия лучей была ~половиной времени.
+ */
+export interface RayProfiles { g: Float64Array; gp: Float64Array; filled: boolean }
+
+export function computeCoverage(j: CoverageJob, onProgress?: (frac: number) => void, cache?: RayProfiles): CoverageResult {
   const nS = Math.floor(j.radius / j.step) + 1;
   const nH = j.heights.length;
   const r0 = j.r0 ?? 0, r1 = j.r1 ?? j.rays, nr = r1 - r0;
@@ -93,15 +99,17 @@ export function computeCoverage(j: CoverageJob, onProgress?: (frac: number) => v
   for (let r = r0; r < r1; r++) {
     const ro = r - r0;
     const az = (360 * r) / j.rays;
-    // Рельеф луча: максимум узлов DEM в окне ±step/2 (вершины хребтов не сглаживаются), g[0] — точка пульта.
-    sampleRay(j.grid, j.lat, j.lon, az, j.step, nS, g);
-    g[0] = ground0;
-    // Высота в самой точке дрона (как конец профиля в analyzeLink) — для позиции дрона, регрессии и «ниже рельефа».
-    gp[0] = ground0;
-    for (let s = 1; s < nS; s++) {
-      const p = destination({ lat: j.lat, lon: j.lon }, az, dd[s]);
-      const [x, y] = lonLatToPixel(p.lon, p.lat, j.grid.z);
-      gp[s] = sampleGrid(j.grid, x, y);
+    if (cache?.filled) {
+      g.set(cache.g.subarray(ro * nS, ro * nS + nS));
+      gp.set(cache.gp.subarray(ro * nS, ro * nS + nS));
+    } else {
+      // Рельеф луча: максимум узлов DEM в окне ±step/2 (вершины хребтов не сглаживаются), g[0] — точка пульта.
+      sampleRay(j.grid, j.lat, j.lon, az, j.step, nS, g);
+      g[0] = ground0;
+      // Высота в самой точке дрона (как конец профиля в analyzeLink) — для позиции дрона, регрессии и «ниже рельефа».
+      gp[0] = ground0;
+      sampleRayPoints(j.grid, j.lat, j.lon, az, j.step, nS, gp);
+      if (cache) { cache.g.set(g, ro * nS); cache.gp.set(gp, ro * nS); }
     }
     for (let s = 0; s < nS; s++) { G[s] = g[s] - tx; H[s] = G[s] - s * s * cK; }
     let nG = 0, nHh = 0;
@@ -247,8 +255,14 @@ export interface CoverageChunk extends Omit<CoverageJob, 'freqMHz' | 'budget' | 
 
 export function computeChunk(c: CoverageChunk, onProgress?: (frac: number) => void): CoverageResult[] {
   const { lines, ...base } = c;
-  return lines.map((ln, li) => computeCoverage({ ...base, ...ln },
-    onProgress && ((f) => onProgress((li + f) / lines.length))));
+  // Рельеф лучей — один на все линии: первая линия заполняет, остальные берут готовый.
+  const nS = Math.floor(c.radius / c.step) + 1, nr = (c.r1 ?? c.rays) - (c.r0 ?? 0);
+  const cache: RayProfiles | undefined = lines.length > 1 ? { g: new Float64Array(nr * nS), gp: new Float64Array(nr * nS), filled: false } : undefined;
+  return lines.map((ln, li) => {
+    const res = computeCoverage({ ...base, ...ln }, onProgress && ((f) => onProgress((li + f) / lines.length)), cache);
+    if (cache) cache.filled = true;
+    return res;
+  });
 }
 
 /**

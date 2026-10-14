@@ -10,9 +10,9 @@ const sw = self as unknown as ServiceWorkerGlobalScope;
 interface ManifestEntry { url: string; revision: string | null }
 
 const DEM_AREA = 'uavmap-dem-v1';
-// v2: в прежнем кеше могли остаться недописанные ответы (сеть встала посреди тайла) — их чтение висело вечно.
-const DEM_RUNTIME = 'uavmap-dem-runtime-v2';
-const OLD_CACHES = ['uavmap-dem-runtime', 'uavmap-glyphs'];
+// v3: источник рельефа сменился (Mapterhorn); в v1 могли остаться недописанные ответы — их чтение висело вечно.
+const DEM_RUNTIME = 'uavmap-dem-runtime-v3';
+const OLD_CACHES = ['uavmap-dem-runtime', 'uavmap-dem-runtime-v2', 'uavmap-glyphs'];
 /** Запрос в сеть из Service Worker: сеть пульта иногда «встаёт» посреди ответа — без таймаута он висел бы вечно. */
 const NET_TIMEOUT_MS = 15000;
 const DEM_RUNTIME_MAX = 3000;
@@ -43,6 +43,12 @@ sw.addEventListener('install', (event) => {
 sw.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     for (const k of await caches.keys()) if ((k.startsWith(SHELL_PREFIX) && k !== SHELL) || OLD_CACHES.includes(k)) await caches.delete(k);
+    // Тайлы офлайн-районов с прежнего источника рельефа больше не читаются — освобождаем место
+    // (районы в списке помечены «устарел», их перекачивает «Обновить»).
+    try {
+      const area = await caches.open(DEM_AREA);
+      for (const r of await area.keys()) if (!r.url.startsWith(DEM_PREFIX)) await area.delete(r);
+    } catch { /* хранилище недоступно — не критично */ }
     await sw.clients.claim();
   })());
 });

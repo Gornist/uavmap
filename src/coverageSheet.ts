@@ -4,7 +4,7 @@
 import './styles/coverage.css';
 import { S, map, toast, openSheet, closeSheet, persist, emit } from './app';
 import { h, button, chips, details } from './ui';
-import { COVERAGE_RADII_KM, demQualityHint } from './elevation';
+import { COVERAGE_RADII_KM } from './elevation';
 import { freeSpaceRange } from './radio';
 import { setStation, effRadio, effVideo, altModeText } from './station';
 import { ICON } from './verdict';
@@ -188,8 +188,6 @@ function render() {
   };
   op.onchange = persist;
   more.appendChild(op);
-  const q = demQualityHint(S.station.lat);
-  if (q) more.appendChild(hint(q));
 
   if (shown) {
     more.appendChild(sec('Таблица по высотам'));

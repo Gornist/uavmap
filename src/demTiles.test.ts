@@ -1,13 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { DEM_PREFIX, DEM_URL, demTileCount, demTileSpan, demTileUrl } from './demTiles';
+import { DEM_PREFIX, DEM_URL, demTileCount, demTileSpan, demTileUrl, srcOf } from './demTiles';
 import { lonLatToPixel } from './geo';
 
 describe('demTiles', () => {
   it('адрес тайла и префикс для Service Worker', () => {
-    expect(demTileUrl(3, 4, 5)).toBe('https://s3.amazonaws.com/elevation-tiles-prod/terrarium/3/4/5.png');
+    expect(demTileUrl(3, 4, 5)).toBe('https://tiles.mapterhorn.com/3/4/5.webp');
     expect(DEM_URL.startsWith(DEM_PREFIX)).toBe(true);
     expect(demTileUrl(12, 1, 2).startsWith(DEM_PREFIX)).toBe(true);
-    expect(DEM_PREFIX).toBe('https://s3.amazonaws.com/elevation-tiles-prod/terrarium/');
+    expect(DEM_PREFIX).toBe('https://tiles.mapterhorn.com/');
+  });
+  it('виртуальный тайл 256 px → тайл источника 512 px уровнем выше и четверть в нём', () => {
+    expect(srcOf(13, 5013, 2989)).toEqual({ z: 12, x: 2506, y: 1494, qx: 1, qy: 1 });
+    expect(srcOf(13, 5012, 2988)).toEqual({ z: 12, x: 2506, y: 1494, qx: 0, qy: 0 });
+    expect(srcOf(1, 1, 0)).toEqual({ z: 0, x: 0, y: 0, qx: 1, qy: 0 });
   });
   it('одна точка — один тайл; запас у границы тайла добавляет соседний', () => {
     const p = { lat: 43.68, lon: 40.2 };

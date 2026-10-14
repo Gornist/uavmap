@@ -22,8 +22,10 @@ export function initContours() {
   if (map.getSource('contours')) return;
   map.addSource('contours', {
     type: 'vector',
-    // общий источник рельефа, с повтором зависших тайлов (demSource.ts)
-    tiles: [contourTilesUrl({ thresholds: THRESHOLDS, contourLayer: 'contours', elevationKey: 'ele', levelKey: 'level', extent: 4096, buffer: 1 })],
+    // общий источник рельефа, с повтором зависших тайлов (demSource.ts). overzoom 1: горизонтали — по четверти тайла
+    // уровнем ниже (512 px источника хватает с запасом), соседних тайлов для стыков — до 3 вместо 8.
+    tiles: [contourTilesUrl({ thresholds: THRESHOLDS, contourLayer: 'contours', elevationKey: 'ele', levelKey: 'level', extent: 4096, buffer: 1, overzoom: 1 })],
+    minzoom: 1, // overzoom 1 на z0 запросил бы рельеф уровня −1; горизонтали на масштабе всего мира не нужны
     maxzoom: 15,
   });
   const vis = S.map.contours ? 'visible' : 'none';

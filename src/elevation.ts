@@ -1,7 +1,8 @@
-// Высоты рельефа из открытых тайлов Terrarium (Mapzen/AWS Open Data, SRTM/ASTER/GMTED и др.).
+// Высоты рельефа из открытых тайлов Terrarium (Mapterhorn: Copernicus GLO-30 и национальные модели).
 // Значение = R*256 + G + B/256 − 32768 (метры над уровнем моря).
+// Расчёты работают с виртуальными тайлами 256 px (см. demTiles.ts): каждый — четверть тайла источника 512 px.
 import { LatLon, lonLatToPixel, interpolate, destination, R_EARTH, D2R } from './geo';
-import { DEM_MAX_Z, SHARED_DEM_MAX_Z, TILE, demTileUrl, demTileSpan, demTileCount } from './demTiles';
+import { DEM_MAX_Z, SHARED_DEM_MAX_Z, SRC_TILE, TILE, demTileUrl, demTileSpan, demTileCount, srcOf } from './demTiles';
 
 // Кеш тайлов — LRU по порядку Map: при обращении тайл переставляется в конец, вытесняется самый давний.
 // 200 тайлов × 256 КБ (Float32 256×256) ≈ 50 МБ. Мозаику зоны (до 256 тайлов) держат свои ссылки — кеш её не ограничивает.
@@ -13,15 +14,16 @@ export type LocalDemProvider = (z: number, x: number, y: number) => Promise<Floa
 let localDem: LocalDemProvider | null = null;
 
 /**
- * Общий источник тайлов до z13 (demSource.ts регистрирует его на странице): тайл, который уже скачал и разобрал
- * воркер горизонталей/отмывки, не качаем и не разбираем второй раз. В воркере зоны и в тестах его нет — свой fetch.
+ * Общий источник тайлов (demSource.ts регистрирует его на странице; координаты источника, до SHARED_DEM_MAX_Z):
+ * тайл, который уже скачал и разобрал воркер горизонталей/отмывки, не качаем и не разбираем второй раз.
+ * В воркере зоны и в тестах его нет — свой fetch.
  */
 export type SharedDem = (z: number, x: number, y: number) => Promise<{ width: number; height: number; data: Float32Array }>;
 let sharedDem: SharedDem | null = null;
 export function setSharedDem(fn: SharedDem | null) { sharedDem = fn; }
 
 /** Сбросить кеш тайлов (после смены своих данных рельефа). */
-function clearDemCache() { cache.clear(); }
+function clearDemCache() { cache.clear(); srcCache.clear(); }
 
 /** Подключить/отключить провайдера локальных высот; кеш сбрасывается. */
 export function setLocalDemProvider(fn: LocalDemProvider | null) {
@@ -49,7 +51,7 @@ function fetchBlob(url: string): Promise<Blob> {
 /** Сколько ждать общий источник, прежде чем параллельно идти своим запросом. */
 const SHARED_WAIT_MS = 250;
 
-/** Свой запрос со страницы (видит Service Worker и офлайн-кеш); один повтор при зависании/обрыве. */
+/** Свой запрос со страницы (видит Service Worker и офлайн-кеш); один повтор при зависании/обрыве. Координаты источника. */
 async function ownFetch(z: number, x: number, y: number): Promise<Float32Array | null> {
   const url = demTileUrl(z, x, y);
   for (let i = 0; i < NET_TRIES; i++) {
@@ -71,13 +73,14 @@ function firstOf(a: Promise<Float32Array | null>, b: Promise<Float32Array | null
   });
 }
 
-async function fromNetwork(z: number, x: number, y: number): Promise<Float32Array | null> {
+/** Тайл источника (SRC_TILE × SRC_TILE). */
+async function srcFromNetwork(z: number, x: number, y: number): Promise<Float32Array | null> {
   if (!sharedDem || z > SHARED_DEM_MAX_Z) return ownFetch(z, x, y);
-  // До z13 — общий источник: тайл уже мог скачать и разобрать воркер горизонталей/отмывки, разбор не в главном потоке.
+  // Общий источник: тайл уже мог скачать и разобрать воркер горизонталей/отмывки, разбор не в главном потоке.
   // Не отдал (сбой или старый Chrome: воркер из blob не видит Service Worker и офлайн-кеш) — свой запрос.
   // Ответ общего источника ограничен по времени: воркер мог его потерять — тогда «нет» вместо вечного ожидания.
   const shared = Promise.race([
-    sharedDem(z, x, y).then((t) => (t.width === TILE && t.height === TILE ? t.data : null), () => null),
+    sharedDem(z, x, y).then((t) => (t.width === SRC_TILE && t.height === SRC_TILE ? t.data : null), () => null),
     new Promise<null>((r) => setTimeout(() => r(null), NET_TIMEOUT_MS)),
   ]);
   const quick = await Promise.race([shared, new Promise<undefined>((r) => setTimeout(r, SHARED_WAIT_MS))]);
@@ -87,12 +90,43 @@ async function fromNetwork(z: number, x: number, y: number): Promise<Float32Arra
   return firstOf(shared, ownFetch(z, x, y));
 }
 
-function decode(img: ImageBitmap): Float32Array {
-  const c = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(TILE, TILE) : Object.assign(document.createElement('canvas'), { width: TILE, height: TILE });
+// Тайлы источника — небольшой LRU: четыре виртуальных тайла одного источника запрашиваются почти одновременно
+// (мозаика зоны, профиль), повторная загрузка не нужна. 24 × 1 МБ (Float32 512×512).
+const SRC_CACHE_MAX = 24;
+const srcCache = new Map<string, Promise<Float32Array | null>>();
+
+function srcTile(z: number, x: number, y: number): Promise<Float32Array | null> {
+  const key = `${z}/${x}/${y}`;
+  let p = srcCache.get(key);
+  if (p) { srcCache.delete(key); srcCache.set(key, p); return p; }
+  const q: Promise<Float32Array | null> = srcFromNetwork(z, x, y).then((t) => { if (!t && srcCache.get(key) === q) srcCache.delete(key); return t; });
+  p = q;
+  srcCache.set(key, p);
+  while (srcCache.size > SRC_CACHE_MAX) srcCache.delete(srcCache.keys().next().value!);
+  return p;
+}
+
+/** Виртуальный тайл 256 px — четверть тайла источника. */
+async function fromNetwork(z: number, x: number, y: number): Promise<Float32Array | null> {
+  if (z < 1) return null;
+  const s = srcOf(z, x, y);
+  const t = await srcTile(s.z, s.x, s.y);
+  if (!t) return null;
+  const out = new Float32Array(TILE * TILE);
+  const off = s.qy * TILE * SRC_TILE + s.qx * TILE;
+  for (let r = 0; r < TILE; r++) out.set(t.subarray(off + r * SRC_TILE, off + r * SRC_TILE + TILE), r * TILE);
+  return out;
+}
+
+/** Разбор тайла Terrarium; не того размера, что у источника, — null (за тайл не принимаем). */
+function decode(img: ImageBitmap): Float32Array | null {
+  const w = img.width, h = img.height;
+  if (w !== SRC_TILE || h !== SRC_TILE) return null;
+  const c = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(w, h) : Object.assign(document.createElement('canvas'), { width: w, height: h });
   const ctx = c.getContext('2d', { willReadFrequently: true }) as CanvasRenderingContext2D;
   ctx.drawImage(img, 0, 0);
-  const px = ctx.getImageData(0, 0, TILE, TILE).data;
-  const out = new Float32Array(TILE * TILE);
+  const px = ctx.getImageData(0, 0, w, h).data;
+  const out = new Float32Array(w * h);
   for (let i = 0, j = 0; i < out.length; i++, j += 4) out[i] = px[j] * 256 + px[j + 1] + px[j + 2] / 256 - 32768;
   return out;
 }
@@ -160,7 +194,7 @@ export function sampleGrid(g: DemGrid, gx: number, gy: number): number {
 }
 
 /** Высота в точке или null, если рельеф недоступен. */
-export async function elevationAt(p: LatLon, z = SHARED_DEM_MAX_Z): Promise<number | null> {
+export async function elevationAt(p: LatLon, z = DEM_MAX_Z): Promise<number | null> { // z — виртуальный уровень (как у профиля и офлайн-районов)
   // Нет тайла на z (например, офлайн: районы качаются до z13–z12) — пробуем уровни грубее.
   for (let zz = z; zz >= Math.min(z, 11); zz--) {
     try {
@@ -233,6 +267,18 @@ export function sampleRay(g: DemGrid, lat: number, lon: number, azDeg: number, s
   }
 }
 
+/**
+ * Высоты в самих точках луча (билинейно), out[k] — на расстоянии k·step (k = 1..nS-1); out[0] не трогается.
+ * Та же дуга большого круга, что destination() + lonLatToPixel(), но тригонометрия пульта и азимута — один раз на луч.
+ */
+export function sampleRayPoints(g: DemGrid, lat: number, lon: number, azDeg: number, step: number, nS: number, out: Float64Array): void {
+  const f1 = lat * D2R, sf = Math.sin(f1), cf = Math.cos(f1), t = azDeg * D2R, st = Math.sin(t), ct = Math.cos(t), l1 = lon * D2R;
+  for (let k = 1; k < nS; k++) {
+    rayNode(g, sf, cf, st, ct, l1, k * step);
+    out[k] = sampleGrid(g, RX + g.px0 + 0.5, RY + g.py0 + 0.5);
+  }
+}
+
 /** Шаг пикселя DEM на широте lat, м. */
 export function demPixelM(lat: number, z: number): number {
   return (2 * Math.PI * R_EARTH * Math.cos(lat * D2R)) / (256 * 2 ** z);
@@ -240,7 +286,7 @@ export function demPixelM(lat: number, z: number): number {
 
 /**
  * Единый план рельефа для профиля и зоны: уровень DEM и шаг выборки.
- * z — пиксель ≈ 15 м (SRTM 30 м → 2 узла на ячейку, не мельче нужного), не выше DEM_MAX_Z;
+ * z — пиксель ≈ 15 м (рельеф 30 м → 2 узла на ячейку, не мельче нужного), не выше DEM_MAX_Z;
  * если tilesAt(z) > maxTiles (зона ≤ 256 тайлов ≈ 64 МБ Float32) — z понижается.
  * step = max(пиксель, D/400): окно максимума ±step/2 одинаково у профиля и зоны на одной дистанции.
  */
@@ -268,11 +314,6 @@ export function coverageZoom(c: LatLon, radius: number): { z: number; step: numb
   const b = coverageBox(c, radius);
   const corners = [{ lat: b.n, lon: b.w }, { lat: b.s, lon: b.e }];
   return demPlan(c.lat, radius, (z) => demTileCount(corners, z, 2), COVERAGE_MAX_TILES);
-}
-
-/** Подсказка о грубом рельефе: SRTM покрывает 56°S–60°N, дальше Terrarium берёт другие источники. */
-export function demQualityHint(...lats: number[]): string | null {
-  return lats.some((l) => l > 60 || l < -56) ? 'Выше 60° рельеф грубее (~100–250 м): добавьте запас 5 дБ' : null;
 }
 
 /** Профиль рельефа между двумя точками: n+1 отметок по дуге большого круга (концы — билинейно, середина — максимум в окне). */

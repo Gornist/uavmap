@@ -1,5 +1,5 @@
 // Офлайн-районы: чистые функции (перечень тайлов, план слоёв, разбор метаданных) — без DOM и карты.
-import { DEM_MAX_Z, demTileUrl } from './demTiles';
+import { demTileUrl, srcOf } from './demTiles';
 import { demPlan, coverageZoom, COVERAGE_RADII_KM } from './elevation';
 import { R_EARTH, D2R } from './geo';
 import { isObj, inRange as num } from './validate';
@@ -8,15 +8,20 @@ export const OFFLINE_CACHE = 'uavmap-dem-v1';
 export const OFFLINE_KEY = 'uavmap.offline.v1';
 /** Радиусы офлайн-района, км. */
 export const RADII_KM = [5, 10, 20, 40];
-/** Средний тайл Terrarium (грубая оценка, уточняется замером). */
-export const DEFAULT_TILE_BYTES = 90 * 1024;
-export const VIEW_Z0 = 8, VIEW_Z1 = 13; // maplibre-contour: maxzoom 13; hillshade берёт те же тайлы
+/** Средний тайл источника (WebP 512 px; грубая оценка, уточняется замером). */
+export const DEFAULT_TILE_BYTES = 110 * 1024;
+/** Виртуальные уровни для карты (отмывка и горизонтали): им соответствуют тайлы источника z7..z12. */
+export const VIEW_Z0 = 8, VIEW_Z1 = 13;
+/** Уровни в сохранённых районах: до 15 — как у прежнего источника, чтобы старые районы не пропадали из списка. */
+const LAYER_MAX_Z = 15;
 const PAD_PX = 16; // запас по краю: окно максимума и билинейная выборка выходят за радиус
 
 export interface Layer { z: number; km: number }
 export interface Area {
   id: string; name: string; lat: number; lon: number; km: number;
   calc: boolean; view: boolean; layers: Layer[]; tiles: number; bytes: number; ts: number;
+  /** Источник рельефа, с которого скачан район (DEM_SRC_ID); другой — район устарел, нужно «Обновить». */
+  src: string;
 }
 export interface Tile { z: number; x: number; y: number }
 
@@ -42,16 +47,21 @@ export function tileRange(lat: number, lon: number, km: number, z: number): { x0
   return { x0, x1: Math.min(x1, x0 + n - 1), y0, y1 };
 }
 
-/** Все тайлы набора слоёв {z, km} вокруг точки: без дублей, X обёрнут по антимеридиану. */
+/**
+ * Все тайлы источника для набора слоёв {z, km} вокруг точки: слои — в виртуальной сетке 256 px (как профиль и зона),
+ * каждый виртуальный тайл переводится в тайл источника 512 px уровнем выше; без дублей, X обёрнут по антимеридиану.
+ */
 export function enumerateTiles(lat: number, lon: number, layers: Layer[]): Tile[] {
   const seen = new Set<string>();
   const out: Tile[] = [];
   for (const { z, km } of layers) {
+    if (z < 1) continue;
     const n = 2 ** z;
     const r = tileRange(lat, lon, km, z);
     for (let y = r.y0; y <= r.y1; y++) {
       for (let xr = r.x0; xr <= r.x1; xr++) {
-        const t = { z, x: ((xr % n) + n) % n, y };
+        const s = srcOf(z, ((xr % n) + n) % n, y);
+        const t = { z: s.z, x: s.x, y: s.y };
         const k = tileKey(t);
         if (!seen.has(k)) { seen.add(k); out.push(t); }
       }
@@ -60,9 +70,9 @@ export function enumerateTiles(lat: number, lon: number, layers: Layer[]): Tile[
   return out;
 }
 
+/** Число тайлов источника для одного слоя (виртуальный уровень z). */
 export function countTiles(lat: number, lon: number, km: number, z: number): number {
-  const r = tileRange(lat, lon, km, z);
-  return (r.x1 - r.x0 + 1) * (r.y1 - r.y0 + 1);
+  return enumerateTiles(lat, lon, [{ z, km }]).length;
 }
 
 export const estimateBytes = (tiles: number, avg = DEFAULT_TILE_BYTES) => Math.round(tiles * avg);
@@ -96,12 +106,12 @@ export function parseAreas(raw: string | null): Area[] {
     const layers: Layer[] = [];
     let bad = false;
     for (const l of a.layers) {
-      if (isObj(l) && num(l.z, 0, DEM_MAX_Z) && Number.isInteger(l.z) && num(l.km, 0.1, 1000)) layers.push({ z: l.z, km: l.km }); else bad = true;
+      if (isObj(l) && num(l.z, 0, LAYER_MAX_Z) && Number.isInteger(l.z) && num(l.km, 0.1, 1000)) layers.push({ z: l.z, km: l.km }); else bad = true;
     }
     if (bad) continue;
     if (!num(a.tiles, 0, 1e7) || !num(a.bytes, 0, 1e12) || !num(a.ts, 0, 1e14)) continue;
     ids.add(a.id);
-    out.push({ id: a.id, name: a.name.slice(0, 80), lat: a.lat, lon: a.lon, km: a.km, calc: a.calc === true, view: a.view === true, layers, tiles: a.tiles, bytes: a.bytes, ts: a.ts });
+    out.push({ id: a.id, name: a.name.slice(0, 80), lat: a.lat, lon: a.lon, km: a.km, calc: a.calc === true, view: a.view === true, layers, tiles: a.tiles, bytes: a.bytes, ts: a.ts, src: typeof a.src === 'string' ? a.src.slice(0, 40) : 'aws' });
   }
   return out;
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { computeChunk, computeCoverage, CoverageJob, emptyResult, lossThreshold, mergeChunk, sectorCrop, splitRays } from './coverageCore';
-import { DemGrid, sampleGrid, sampleRay } from './elevation';
+import { DemGrid, sampleGrid, sampleRay, sampleRayPoints } from './elevation';
 import { destination, lonLatToPixel } from './geo';
 import { analyzeLink, budget, DEFAULT_RADIO, DEFAULT_VIDEO, freeSpaceRange, fspl } from './radio';
 
@@ -278,5 +278,30 @@ describe('ускорения: части лучей, вырезки сетки �
   it('splitRays покрывает все лучи без пропусков', () => {
     expect(splitRays(10, 3)).toEqual([[0, 3], [3, 6], [6, 10]]);
     expect(splitRays(2, 5)).toEqual([[0, 1], [1, 2]]);
+  });
+});
+
+describe('общий рельеф лучей для нескольких линий (computeChunk)', () => {
+  const g = grid((dx, dy) => 150 + 70 * Math.sin(dx / 23) * Math.cos(dy / 31) + 25 * Math.sin((dx + dy) / 7));
+  it('точки луча через rayNode совпадают с destination + lonLatToPixel', () => {
+    const nS = 120, step = 40, out = new Float64Array(nS);
+    for (const az of [0, 37.5, 133, 271]) {
+      sampleRayPoints(g, LAT, LON, az, step, nS, out);
+      for (let k = 1; k < nS; k++) expect(out[k]).toBeCloseTo(pointAt(g, az, k * step), 6);
+    }
+  });
+  it('exact: две линии с общим рельефом ≡ каждая линия отдельно (бит в бит)', () => {
+    const V = { ...DEFAULT_VIDEO };
+    const lines = [
+      { freqMHz: P.freqMHz, budget: BUDGET, k: P.k, fade: P.fadeMarginDb },
+      { freqMHz: V.freqMHz, budget: budget(V), k: 1.2, fade: V.fadeMarginDb }, // и k другой: G/H по линии
+    ];
+    const base = { grid: g, lat: LAT, lon: LON, antH: 2, heights: [10, 80], mode: 'takeoff' as const, radius: 6000, step: 50, rays: 24, exact: true };
+    const both = computeChunk({ ...base, r0: 0, r1: base.rays, lines });
+    lines.forEach((ln, li) => {
+      const one = computeCoverage({ ...base, ...ln });
+      expect(both[li].margins).toEqual(one.margins);
+      expect(both[li].firstLoss).toEqual(one.firstLoss);
+    });
   });
 });

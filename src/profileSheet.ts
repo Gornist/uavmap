@@ -1,8 +1,8 @@
 // Шторка «Профиль трассы» до точки: вердикт с объяснением (что мешает, что сделать), нужная высота по линиям,
 // график, «Подробнее» и сравнение высот и аппаратуры (выбор — только кнопкой «Применить»).
 import { S, $, center, toast, openSheet, emit } from './app';
-import { km, dB, fixed, escapeHtml } from './format';
-import { demQualityHint, DemMissingError } from './elevation';
+import { km, dB, fixed } from './format';
+import { DemMissingError } from './elevation';
 import { analyzeLink, analyzePair, minHeightForLink, minHeightsForPair, LinkResult, LineId, presetsFor, RadioParams, radioHorizon, freeSpaceRange } from './radio';
 import { drawProfile } from './profileChart';
 import { coverageHeights } from './coverageStats';
@@ -110,8 +110,6 @@ function renderProfileSheet(r: LinkCalc) {
   // Карточка с двумя значениями: «управление / видео» (одно значение, если видео выключено).
   const two = (label: string, f: (x: LinkResult) => string) =>
     `<div><small>${label}${vres ? ', упр. / видео' : ''}</small><b class="num">${vres ? `${f(res)} / ${f(vres)}` : f(res)}</b></div>`;
-  const q = demQualityHint(S.station?.lat ?? r.target.lat, r.target.lat);
-  const hintHtml = q ? `<p class="hint">${escapeHtml(q)}</p>` : '';
   const hz = radioHorizon(st.antH, absB - r.groundB, S.radio.k);
   const fsr = (p: RadioParams) => km(freeSpaceRange(p));
   const int = (x: number) => String(Math.round(x));
@@ -142,7 +140,7 @@ function renderProfileSheet(r: LinkCalc) {
       ${vres ? `<div><small>Нужная высота: упр. / видео</small><b class="num">${mh(mins.rc)} / ${mh(mins.video)}</b></div>` : ''}
       <div><small>Дальность без рельефа${vres ? ', упр. / видео' : ''}</small><b class="num">${vres ? `${fsr(radioEff)} / ${fsr(videoEff!)}` : fsr(radioEff)}</b></div>
     </div>
-    ${hintHtml}<p class="hint">Модель: свободное пространство + дифракция на рельефе (ITU-R P.526-15), k = ${fixed(S.radio.k, 2)}, местность у пульта: ${CLUTTER_NAME()}. Лес, здания, помехи и диаграммы антенн не учтены — это оценка, а не гарантия.</p>`)}
+    <p class="hint">Модель: свободное пространство + дифракция на рельефе (ITU-R P.526-15), k = ${fixed(S.radio.k, 2)}, местность у пульта: ${CLUTTER_NAME()}. Лес, здания, помехи и диаграммы антенн не учтены — это оценка, а не гарантия.</p>`)}
     ${det('cmp', 'Сравнить высоты и аппаратуру', `<p class="hint">Высота дрона ${altModeText()}; список высот — в шторке «Зона». «Применить» — считать на этой высоте.</p>
     <table class="rt" id="tblH"><tr>${hHead}</tr>${hRows}</table>
     ${presetTables}`)}

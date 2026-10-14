@@ -2,6 +2,7 @@
 import maplibregl, { Map as MLMap, StyleSpecification, RasterSourceSpecification } from 'maplibre-gl';
 import { load, save, State } from './store';
 import { HILLSHADE_DEM_URL } from './demSource';
+import { DEM_ATTRIBUTION, SRC_MAX_Z, SRC_TILE } from './demTiles';
 import { reliable, NET_PROTO, netProtocol } from './netTiles';
 import type { LatLon } from './geo';
 import { initTheme, resolvedTheme, MAP_THEME, THEMES } from './theme';
@@ -47,6 +48,21 @@ function reliefPaint(): Record<string, Record<string, unknown>> {
 
 maplibregl.addProtocol(NET_PROTO, netProtocol); // до создания карты
 
+/** WebGL только программный (нет драйвера GPU): обычный контекст создаётся, а с failIfMajorPerformanceCaveat — нет. */
+function softwareGL(): boolean {
+  const get = (opts?: WebGLContextAttributes) => {
+    const c = document.createElement('canvas');
+    const gl = (c.getContext('webgl2', opts) || c.getContext('webgl', opts)) as WebGLRenderingContext | null;
+    gl?.getExtension('WEBGL_lose_context')?.loseContext(); // проверочный контекст не держим
+    return !!gl;
+  };
+  try {
+    return !get({ failIfMajorPerformanceCaveat: true }) && get();
+  } catch {
+    return false;
+  }
+}
+
 /** Проявление новых тайлов: короче стандартных 300 мс — карта появляется быстрее, но без резкого мигания. */
 const FADE_MS = 150;
 
@@ -55,9 +71,9 @@ const baseBrightness = () => (1 - S.map.dim) * MAP_THEME[resolvedTheme()].baseBr
 
 function style(): StyleSpecification {
   const sources: StyleSpecification['sources'] = {
-    // maxzoom 13 — как у офлайн-районов и горизонталей; на крупных масштабах MapLibre растягивает z13.
+    // Mapterhorn: тайлы 512 px до z12 (детальность прежних 256 px z13); на крупных масштабах MapLibre растягивает z12.
     // Тайлы — из общего источника (demSource.ts): отмывка не качает их второй раз после горизонталей и расчётов.
-    dem: { type: 'raster-dem', tiles: [HILLSHADE_DEM_URL], tileSize: 256, maxzoom: 13, encoding: 'terrarium', attribution: 'Рельеф © Mapzen, AWS' },
+    dem: { type: 'raster-dem', tiles: [HILLSHADE_DEM_URL], tileSize: SRC_TILE, maxzoom: SRC_MAX_Z, encoding: 'terrarium', attribution: DEM_ATTRIBUTION },
     // Растровые тайлы — через загрузчик с таймаутом (netTiles.ts): зависший запрос не держит тайл минутами.
     roads: { type: 'raster', tiles: [reliable('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}')], tileSize: 256, maxzoom: 19 },
     places: { type: 'raster', tiles: [reliable('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}')], tileSize: 256, maxzoom: 19 },
@@ -89,7 +105,8 @@ export const map: MLMap = new maplibregl.Map({
   pitchWithRotate: false,
   maxPitch: 0,
   // Плотность отрисовки не выше 2: растровые тайлы на 3× чётче не станут, а GPU рисовал бы в 2,25 раза больше пикселей.
-  pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+  // Без аппаратного WebGL (программная отрисовка) — 1: на таком устройстве это главная экономия.
+  pixelRatio: softwareGL() ? 1 : Math.min(window.devicePixelRatio || 1, 2),
   renderWorldCopies: false, // одна копия мира — меньше тайлов на мелких масштабах
   fadeDuration: FADE_MS, // подписи горизонталей
 });

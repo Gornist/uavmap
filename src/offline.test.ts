@@ -3,7 +3,7 @@ import { tileRange, enumerateTiles, countTiles, estimateBytes, planLayers, parse
 import { coverageZoom } from './elevation';
 
 const area = (id: string, lat: number, lon: number, km: number, z = [10]): Area => ({
-  id, name: id, lat, lon, km, calc: true, view: false, layers: z.map((zz) => ({ z: zz, km })), tiles: 1, bytes: 1, ts: 1,
+  id, name: id, lat, lon, km, calc: true, view: false, layers: z.map((zz) => ({ z: zz, km })), tiles: 1, bytes: 1, ts: 1, src: 'mapterhorn',
 });
 
 describe('перечисление тайлов', () => {
@@ -15,27 +15,37 @@ describe('перечисление тайлов', () => {
   });
   it('число тайлов растёт с радиусом и зумом', () => {
     expect(countTiles(50, 30, 20, 12)).toBeGreaterThan(countTiles(50, 30, 10, 12));
-    expect(countTiles(50, 30, 10, 13)).toBeGreaterThan(countTiles(50, 30, 10, 12) * 3);
+    expect(countTiles(50, 30, 40, 13)).toBeGreaterThan(countTiles(50, 30, 40, 12) * 3);
   });
-  it('обёртка по X через антимеридиан', () => {
+  it('обёртка по X через антимеридиан (виртуальный z8 → тайлы источника z7)', () => {
     const t = enumerateTiles(60, 179.9, [{ z: 8, km: 40 }]);
+    expect(t.every((v) => v.z === 7)).toBe(true);
     const xs = new Set(t.map((v) => v.x));
-    expect(xs.has(255)).toBe(true);
+    expect(xs.has(127)).toBe(true);
     expect(xs.has(0)).toBe(true);
     expect(t.length).toBe(new Set(t.map(tileKey)).size);
   });
   it('обрезка по Y у полюса', () => {
     const t = enumerateTiles(85, 0, [{ z: 6, km: 100 }]);
     expect(Math.min(...t.map((v) => v.y))).toBe(0);
-    expect(t.every((v) => v.y >= 0 && v.y < 64)).toBe(true);
+    expect(t.every((v) => v.y >= 0 && v.y < 32)).toBe(true);
   });
   it('огромный радиус не даёт больше 2^z колонок', () => {
     const r = tileRange(0, 0, 40000, 3);
     expect(r.x1 - r.x0 + 1).toBeLessThanOrEqual(8);
   });
   it('URL тайла по шаблону DEM', () => {
-    expect(tileUrl({ z: 3, x: 4, y: 5 })).toBe('https://s3.amazonaws.com/elevation-tiles-prod/terrarium/3/4/5.png');
+    expect(tileUrl({ z: 3, x: 4, y: 5 })).toBe('https://tiles.mapterhorn.com/3/4/5.webp');
     expect(keyToUrl('3/4/5')).toBe(tileUrl({ z: 3, x: 4, y: 5 }));
+  });
+});
+
+describe('тайлы источника 512 px', () => {
+  it('четыре соседних виртуальных тайла — один тайл источника уровнем выше', () => {
+    const p = { lat: 43.68, lon: 40.2 };
+    const virt = enumerateTiles(p.lat, p.lon, [{ z: 13, km: 3 }]);
+    expect(virt.every((t) => t.z === 12)).toBe(true);
+    expect(new Set(virt.map(tileKey)).size).toBe(virt.length);
   });
 });
 
