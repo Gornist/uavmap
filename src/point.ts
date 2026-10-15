@@ -8,7 +8,7 @@ import { elevationAt } from './elevation';
 import { distance, bearing, type LatLon } from './geo';
 import { setStation, stationGround } from './station';
 import { hereText } from './verdict';
-import { showProfile } from './profileSheet';
+import { showProfile } from './lazy';
 import { addMarkAt } from './marks';
 
 let pointPin: maplibregl.Marker | null = null;

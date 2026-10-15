@@ -1,6 +1,5 @@
 // Зона покрытия на карте: растровая накладка (уровень связи или нужная высота), граница связи
 // и слои MapLibre (cov-raster, cov-edge). Хранит только то, что нарисовано сейчас.
-import type { ImageSource } from 'maplibre-gl';
 import { S, map, setGeo, fc, line, accentColor } from './app';
 import { destination, lonLatToPixel, pixelToLonLat } from './geo';
 import { rasterIndex } from './coverageRaster';
@@ -15,7 +14,6 @@ export const PALETTE = ['#b8e986', '#7ed957', '#2fbf8f', '#22a3b8', '#3b7fd6', '
 type Quad = [[number, number], [number, number], [number, number], [number, number]];
 let rasterBounds: { coords: Quad; x0: number; y0: number; wx: number; wy: number; w: number; hh: number } | null = null;
 let current: CoverageShown | null = null; // результат на карте
-let curUrl: string | null = null;
 
 const rgb = (c: string) => [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16));
 const PAL_RGB = PALETTE.map(rgb);
@@ -34,17 +32,11 @@ export function initCoverageView(): void {
   }, beforeOv());
 }
 
-function revokeLater(url: string | null) {
-  if (url) setTimeout(() => URL.revokeObjectURL(url), 5000); // даём MapLibre дочитать картинку
-}
-
 /** Убрать растр и границу с карты, освободить картинку. */
 export function clearCoverageView(): void {
   current = null;
   rasterBounds = null;
-  if (map.getLayer('cov-raster')) map.removeLayer('cov-raster');
-  if (map.getSource('cov')) map.removeSource('cov');
-  if (curUrl) { URL.revokeObjectURL(curUrl); curUrl = null; }
+  removeRaster();
   pixCache = null;
   setGeo('cov-edge', fc());
 }
@@ -60,8 +52,9 @@ function layoutRaster(c: CoverageShown) {
   const [x0, y0] = lonLatToPixel(w.lon, n.lat, RZ);
   const [x1, y1] = lonLatToPixel(e.lon, s.lat, RZ);
   const wx = x1 - x0, wy = y1 - y0;
-  const wPx = wx >= wy ? CANVAS : Math.max(8, Math.round((CANVAS * wx) / wy));
-  const hPx = wx >= wy ? Math.max(8, Math.round((CANVAS * wy) / wx)) : CANVAS;
+  const N = c.prelim ? CANVAS / 2 : CANVAS; // предварительный проход грубый (лучей ×¼): растру хватает вчетверо меньше пикселей
+  const wPx = wx >= wy ? N : Math.max(8, Math.round((N * wx) / wy));
+  const hPx = wx >= wy ? Math.max(8, Math.round((N * wy) / wx)) : N;
   const nw = pixelToLonLat(x0, y0, RZ), ne = pixelToLonLat(x1, y0, RZ);
   const se = pixelToLonLat(x1, y1, RZ), sw = pixelToLonLat(x0, y1, RZ);
   return { coords: [nw, ne, se, sw] as Quad, x0, y0, wx, wy, w: wPx, hh: hPx };
@@ -126,29 +119,27 @@ export function drawCoverage(c: CoverageShown): void {
   redrawCoverage();
 }
 
-let drawSeq = 0;
-/** Перерисовать текущий результат (сменились высота дрона, линия или режим закраски). */
+function removeRaster() {
+  if (map.getLayer('cov-raster')) map.removeLayer('cov-raster');
+  if (map.getSource('cov')) map.removeSource('cov');
+}
+
+/**
+ * Перерисовать текущий результат (сменились высота дрона, линия или режим закраски).
+ * Растр — источником canvas: картинка уходит в текстуру как есть. Прежде она кодировалась в PNG (toBlob)
+ * и снова декодировалась MapLibre — это было дольше самого расчёта зоны. Статичный canvas MapLibre читает
+ * один раз, поэтому на каждую перерисовку источник создаётся заново (это дёшево).
+ */
 export function redrawCoverage(): void {
   if (!current) return;
   const c = current;
   rasterBounds = layoutRaster(c);
-  const coords = rasterBounds.coords;
-  const seq = ++drawSeq;
-  paint(c).toBlob((blob) => {
-    if (!blob || seq !== drawSeq || current !== c) return;
-    const url = URL.createObjectURL(blob);
-    const old = curUrl;
-    curUrl = url;
-    const src = map.getSource('cov') as ImageSource | undefined;
-    if (src) src.updateImage({ url, coordinates: coords });
-    else {
-      map.addSource('cov', { type: 'image', url, coordinates: coords });
-      map.addLayer({
-        id: 'cov-raster', type: 'raster', source: 'cov',
-        paint: { 'raster-opacity': S.coverage.opacity, 'raster-fade-duration': 0, 'raster-resampling': 'nearest' },
-      }, map.getLayer('cov-edge') ? 'cov-edge' : beforeOv());
-    }
-    revokeLater(old);
-  }, 'image/png');
+  const canvas = paint(c);
+  removeRaster();
+  map.addSource('cov', { type: 'canvas', canvas, coordinates: rasterBounds.coords, animate: false });
+  map.addLayer({
+    id: 'cov-raster', type: 'raster', source: 'cov',
+    paint: { 'raster-opacity': S.coverage.opacity, 'raster-fade-duration': 0, 'raster-resampling': 'nearest' },
+  }, map.getLayer('cov-edge') ? 'cov-edge' : beforeOv());
   drawEdge(c);
 }

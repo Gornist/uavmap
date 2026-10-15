@@ -4,7 +4,7 @@ import maplibregl from 'maplibre-gl';
 import { S, map, center, toast, openSheet, closeSheet, emit, on } from './app';
 import { h, coordsBlock, confirmDialog } from './ui';
 import { setStation } from './station';
-import { showProfile } from './profileSheet';
+import { showProfile } from './lazy';
 import { elevationAt } from './elevation';
 import type { LatLon } from './geo';
 import { uid, MARK_COLOR } from './store';

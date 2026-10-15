@@ -1,15 +1,17 @@
 // Общее ядро: состояние, карта, мелкие помощники интерфейса.
 import maplibregl, { Map as MLMap, StyleSpecification, RasterSourceSpecification } from 'maplibre-gl';
-import { load, save, State } from './store';
+import { load, save, firstRun, State } from './store';
 import { HILLSHADE_DEM_URL } from './demSource';
 import { DEM_ATTRIBUTION, SRC_MAX_Z, SRC_TILE } from './demTiles';
-import { reliable, NET_PROTO, netProtocol } from './netTiles';
+import { reliable, NET_PROTO, netProtocol, VEC_PROTO, vecProtocol, GLYPH_PROTO, glyphProtocol, setVecHealth } from './netTiles';
+import { labelsSource, labelLayers, labelPaint, vectorAllowed, labelHealth } from './labels';
 import type { LatLon } from './geo';
 import { initTheme, resolvedTheme, MAP_THEME, THEMES } from './theme';
 
 // Тема должна стоять до создания карты (цвет фона, яркость подложки). Повторный вызов из main.ts безопасен.
 initTheme();
 
+const FIRST_RUN = firstRun();
 export const S: State = load();
 // Ошибку записи показываем один раз за сессию — иначе toast повторялся бы при каждом сдвиге карты.
 let saveWarned = false;
@@ -46,7 +48,10 @@ function reliefPaint(): Record<string, Record<string, unknown>> {
   };
 }
 
-maplibregl.addProtocol(NET_PROTO, netProtocol); // до создания карты
+// до создания карты
+maplibregl.addProtocol(NET_PROTO, netProtocol);
+maplibregl.addProtocol(VEC_PROTO, vecProtocol);
+maplibregl.addProtocol(GLYPH_PROTO, glyphProtocol);
 
 /** WebGL только программный (нет драйвера GPU): обычный контекст создаётся, а с failIfMajorPerformanceCaveat — нет. */
 function softwareGL(): boolean {
@@ -63,6 +68,14 @@ function softwareGL(): boolean {
   }
 }
 
+/** Графика без GPU: отмывку (самый тяжёлый слой) по умолчанию не включаем — только на первом запуске, дальше выбор пользователя. */
+export const SOFT_GL = softwareGL();
+if (SOFT_GL && FIRST_RUN) S.map.hillshade = false;
+
+/** Подписи векторные (labels.ts); false — растровые Esri: векторные недавно не приходили или отказали в этом сеансе. */
+let vecLabels = vectorAllowed();
+const rasterLabelsOn = () => S.map.labels && !vecLabels;
+
 /** Проявление новых тайлов: короче стандартных 300 мс — карта появляется быстрее, но без резкого мигания. */
 const FADE_MS = 150;
 
@@ -74,10 +87,12 @@ function style(): StyleSpecification {
     // Mapterhorn: тайлы 512 px до z12 (детальность прежних 256 px z13); на крупных масштабах MapLibre растягивает z12.
     // Тайлы — из общего источника (demSource.ts): отмывка не качает их второй раз после горизонталей и расчётов.
     dem: { type: 'raster-dem', tiles: [HILLSHADE_DEM_URL], tileSize: SRC_TILE, maxzoom: SRC_MAX_Z, encoding: 'terrarium', attribution: DEM_ATTRIBUTION },
+    // Запасные подписи (растр Esri): пока векторные работают, слои скрыты и тайлы не грузятся.
     // Растровые тайлы — через загрузчик с таймаутом (netTiles.ts): зависший запрос не держит тайл минутами.
     roads: { type: 'raster', tiles: [reliable('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}')], tileSize: 256, maxzoom: 19 },
     places: { type: 'raster', tiles: [reliable('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}')], tileSize: 256, maxzoom: 19 },
   };
+  if (vecLabels) sources.labels = labelsSource();
   const layers: StyleSpecification['layers'] = [{ id: 'bg', type: 'background', paint: { 'background-color': MAP_THEME[resolvedTheme()].bg } }];
   for (const [id, b] of Object.entries(BASES)) {
     sources[id] = { type: 'raster', tiles: b.tiles.map(reliable), tileSize: 256, maxzoom: b.max, attribution: b.attr };
@@ -85,13 +100,15 @@ function style(): StyleSpecification {
   }
   layers.push(
     { id: 'hillshade', type: 'hillshade', source: 'dem', layout: { visibility: S.map.hillshade ? 'visible' : 'none' }, paint: reliefPaint().hillshade as Record<string, string | number> },
-    { id: 'roads', type: 'raster', source: 'roads', layout: { visibility: S.map.labels ? 'visible' : 'none' }, paint: { 'raster-opacity': 0.85, 'raster-fade-duration': FADE_MS } },
-    { id: 'places', type: 'raster', source: 'places', layout: { visibility: S.map.labels ? 'visible' : 'none' }, paint: { 'raster-fade-duration': FADE_MS } },
+    { id: 'roads', type: 'raster', source: 'roads', layout: { visibility: rasterLabelsOn() ? 'visible' : 'none' }, paint: { 'raster-opacity': 0.85, 'raster-fade-duration': FADE_MS } },
+    { id: 'places', type: 'raster', source: 'places', layout: { visibility: rasterLabelsOn() ? 'visible' : 'none' }, paint: { 'raster-fade-duration': FADE_MS } },
+    ...(vecLabels ? labelLayers(S.map.base === 'sat', S.map.labels) : []),
   );
-  // Глифы подписей горизонталей (цифры и «м») — свои, в public/fonts: тот же сервер, офлайн-кеш оболочки.
+  // Глифы подписей (горизонтали, названия) — свои, в public/fonts: тот же сервер, офлайн-кеш оболочки.
   // С внешнего сервера на старте глиф мог не прийти, и в старом Chrome его ошибку нельзя переслать воркеру
-  // MapLibre (DataCloneError) — тогда все тайлы горизонталей с подписями ждали его вечно.
-  const glyphs = `${location.origin}${import.meta.env.BASE_URL}fonts/{fontstack}/{range}.pbf`;
+  // MapLibre (DataCloneError) — тогда все тайлы с подписями ждали его вечно. Протокол GLYPH_PROTO отдаёт
+  // отсутствующий диапазон символов пустым, а не ошибкой.
+  const glyphs = `${GLYPH_PROTO}://${location.host}${import.meta.env.BASE_URL}fonts/{fontstack}/{range}.pbf`;
   return { version: 8, glyphs, sources, layers };
 }
 
@@ -106,11 +123,23 @@ export const map: MLMap = new maplibregl.Map({
   maxPitch: 0,
   // Плотность отрисовки не выше 2: растровые тайлы на 3× чётче не станут, а GPU рисовал бы в 2,25 раза больше пикселей.
   // Без аппаратного WebGL (программная отрисовка) — 1: на таком устройстве это главная экономия.
-  pixelRatio: softwareGL() ? 1 : Math.min(window.devicePixelRatio || 1, 2),
+  pixelRatio: SOFT_GL ? 1 : Math.min(window.devicePixelRatio || 1, 2),
   renderWorldCopies: false, // одна копия мира — меньше тайлов на мелких масштабах
   fadeDuration: FADE_MS, // подписи горизонталей
 });
 map.touchZoomRotate.disableRotation();
+
+/** Векторные подписи не приходят — убрать их источник (больше не ждать таймаутов) и показать растровые Esri. */
+function fallbackToRasterLabels() {
+  vecLabels = false;
+  const swap = () => {
+    for (const l of map.getStyle().layers) if (l.id.startsWith('lbl-')) map.removeLayer(l.id);
+    if (map.getSource('labels')) map.removeSource('labels');
+    applyMapStyle();
+  };
+  if (map.style?._loaded) swap(); else map.once('style.load', swap);
+}
+setVecHealth(labelHealth(fallbackToRasterLabels));
 map.addControl(new maplibregl.ScaleControl({ maxWidth: 140, unit: 'metric' }), 'bottom-left');
 
 /** Добавить подложку «на лету» (свои карты). Слой встаёт сразу над фоном — ниже отмывки, горизонталей и дорог. */
@@ -148,7 +177,13 @@ export function applyMapStyle() {
     map.setPaintProperty(`base-${id}`, 'raster-brightness-max', baseBrightness());
   }
   map.setLayoutProperty('hillshade', 'visibility', S.map.hillshade ? 'visible' : 'none');
-  for (const l of ['roads', 'places']) map.setLayoutProperty(l, 'visibility', S.map.labels ? 'visible' : 'none');
+  for (const l of ['roads', 'places']) map.setLayoutProperty(l, 'visibility', rasterLabelsOn() ? 'visible' : 'none');
+  const sat = S.map.base === 'sat';
+  for (const [id, paint] of Object.entries(labelPaint(sat))) {
+    if (!map.getLayer(id)) continue;
+    map.setLayoutProperty(id, 'visibility', S.map.labels ? 'visible' : 'none');
+    for (const [k, v] of Object.entries(paint)) map.setPaintProperty(id, k, v);
+  }
   document.body.classList.toggle('no-labels', !S.map.labels);
   persist();
 }

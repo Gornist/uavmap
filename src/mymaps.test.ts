@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { checkPmtiles, parseMeta, serializeMeta, cleanName, PM_MAX_BYTES } from './mymapsCore';
+import { bytesToHeader } from 'pmtiles';
+import { checkPmtiles as checkWith, parseMeta, serializeMeta, cleanName, PM_MAX_BYTES } from './mymapsCore';
+const checkPmtiles = (head: ArrayBuffer, size: number) => checkWith(head, size, bytesToHeader);
 
 /** Синтетический заголовок PMTiles v3 (127 байт). */
 function header(o: { magic?: string; ver?: number; type?: number; comp?: number; z0?: number; z1?: number; bounds?: number[]; tileOff?: number; tileLen?: number } = {}) {

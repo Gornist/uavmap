@@ -87,7 +87,7 @@ export function settings(el: HTMLElement) {
   }
   const about = details('Источники данных и о программе', false);
   const src = h('<p class="hint"></p>');
-  src.textContent = `Рельеф: Mapterhorn (Copernicus GLO-30 и национальные модели рельефа; лицензии — mapterhorn.com/attribution). Подложка: ${BASES[S.map.base]?.attr ?? '—'}. Подписи и дороги: © Esri. Модель распространения: ITU-R P.526-15.`;
+  src.textContent = `Рельеф: Mapterhorn (Copernicus GLO-30 и национальные модели рельефа; лицензии — mapterhorn.com/attribution). Подложка: ${BASES[S.map.base]?.attr ?? '—'}. Подписи и дороги: OpenFreeMap, © OpenMapTiles, © участники OpenStreetMap (если не грузятся — запасные © Esri). Модель распространения: ITU-R P.526-15.`;
   about.appendChild(src);
   const p = h('<p class="hint">Радиус — гражданская карта радиовидимости дрона. Исходный код: <a target="_blank" rel="noopener"></a></p>');
   const a = p.querySelector('a') as HTMLAnchorElement;

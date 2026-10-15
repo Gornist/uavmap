@@ -1,5 +1,5 @@
 // Свои карты: чистая логика (проверка PMTiles, метаданные) — без DOM и карты, чтобы тестировать в node.
-import { bytesToHeader, TileType } from 'pmtiles';
+import type { Header } from 'pmtiles';
 import { inRange } from './validate';
 
 export const PM_MAX_BYTES = 2 * 1024 ** 3;
@@ -27,17 +27,23 @@ const ID_RE = /^[a-z0-9]{6,16}$/;
 export const newId = () => Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => (b % 36).toString(36)).join('');
 export const cleanName = (s: string) => [...s].filter((c) => c.charCodeAt(0) > 31 && c.charCodeAt(0) !== 127 && c !== '<' && c !== '>').join('').trim().slice(0, 80);
 
-/** Проверка PMTiles v3 с растровыми тайлами по первым 127 байтам и размеру файла. */
-export function checkPmtiles(head: ArrayBuffer, fileSize: number): { ok: true; info: PmInfo } | { ok: false; error: string } {
+/** Типы тайлов в заголовке PMTiles v3 (TileType из pmtiles; сама библиотека грузится лениво). */
+const TT_MVT = 1, TT_PNG = 2, TT_JPEG = 3, TT_WEBP = 4;
+
+/**
+ * Проверка PMTiles v3 с растровыми тайлами по первым 127 байтам и размеру файла.
+ * parseHeader — bytesToHeader из pmtiles: библиотеку подгружает вызывающий (отдельный чанк).
+ */
+export function checkPmtiles(head: ArrayBuffer, fileSize: number, parseHeader: (b: ArrayBuffer) => Header): { ok: true; info: PmInfo } | { ok: false; error: string } {
   if (fileSize > PM_MAX_BYTES) return { ok: false, error: 'Файл больше 2 ГБ' };
   if (head.byteLength < PM_HEADER_BYTES || fileSize < PM_HEADER_BYTES) return { ok: false, error: 'Файл слишком мал для PMTiles' };
   const b = new Uint8Array(head);
   if (String.fromCharCode(...b.subarray(0, 7)) !== 'PMTiles') return { ok: false, error: 'Это не PMTiles (нет сигнатуры)' };
   if (b[7] !== 3) return { ok: false, error: `Поддерживается только PMTiles версии 3 (в файле: ${b[7]})` };
   let h;
-  try { h = bytesToHeader(head.slice(0, PM_HEADER_BYTES)); } catch { return { ok: false, error: 'Повреждённый заголовок PMTiles' }; }
-  if (h.tileType === TileType.Mvt) return { ok: false, error: 'Векторные PMTiles не поддерживаются — нужны растровые (png/jpg/webp)' };
-  const type = h.tileType === TileType.Png ? 'png' : h.tileType === TileType.Jpeg ? 'jpg' : h.tileType === TileType.Webp ? 'webp' : null;
+  try { h = parseHeader(head.slice(0, PM_HEADER_BYTES)); } catch { return { ok: false, error: 'Повреждённый заголовок PMTiles' }; }
+  if (h.tileType === TT_MVT) return { ok: false, error: 'Векторные PMTiles не поддерживаются — нужны растровые (png/jpg/webp)' };
+  const type = h.tileType === TT_PNG ? 'png' : h.tileType === TT_JPEG ? 'jpg' : h.tileType === TT_WEBP ? 'webp' : null;
   if (!type) return { ok: false, error: 'Тип тайлов не png/jpg/webp (AVIF и прочие не поддерживаются)' };
   if (h.tileCompression > 1) return { ok: false, error: 'Тайлы сжаты (gzip и т.п.) — нужны несжатые растровые тайлы' };
   const inFile = (off: number, len: number) => Number.isFinite(off) && Number.isFinite(len) && off >= 0 && len >= 0 && off + len <= fileSize;

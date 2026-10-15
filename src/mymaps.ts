@@ -1,7 +1,7 @@
 // Свои карты: PMTiles как офлайн-подложка, HGT как свой рельеф (хранение — OPFS).
 import './styles/mymaps.css';
 import maplibregl from 'maplibre-gl';
-import { PMTiles, FileSource } from 'pmtiles';
+import type { PMTiles } from 'pmtiles';
 import { S, map, toast, openSheet, progress, addBase, removeBase, ensureBase, applyMapStyle, BASES } from './app';
 import { h, button, confirmDialog } from './ui';
 import { setLocalDemProvider } from './elevation';
@@ -91,6 +91,8 @@ function ensureProtocol() {
 
 async function activatePmtiles(it: MyMapItem) {
   ensureProtocol();
+  // Библиотека PMTiles (~45 КБ) — отдельным чанком: нужна только тем, у кого есть свои карты.
+  const { PMTiles, FileSource } = await import('pmtiles');
   archives.set(it.id, new PMTiles(new FileSource(await fileOf(it))));
   addBase(`my-${it.id}`, { name: `★ ${it.name}`, tiles: [`${PROTO}://${it.id}/{z}/{x}/{y}`], max: it.maxzoom ?? 18, attr: `Свои карты: ${it.name}` }, { minzoom: it.minzoom ?? 0, bounds: it.bounds });
 }
@@ -143,7 +145,17 @@ export async function initMyMaps(): Promise<void> {
   // и без этого она уходила в сеть (офлайн — «—»). Файлы провайдер читает лениво; недоступный файл → null → сеть.
   refreshDem();
   const bad: MyMapItem[] = [];
+  // Сбой загрузки чанка PMTiles (нет сети, сменилась сборка) — не повод забыть карты: файлы на месте, запись оставляем.
+  let pmOk = true;
+  if (items.some((i) => i.kind === 'pmtiles')) {
+    try { await import('pmtiles'); } catch (e) {
+      pmOk = false;
+      console.warn('mymaps: модуль PMTiles не загрузился', e);
+      toast('Свои карты-подложки не подключились — обновите страницу', 6000);
+    }
+  }
   for (const it of items) {
+    if (it.kind === 'pmtiles' && !pmOk) continue;
     try {
       if (it.kind === 'pmtiles') await activatePmtiles(it);
       else await fileOf(it); // HGT: проверяем, что файл на месте
@@ -180,7 +192,7 @@ async function importPmtiles(f: File) {
   if (items.length >= MAX_ITEMS) throw new Error(`Не больше ${MAX_ITEMS} карт — удалите ненужную`);
   if (f.size > PM_MAX_BYTES) throw new Error('Файл больше 2 ГБ — вырежьте нужный район (pmtiles extract)');
   const head = await f.slice(0, PM_HEADER_BYTES).arrayBuffer();
-  const v = checkPmtiles(head, f.size);
+  const v = checkPmtiles(head, f.size, (await import('pmtiles')).bytesToHeader);
   if (!v.ok) throw new Error(v.error);
   const id = newId();
   const it: MyMapItem = { id, kind: 'pmtiles', name: cleanName(f.name.replace(/\.pmtiles$/i, '')) || id, size: f.size, added: Date.now(), file: `${id}.pmtiles`, bounds: v.info.bounds, minzoom: v.info.minzoom, maxzoom: v.info.maxzoom };

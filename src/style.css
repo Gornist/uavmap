@@ -67,10 +67,16 @@ em { font-style: normal; color: var(--digit); }
 
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow); }
 
-#rightBar { position: absolute; right: 10px; top: 50%; transform: translateY(-30%); display: flex; flex-direction: column; gap: 14px; z-index: 5; }
+/* Кнопки карты — у левого края по центру: правый край занимает высотомер, а большой палец левой руки
+ * на планшете-пульте как раз у середины левой кромки. Зум — одна «таблетка» +/−. */
+#mapBar { position: absolute; left: calc(10px + var(--safe-l)); top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; align-items: center; gap: 12px; z-index: 5; }
+.zoom-pill { display: flex; flex-direction: column; border: 1px solid var(--line-strong); border-radius: 22px; background: var(--panel); box-shadow: var(--shadow); overflow: hidden; }
+.zoom-pill button { width: 44px; height: 44px; padding: 0; border: 0; background: transparent; color: var(--text); font-size: 22px; line-height: 1; display: grid; place-items: center; }
+.zoom-pill button + button { border-top: 1px solid var(--line); }
+.zoom-pill button:active { background: var(--panel-2); }
 
 .maplibregl-ctrl-scale { background: rgba(255, 255, 255, 0.85) !important; color: #1d1b18 !important; border-color: #1d1b18 !important; font: 12px var(--font-mono); }
-.maplibregl-ctrl-attrib { background: var(--panel) !important; color: var(--muted); font-size: 11px; }
+.maplibregl-ctrl-attrib { background: var(--panel) !important; color: var(--muted); font-size: 10px; line-height: 1.35; }
 .maplibregl-ctrl-attrib a { color: var(--muted) !important; }
 .maplibregl-ctrl-attrib-button { background-color: var(--panel) !important; }
 
@@ -156,7 +162,7 @@ body.no-labels .mk-label { display: none; }
 .station { width: 34px; height: 34px; border-radius: 50%; background: var(--accent); color: #1a1309; display: grid; place-items: center; font-size: 18px; border: 2px solid #1a1309; box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.75); }
 
 @media (max-width: 640px) {
-  #rightBar { right: 8px; }
+  #mapBar { left: calc(8px + var(--safe-l)); }
   .verdict-big { font-size: 20px; }
   .kv-key { gap: 4px; }
   .kv-key div { padding: 6px 8px; }
@@ -174,7 +180,7 @@ body.no-labels .mk-label { display: none; }
 .no-flexgap .sh-head > * + *, .no-flexgap .cov-add > * + * { margin-left: 8px; }
 .no-flexgap .details > summary::before { margin-right: 10px; }
 /* столбцы */
-.no-flexgap #rightBar > * + *, .no-flexgap .list > * + *, .no-flexgap .kv-key div > * + * { margin-top: 10px; }
-@media (max-height: 520px) and (orientation: landscape) { /* как в main.css: правая панель — ряд */
-  .no-flexgap #rightBar > * + * { margin-top: 0; margin-left: 8px; }
+.no-flexgap #mapBar > * + *, .no-flexgap .list > * + *, .no-flexgap .kv-key div > * + * { margin-top: 10px; }
+@media (max-height: 520px) and (orientation: landscape) { /* как в main.css: кнопки карты — ряд */
+  .no-flexgap #mapBar > * + * { margin-top: 0; margin-left: 8px; }
 }

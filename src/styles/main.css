@@ -23,11 +23,8 @@ textarea.txt { min-height: 70px; resize: vertical; font: inherit; color: var(--t
   .li { min-height: 44px; }
   .dr-item { min-height: 48px; }
   .seg button { font-size: 14px; }
-  .maplibregl-compact { min-height: 44px; min-width: 44px; }
-  .maplibregl-ctrl-attrib-button { width: 44px !important; height: 44px !important; }
   #toast { top: calc(64px + var(--safe-t)); }
   #progress { top: calc(64px + var(--safe-t)); }
-  #rightBar { right: calc(10px + var(--safe-r)); }
 }
 
 /* Компактные плашки: узкий портрет и ландшафт телефона */
@@ -54,7 +51,9 @@ textarea.txt { min-height: 70px; resize: vertical; font: inherit; color: var(--t
 
 /* Ландшафт телефона */
 @media (max-height: 520px) and (orientation: landscape) {
-  #rightBar { top: auto; bottom: calc(var(--bar-h) + 8px + var(--safe-b)); transform: none; flex-direction: row; gap: 8px; }
+  #mapBar { left: auto; right: calc(8px + var(--safe-r)); top: auto; bottom: calc(var(--bar-h) + 8px + var(--safe-b)); transform: none; flex-direction: row; gap: 8px; }
+  .zoom-pill { flex-direction: row; }
+  .zoom-pill button + button { border-top: 0; border-left: 1px solid var(--line); }
   #rulerBar { left: calc(8px + var(--safe-l)); transform: none; width: min(380px, 44vw); }
   #drawer { padding-left: var(--safe-l); }
   .dr-head { padding-top: calc(10px + var(--safe-t)); }

@@ -85,7 +85,7 @@ const rectsCheck = `(() => {
 })()`;
 const noScroll = `(() => document.documentElement.scrollWidth <= innerWidth && document.body.scrollWidth <= innerWidth ? '' : 'scrollWidth ' + document.documentElement.scrollWidth + ' > ' + innerWidth)()`;
 const overlapCheck = `(() => {
-  const ids = ['topLeft', 'crossChip', 'altimeter', 'rightBar', 'linkStrip', 'bottomBar', 'cross'];
+  const ids = ['topLeft', 'crossChip', 'altimeter', 'mapBar', 'linkStrip', 'bottomBar', 'cross'];
   const r = ids.map((id) => { const e = document.getElementById(id); if (!e || e.hidden) return null; const q = e.getBoundingClientRect(); return q.width ? [id, q] : null; }).filter(Boolean);
   const bad = [];
   for (let i = 0; i < r.length; i++) for (let j = i + 1; j < r.length; j++) {
@@ -264,7 +264,7 @@ async function scenario() {
     const bad = await ev(`(() => {
       const p = document.getElementById('covPill').getBoundingClientRect(), out = [];
       if (p.left < 0 || p.top < 0 || p.right > innerWidth || p.bottom > innerHeight) out.push('за экраном');
-      for (const id of ['topLeft', 'crossChip', 'altimeter', 'rightBar', 'linkStrip', 'bottomBar', 'cross']) {
+      for (const id of ['topLeft', 'crossChip', 'altimeter', 'mapBar', 'linkStrip', 'bottomBar', 'cross']) {
         const e = document.getElementById(id); if (!e || e.hidden) continue;
         const r = e.getBoundingClientRect(); if (!r.width) continue;
         if (p.left < r.right - 1 && r.left < p.right - 1 && p.top < r.bottom - 1 && r.top < p.bottom - 1) out.push(id);

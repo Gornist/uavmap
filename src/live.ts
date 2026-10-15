@@ -10,7 +10,7 @@ import { ICON, stCls, pairVerdict, statusCss, heightHint, HeightNeeds, freqName 
 import { setStation, stationGround, stationGroundFailed, effRadio, effVideoOrNull, calcLink, heightFnFor, LinkCalc } from './station';
 import { setAltData, setAltPreview } from './altimeter';
 import { AltLevel } from './altScale';
-import { showProfile } from './profileSheet';
+import { showProfile } from './lazy';
 import { openOfflineSheet } from './offline';
 
 let liveBusy = false, livePending = false;
@@ -18,8 +18,59 @@ let liveBusy = false, livePending = false;
 const LIVE_N = 200;
 const PENDING_COL = '#8b949e';
 
-const linkLine = (a: LatLon, c: LatLon, props: Record<string, unknown>) =>
-  setGeo('link', fc([line([[a.lon, a.lat], [c.lon, c.lat]], props)]));
+let linkDrawn = false; // в источнике 'link' есть линия
+/** Линия связи в слое карты (GeoJSON → воркер MapLibre); null — убрать. Призрак движения при этом прячется. */
+function setLink(a: LatLon | null, c?: LatLon, props: Record<string, unknown> = {}) {
+  ghost.hide();
+  linkDrawn = !!(a && c);
+  setGeo('link', a && c ? fc([line([[a.lon, a.lat], [c.lon, c.lat]], props)]) : fc());
+}
+const linkLine = (a: LatLon, c: LatLon, props: Record<string, unknown>) => setLink(a, c, props);
+
+/**
+ * «Призрак» линии на время движения карты: SVG в экранных координатах поверх карты. setData на каждый кадр
+ * заставлял воркер MapLibre заново нарезать источник и перерисовывать слой; отрезок между двумя точками
+ * в проекции карты прямой — SVG рисует ту же линию без воркера. По окончании движения линия снова в слое.
+ */
+const ghost = (() => {
+  const NS = 'http://www.w3.org/2000/svg';
+  let svg: SVGSVGElement | null = null, casing: SVGLineElement, ln: SVGLineElement;
+  const mk = () => {
+    svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('class', 'link-ghost');
+    svg.setAttribute('aria-hidden', 'true');
+    casing = document.createElementNS(NS, 'line');
+    ln = document.createElementNS(NS, 'line');
+    casing.setAttribute('stroke-width', '7');
+    ln.setAttribute('stroke-width', '4');
+    ln.setAttribute('stroke', PENDING_COL);
+    ln.setAttribute('stroke-opacity', '0.55');
+    for (const l of [casing, ln]) { l.setAttribute('stroke-linecap', 'round'); svg.appendChild(l); }
+    // Сразу за canvas: маркеры (пульт, метки) MapLibre добавляет в тот же контейнер позже — они остаются сверху.
+    const cv = map.getCanvas();
+    cv.parentNode!.insertBefore(svg, cv.nextSibling);
+  };
+  return {
+    show(a: LatLon) {
+      if (!svg) mk();
+      // Обводка — как у слоя (её цвет и прозрачность зависят от темы, см. overlayPaint в app.ts).
+      const col = map.getLayer('ov-link-casing') ? map.getPaintProperty('ov-link-casing', 'line-color') : '#000';
+      const op = map.getLayer('ov-link-casing') ? map.getPaintProperty('ov-link-casing', 'line-opacity') : 0.45;
+      casing.setAttribute('stroke', typeof col === 'string' ? col : '#000');
+      casing.setAttribute('stroke-opacity', String(typeof op === 'number' ? op : 0.45));
+      const p = map.project([a.lon, a.lat]);
+      const c = center(); // та же цель, что у расчёта (с padding карты она не в середине контейнера)
+      const q = map.project([c.lon, c.lat]);
+      for (const l of [casing, ln]) {
+        l.setAttribute('x1', p.x.toFixed(1)); l.setAttribute('y1', p.y.toFixed(1));
+        l.setAttribute('x2', q.x.toFixed(1)); l.setAttribute('y2', q.y.toFixed(1));
+      }
+      svg!.style.display = '';
+    },
+    hide() { if (svg) svg.style.display = 'none'; },
+  };
+})();
+let moving = false; // карта движется (между первым move и moveend)
 
 /** Третья строка (мелко): запасы линий и азимут. Прочерк вместо служебного запаса «дрон ниже склона». */
 function subLine(pair: PairResult, az: number): string {
@@ -70,13 +121,16 @@ function syncMode() {
  */
 export function liveFollow() {
   const st = S.station;
-  if (!st || stationGround === null) return;
+  if (!st || stationGround === null) { ghost.hide(); return; }
   const a = { lat: st.lat, lon: st.lon }, c = center();
   const dist = distance(a, c);
   // Прицел ушёл от посчитанной точки: полосы высотомера и предпросмотр — от старой цели, до нового расчёта шкала серая.
   if (last && distance(last.r.target, c) > 2) { last = null; setAltData(null); }
-  if (dist < 5) { setGeo('link', fc()); return; }
-  linkLine(a, c, { color: PENDING_COL, dash: 0, op: 0.55 });
+  if (dist < 5) { setLink(null); return; }
+  if (moving) {
+    if (linkDrawn) { linkDrawn = false; setGeo('link', fc()); }
+    ghost.show(a);
+  } else linkLine(a, c, { color: PENDING_COL, dash: 0, op: 0.55 });
   const az = Math.round(bearing(a, c)) % 360;
   // Строки «нужная высота» и запасы не трогаем: высота строки не прыгает, а значения обновит расчёт.
   const v = $('lsStatus').querySelector('.ls-verdict');
@@ -86,7 +140,7 @@ export function liveFollow() {
 
 export async function updateLive() {
   syncMode();
-  if (!S.station) { setGeo('link', fc()); return; }
+  if (!S.station) { setLink(null); return; }
   // Очередь не копим: пока идёт расчёт, помним только факт «нужен ещё один» — он возьмёт текущий прицел.
   if (liveBusy) { livePending = true; return; }
   liveBusy = true;
@@ -97,18 +151,18 @@ export async function updateLive() {
     try { r = await calcLink(c, radio, video, LIVE_N); } catch (e) {
       if (!(e instanceof DemMissingError)) throw e;
       if (distance(center(), c) > 2) return; // прицел уже ушёл — устаревший ответ
-      stripMessage('Нет данных рельефа здесь', true); setGeo('link', fc());
+      stripMessage('Нет данных рельефа здесь', true); setLink(null);
       last = null; setAltData(null);
       return;
     }
-    if (!S.station) { syncMode(); setGeo('link', fc()); last = null; setAltData(null); return; }
+    if (!S.station) { syncMode(); setLink(null); last = null; setAltData(null); return; }
     // Ревизия цели: пока считали, прицел мог уйти — расчёт для прежней точки не применяем
     // (новый запрос уже запланирован движением карты).
     if (distance(center(), c) > 2) return;
     if (!r) {
       if (stationGroundFailed) stripMessage('Нет данных рельефа под пультом', true);
       else stripMessage(stationGround === null ? 'Загружаю высоту пульта…' : 'Прицел на пульте — сдвиньте карту');
-      setGeo('link', fc());
+      setLink(null);
       last = null; setAltData(null);
     } else {
       const m = minHeightsForPair(r.elev, r.dist, r.hA, heightFnFor(r), radio, video);
@@ -151,12 +205,14 @@ let followRaf = 0;
 
 /** На каждый кадр движения карты: линия и азимут/дальность следуют за крестом без расчёта, расчёт — по планировщику. */
 export function liveMove() {
+  moving = true;
   if (!followRaf) followRaf = requestAnimationFrame(() => { followRaf = 0; liveFollow(); });
   if (S.station) liveCalc.poke();
 }
 /** Конец движения: дорисовать линию за крестом сразу. */
 export function liveSettle() {
   cancelAnimationFrame(followRaf); followRaf = 0;
+  moving = false;
   liveFollow();
 }
 /** Конец движения: посчитать связь немедленно. */
@@ -232,7 +288,7 @@ export function initLinkStrip() {
 
   $('btnProfile').addEventListener('click', () => showProfile());
 
-  // Высота строки (по содержимому) — в CSS-переменную: над строкой стоит масштаб карты.
+  // Высота строки (по содержимому) — в CSS-переменную: на узком экране высотомер не заходит на строку.
   const strip = $('linkStrip');
   const setH = () => document.documentElement.style.setProperty('--strip-h', `${strip.offsetHeight}px`);
   if (typeof ResizeObserver === 'function') new ResizeObserver(setH).observe(strip);

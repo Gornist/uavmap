@@ -16,7 +16,7 @@ import { initMarks, addMarkAtCenter } from './marks';
 import { initRuler } from './ruler';
 import { initCoverage, openCoverageSheet } from './coverageSheet';
 import { findBestSpot } from './bestSpot';
-import { initMenu } from './menu/index';
+import { initMenu, preloadUi } from './menu/index';
 import { initContours } from './contours';
 import { initPwa } from './pwa';
 import { initMyMaps } from './mymaps';
@@ -59,6 +59,7 @@ async function whereAmI() {
 
 initMenu();
 initPwa();
+map.once('idle', preloadUi); // разделы меню и профиль — когда карта догрузилась
 
 // Стиль задан объектом, поэтому не ждём 'load' (он ждёт и тайлы).
 function start() {
@@ -97,6 +98,21 @@ initLinkStrip();
 initAltimeter();
 $('crossChip').addEventListener('click', () => openPointSheet());
 initMobile({ onPointPress: openPointSheet });
+
+// Атрибуция MapLibre (compact) разворачивается сама — при старте и при смене источников (например, переход
+// на запасные подписи) — и занимала верх экрана. Держим её свёрнутой в значок ⓘ, пока пользователь сам её не открыл.
+{
+  const attrib = map.getContainer().querySelector('.maplibregl-ctrl-attrib');
+  if (attrib) {
+    let touched = false;
+    // pointerdown (с захватом) приходит раньше, чем MapLibre разворачивает атрибуцию по click.
+    attrib.addEventListener('pointerdown', () => { touched = true; }, true);
+    attrib.addEventListener('keydown', () => { touched = true; }, true);
+    const fold = () => { if (!touched && attrib.classList.contains('maplibregl-compact-show')) attrib.classList.remove('maplibregl-compact-show'); };
+    new MutationObserver(fold).observe(attrib, { attributes: true, attributeFilter: ['class'] });
+    fold();
+  }
+}
 
 $('zIn').addEventListener('click', () => map.zoomIn());
 $('zOut').addEventListener('click', () => map.zoomOut());

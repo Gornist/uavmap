@@ -4,12 +4,7 @@ import '../styles/menu.css';
 import { $, on } from '../app';
 import { h } from '../ui';
 import { close, isOpen, quiet, setRender } from './common';
-import { hardware } from './hardware';
-import { mapSection } from './map';
-import { offlineSection } from './offline';
-import { files } from './files';
-import { tools } from './tools';
-import { settings } from './settings';
+import { preload } from '../lazy';
 
 type MenuSection = 'hardware' | 'map' | 'offline' | 'files' | 'tools' | 'settings';
 
@@ -23,7 +18,21 @@ const ITEMS: { id: MenuSection; ico: string; title: string; sub: string }[] = [
 ];
 
 const TITLES = Object.fromEntries(ITEMS.map((i) => [i.id, i.title])) as Record<MenuSection, string>;
-const SECTIONS: Record<MenuSection, (el: HTMLElement) => void> = { hardware, map: mapSection, offline: offlineSection, files, tools, settings };
+type SectionFn = (el: HTMLElement) => void;
+// Разделы — отдельными чанками (lazy.ts): на старте не нужны, подгружаются в простое после загрузки карты.
+const LOADERS: Record<MenuSection, () => Promise<SectionFn>> = {
+  hardware: () => import('./hardware').then((m) => m.hardware),
+  map: () => import('./map').then((m) => m.mapSection),
+  offline: () => import('./offline').then((m) => m.offlineSection),
+  files: () => import('./files').then((m) => m.files),
+  tools: () => import('./tools').then((m) => m.tools),
+  settings: () => import('./settings').then((m) => m.settings),
+};
+const SECTIONS: Partial<Record<MenuSection, SectionFn>> = {};
+const loadSection = (id: MenuSection) => LOADERS[id]().then((f) => (SECTIONS[id] = f));
+
+/** Подгрузить разделы меню и шторку профиля заранее (в простое). */
+export const preloadUi = () => preload((Object.keys(LOADERS) as MenuSection[]).map((id) => () => loadSection(id)));
 
 let current: MenuSection | null = null;
 
@@ -58,7 +67,14 @@ function render() {
   head.querySelector('b')!.textContent = TITLES[current];
   head.querySelector('button')!.addEventListener('click', () => { current = null; render(); });
   const sec = h('<div class="dr-sec"></div>');
-  SECTIONS[current](sec);
+  const fn = SECTIONS[current];
+  if (fn) fn(sec);
+  else {
+    sec.appendChild(h('<p class="muted">Загрузка…</p>'));
+    const id = current;
+    loadSection(id).then(() => { if (isOpen() && current === id) render(); },
+      () => { sec.innerHTML = '<p class="muted">Не удалось загрузить раздел — обновите страницу.</p>'; });
+  }
   body.append(head, sec);
   body.scrollTop = top;
 }

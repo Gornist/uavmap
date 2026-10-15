@@ -2,16 +2,26 @@
  * кнопки «Применить» в таблицах. Высота панели — --bar-h: от неё отсчитываются строка связи, линейка и контролы карты. */
 :root { --bar-h: 60px; }
 
-/* Логотипа на карте нет (он в шапке меню). Верхний левый угол — атрибуция подложки: внизу её перекрывали бы
- * строка связи и кнопки зума. Масштаб — над строкой связи (её высоту --strip-h ставит live.ts). */
-.maplibregl-ctrl-bottom-right { top: calc(4px + var(--safe-t)); left: calc(4px + var(--safe-l)); right: auto; bottom: auto !important; }
+/* Логотипа на карте нет (он в шапке меню). Верхний левый угол — атрибуция подложки (внизу её перекрывали бы
+ * строка связи и кнопки) и масштаб. */
+.maplibregl-ctrl-bottom-right { top: calc(4px + var(--safe-t)); left: calc(4px + var(--safe-l)); right: auto; bottom: auto !important; z-index: 3; } /* развёрнутая — поверх масштаба */
 .maplibregl-ctrl-bottom-right .maplibregl-ctrl { margin: 6px 0 0 6px; }
+/* Атрибуция свёрнута в значок ⓘ (main.ts сворачивает её сразу после загрузки), развёрнутая — мелкий текст. */
 .maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib { max-width: calc(100vw - 290px - var(--safe-l) - var(--safe-r)); }
-.maplibregl-ctrl-attrib-button { background-repeat: no-repeat; background-position: center; } /* кнопка 44 px — значок один */
-.maplibregl-ctrl-bottom-left { bottom: calc(var(--bar-h) + var(--strip-h, 0px) + 14px + var(--safe-b)) !important; left: var(--safe-l); }
+.maplibregl-ctrl-attrib.maplibregl-compact { min-height: 24px; }
+.maplibregl-ctrl-attrib.maplibregl-compact:not(.maplibregl-compact-show) { background: transparent !important; }
+.maplibregl-ctrl-attrib-button { background-repeat: no-repeat; background-position: center; background-color: rgba(255, 255, 255, 0.85) !important; }
+/* На сенсорном экране цель нажатия 44×44 — невидимой рамкой вокруг значка. */
+@media (pointer: coarse) { .maplibregl-ctrl-attrib-button::after { content: ""; position: absolute; top: -10px; right: -10px; bottom: -10px; left: -10px; } }
+/* Масштаб — сверху слева, правее значка ⓘ: у левого края по центру стоят кнопки карты. */
+.maplibregl-ctrl-bottom-left { top: calc(4px + var(--safe-t)); bottom: auto !important; left: calc(40px + var(--safe-l)); }
+.maplibregl-ctrl-bottom-left .maplibregl-ctrl-scale { margin: 8px 0 0 6px; }
 @media (max-width: 640px), (max-height: 520px) and (orientation: landscape) {
   .maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib { max-width: calc(100vw - 240px - var(--safe-l) - var(--safe-r)); }
 }
+
+/* Линия пульт → прицел на время движения карты (live.ts, ghost) — поверх карты, под маркерами. */
+.link-ghost { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
 
 /* ---------- Нижняя панель ---------- */
 #bottomBar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 6; display: flex; gap: 8px; height: calc(var(--bar-h) + var(--safe-b)); padding: 8px calc(8px + var(--safe-r)) calc(8px + var(--safe-b)) calc(8px + var(--safe-l)); background: var(--panel); border-top: 1px solid var(--line); box-shadow: var(--shadow); }
@@ -62,16 +72,17 @@
 body.ruler-on .cross-chip { display: none; }
 @media (pointer: coarse) { .cross-chip { min-height: 44px; border-radius: 22px; } }
 
-/* ---------- Высотомер (altimeter.ts): справа, левее кнопок карты ---------- */
-.altimeter { position: absolute; z-index: 5; right: calc(66px + var(--safe-r)); top: calc(64px + var(--safe-t)); bottom: calc(var(--bar-h) + 20px + var(--safe-b)); width: 46px; display: flex; flex-direction: column; align-items: center; touch-action: none; -webkit-user-select: none; user-select: none; cursor: ns-resize; outline: none; }
+/* ---------- Высотомер (altimeter.ts): у правого края, низом к строке связи — под большой палец ----------
+ * Высота шкалы ограничена (360 px, на телефоне 300): во весь экран она закрывала карту справа целиком. */
+.altimeter { position: absolute; z-index: 5; right: calc(10px + var(--safe-r)); bottom: calc(var(--bar-h) + 20px + var(--safe-b)); height: 360px; max-height: calc(100% - var(--bar-h) - 84px - var(--safe-t) - var(--safe-b)); width: 40px; display: flex; flex-direction: column; align-items: center; touch-action: none; -webkit-user-select: none; user-select: none; cursor: ns-resize; outline: none; }
 .altimeter[hidden], body.sheet-open .altimeter, body.ruler-on .altimeter { display: none; }
-.alt-cap { flex: none; margin-top: 4px; font-size: 12px; text-align: center; line-height: 1.2; font-weight: 600; color: #fff; white-space: nowrap; text-shadow: 0 0 3px #000, 0 0 2px #000, 0 0 1px #000; }
+.alt-cap { flex: none; margin-top: 4px; font-size: 11px; text-align: center; line-height: 1.2; font-weight: 600; color: #fff; white-space: nowrap; text-shadow: 0 0 3px #000, 0 0 2px #000, 0 0 1px #000; }
 .alt-track { position: relative; flex: 1 1 auto; width: 100%; background: rgba(20, 18, 15, 0.35); border: 2px solid rgba(20, 18, 15, 0.85); border-radius: 10px; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.55); }
-.alt-name { margin: 0 0 20px; }
-.alt-name + .alt-track + .alt-cap { margin-top: 20px; } /* бегунок у края шкалы не закрывает подписи */
+.alt-name { margin: 0 0 18px; }
+.alt-name + .alt-track + .alt-cap { margin-top: 18px; } /* бегунок у края шкалы не закрывает подписи */
 .altimeter:focus-visible .alt-track { box-shadow: 0 0 0 3px var(--accent); }
 .alt-bands { position: absolute; top: 0; right: 0; bottom: 0; left: 0; overflow: hidden; border-radius: 8px; }
-.alt-band { position: absolute; left: 0; right: 0; opacity: 0.92; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: #fff; text-shadow: 0 0 2px #000; }
+.alt-band { position: absolute; left: 0; right: 0; opacity: 0.82; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: #fff; text-shadow: 0 0 2px #000; }
 .alt-tick { position: absolute; left: 0; right: 0; transform: translateY(50%); text-align: center; font: 600 11px/1 var(--font-mono); color: #fff; text-shadow: 0 0 3px #000, 0 0 2px #000, 0 0 1px #000; pointer-events: none; }
 /* Бегунок — внутри шкалы (наружу ничего не торчит и не закрывает чип у прицела): число метров на белой плашке.
  * Ширина — width: 100%: кнопка в Chrome 68 не растягивается от left/right. */
@@ -94,9 +105,11 @@ table.rt td:last-child { width: 1%; }
 .prof-need { margin: 0 0 10px; font-weight: 600; }
 .prof-need span { white-space: nowrap; }
 
-/* Строка связи по центру шириной до 620 px заходит под высотомер, пока окно уже ~860 px: тогда высотомер — над строкой. */
-@media (max-width: 860px) {
-  .altimeter { bottom: calc(var(--bar-h) + var(--strip-h, 0px) + 14px + var(--safe-b)); }
+/* Окно уже ~740 px: строка связи по центру заходит под высотомер у края — тогда высотомер выше строки.
+ * Привязан к середине экрана, а не к строке: её высота меняется с текстом вердикта, и шкала прыгала бы под пальцем.
+ * Строка лишь ограничивает высоту шкалы снизу (на обычных телефонах места хватает). */
+@media (max-width: 740px) {
+  .altimeter { top: calc(50% - 200px); bottom: auto; max-height: calc(50% + 200px - var(--bar-h) - var(--strip-h, 0px) - 14px - var(--safe-b)); }
 }
 
 /* ---------- Портрет телефона: панель — «вкладки» со значком над подписью ---------- */
@@ -117,7 +130,7 @@ table.rt td:last-child { width: 1%; }
   .ls-need { font-size: 14px; }
   .ls-prof { padding: 0 12px; }
   /* строка связи на всю ширину — высотомер над ней */
-  .altimeter { right: calc(60px + var(--safe-r)); bottom: calc(var(--bar-h) + var(--strip-h, 0px) + 14px + var(--safe-b)); width: 42px; }
+  .altimeter { right: calc(8px + var(--safe-r)); height: 300px; }
   .cross-chip { font-size: 13px; padding: 4px 10px; max-width: calc(100vw - 216px - var(--safe-l) - var(--safe-r)); }
   .cc-more { display: none; } /* узко: стрелка не влезает, чип и так кнопка */
   #crossChipText { overflow: hidden; text-overflow: ellipsis; }
@@ -133,7 +146,7 @@ table.rt td:last-child { width: 1%; }
   .ls-offer .primary { order: 2; flex: 1 1 100%; }
   .cross-chip { top: auto; bottom: calc(50% + 30px); } /* чип — над прицелом: снизу слева стоит строка связи */
   /* кнопки карты здесь — ряд внизу справа; высотомер — у самого края над ними */
-  .altimeter { right: calc(12px + var(--safe-r)); top: calc(6px + var(--safe-t)); bottom: calc(var(--bar-h) + 62px + var(--safe-b)); }
+  .altimeter { right: calc(12px + var(--safe-r)); bottom: calc(var(--bar-h) + 62px + var(--safe-b)); height: auto; max-height: none; top: calc(6px + var(--safe-t)); }
   .alt-name { margin-bottom: 18px; }
   .alt-name + .alt-track + .alt-cap { margin-top: 18px; white-space: nowrap; align-self: flex-end; } /* у края экрана — растёт влево */
   .alt-cap br { display: none; }

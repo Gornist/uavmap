@@ -12,10 +12,10 @@ const THRESHOLDS: Record<number, [number, number]> = {
   0: [500, 1000], 9: [200, 1000], 11: [100, 500], 14: [20, 100],
 };
 
-/** Первый слой накладок (покрытие, связь, маршруты) — горизонтали вставляем под ним. */
+/** Первый слой векторных подписей или накладок (покрытие, связь, маршруты) — горизонтали вставляем под ним. */
 function beforeOverlay(): string | undefined {
-  const l = map.getStyle().layers.find((x) => x.id.startsWith('cov-') || x.id.startsWith('ov-'));
-  return l ? l.id : map.getLayer('roads') ? 'roads' : undefined;
+  const l = map.getStyle().layers.find((x) => x.id.startsWith('lbl-') || x.id.startsWith('cov-') || x.id.startsWith('ov-'));
+  return l?.id;
 }
 
 export function initContours() {

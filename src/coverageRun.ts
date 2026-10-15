@@ -189,17 +189,21 @@ export async function startCoverage(): Promise<void> {
   while (zc > 8 && demTileCount(corners, zc, 2) > PRELIM_TILES) zc--;
   const coarseP = zc < z ? fetchGrid(corners, zc, Math.ceil(stepP / demPixelM(center.lat, zc)) + 2) : null;
   let computing = false;
+  let fineReady: DemGrid | null = null;
   const fineP = fetchGrid(corners, z, pad, (d, t) => { if (id === runId && !computing) progress(d / t, `Загрузка рельефа ${d}/${t}`); });
-  fineP.catch(() => undefined); // ошибку разберём ниже, при ожидании
+  fineP.then((g) => { fineReady = g; }, () => undefined); // ошибку разберём ниже, при ожидании
   try {
     const gP = await Promise.race(coarseP ? [fineP, coarseP.catch(() => fineP)] : [fineP]);
     if (id !== runId) return;
-    computing = true;
-    progress(0, 'Предварительный расчёт…');
-    const resP = await runPass(id, { ...base, step: stepP, rays: raysP }, gP, POOL);
-    if (id !== runId) return;
-    show(mkShown(resP, stepP, raysP, true), rev);
-    computing = false;
+    // Точный рельеф уже есть (кеш, офлайн-район) — предварительный проход только отнял бы время.
+    if (gP !== fineReady) {
+      computing = true;
+      progress(0, 'Предварительный расчёт…');
+      const resP = await runPass(id, { ...base, step: stepP, rays: raysP }, gP, POOL);
+      if (id !== runId) return;
+      show(mkShown(resP, stepP, raysP, true), rev);
+      computing = false;
+    }
     const grid = await fineP;
     if (id !== runId) return;
     computing = true;

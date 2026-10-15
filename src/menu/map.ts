@@ -1,5 +1,5 @@
 // Меню → «Карта»: подложка, затемнение, отмывка, горизонтали, подписи и дороги.
-import { S, BASES, applyMapStyle } from '../app';
+import { S, BASES, SOFT_GL, applyMapStyle } from '../app';
 import { h, field, button } from '../ui';
 import { applyContours } from '../contours';
 import { render, section } from './common';
@@ -27,8 +27,8 @@ export function mapSection(el: HTMLElement) {
     i.addEventListener('change', () => { S.map[key] = i.checked; applyMapStyle(); applyContours(); });
     el.appendChild(c);
   };
-  chk('Подписи и дороги', 'названия, дороги, границы', 'labels');
+  chk('Подписи и дороги', 'названия, дороги, грунтовки, вершины, границы', 'labels');
   chk('Горизонтали', 'линии равной высоты', 'contours');
-  chk('Отмывка рельефа', 'тени склонов', 'hillshade');
+  chk('Отмывка рельефа', SOFT_GL ? 'тени склонов; в этом браузере нет ускорения графики — карта с ней медленнее' : 'тени склонов', 'hillshade');
   el.appendChild(h('<p class="hint muted">Без сети подложка не загрузится — сохраняется только рельеф (раздел «Офлайн»).</p>'));
 }

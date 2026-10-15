@@ -83,6 +83,11 @@ export function migrate(raw: unknown): unknown {
   return out;
 }
 
+/** В браузере ещё нет сохранённого состояния — первый запуск (до первого persist). */
+export function firstRun(): boolean {
+  try { return localStorage.getItem(KEY) === null; } catch { return false; }
+}
+
 export function load(): State {
   try {
     const raw = localStorage.getItem(KEY);
