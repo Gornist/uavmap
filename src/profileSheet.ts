@@ -8,7 +8,7 @@ import { drawProfile } from './profileChart';
 import { coverageHeights } from './coverageStats';
 import { CLUTTER, withClutter } from './clutter';
 import { ICON, LINE_NAME, stCls, pairVerdict, presetName, needLinesHtml } from './verdict';
-import { stationGround, stationGroundFailed, calcLink, LinkCalc, droneAbs, effRadio, effVideo, applyPreset, ALT_TEXT, lineNeeds } from './station';
+import { stationGround, stationGroundFailed, calcLink, LinkCalc, droneAbs, aimAt, applyPreset, ALT_TEXT, lineNeeds } from './station';
 
 const CLUTTER_NAME = () => (CLUTTER.find((c) => c.id === S.clutter)?.name ?? '—').toLowerCase();
 
@@ -78,7 +78,7 @@ function renderProfileSheet(r: LinkCalc) {
   const st = { antH: r.antH };
   const absB = droneAbs(r.groundB, S.droneH, r.groundA);
   const heightFn = (hh: number) => droneAbs(r.groundB, hh, r.groundA);
-  const radioEff = effRadio(), videoEff = vres ? effVideo() : null;
+  const radioEff = r.rp, videoEff = vres ? r.vp : null; // с антенной в направлении на цель
   const mins = minHeightsForPair(r.elev, r.dist, hA, heightFn, radioEff, videoEff);
   const mh = (v: number | null) => (v === null ? '&gt; 1500 м' : `${v} м`);
   const worst = pair.worst === 'video' && vres ? vres : res;
@@ -95,7 +95,7 @@ function renderProfileSheet(r: LinkCalc) {
 
   const presetRows = (line: LineId) => presetsFor(line).map((p) => {
     const base = line === 'rc' ? S.radio : S.video.radio;
-    const radio = withClutter({ ...base, ...p.p }, S.clutter);
+    const radio = aimAt(withClutter({ ...base, ...p.p }, S.clutter), line, r.az);
     const m = analyzeLink(r.elev, r.dist, hA, absB, radio);
     const mHt = minHeightForLink(r.elev, r.dist, hA, heightFn, radio);
     const cur = line === 'rc' ? S.presetId : S.video.presetId;

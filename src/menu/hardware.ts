@@ -1,13 +1,15 @@
 // Меню → «Аппаратура и высота»: аппаратура по линиям, местность у пульта, режим высоты, «Для опытных»
 // (итог и числовые параметры линий). Сама высота дрона — в строке связи, высоты для сравнения — в зоне покрытия.
-import { S, toast, emit } from '../app';
+import { S, toast, emit, center } from '../app';
 import { h, field, button, details } from '../ui';
 import { presetsFor, RadioParams, LineId, budget, freeSpaceRange, radioHorizon } from '../radio';
-import { applyPreset } from '../station';
+import { applyPreset, effRadio, effVideoOrNull } from '../station';
 import { presetName } from '../verdict';
 import { km } from '../format';
-import { CLUTTER, clutterLoss, withClutter } from '../clutter';
+import { CLUTTER, clutterLoss } from '../clutter';
 import { fire, render, section, num } from './common';
+import { ANTENNA_TYPES, AntennaKind, directional } from '../antenna';
+import { bearing } from '../geo';
 
 const RADIO_FIELDS: { key: keyof RadioParams; label: string; min: number; max: number; step: string; hint?: (v: number) => string }[] = [
   { key: 'freqMHz', label: 'Частота, МГц', min: 1, max: 100000, step: '1' },
@@ -92,6 +94,8 @@ export function hardware(el: HTMLElement) {
   ch.textContent = `${cur.hint[0].toUpperCase()}${cur.hint.slice(1)}${clutterLoss(S.clutter, S.radio.freqMHz) ? ` — сигнал слабее на ${Math.round(clutterLoss(S.clutter, S.radio.freqMHz))} дБ` : ''}.`;
   el.appendChild(ch);
 
+  antennas(el);
+
   el.appendChild(h('<p class="hint muted">Высота дрона — над точкой взлёта, как её показывает барометр в очках. Её задают на высотомере у края карты.</p>'));
 
   // ----- для опытных: итог и числовые параметры линий -----
@@ -101,7 +105,8 @@ export function hardware(el: HTMLElement) {
   const summary = h('<div class="kv"></div>');
   const upd = () => {
     const antH = S.station?.antH ?? 2;
-    const rc = withClutter(S.radio, S.clutter), vd = S.video.enabled ? withClutter(S.video.radio, S.clutter) : null;
+    // Те же параметры, что у расчёта: местность и антенна на земле (направленная — в своём луче).
+    const rc = effRadio(), vd = effVideoOrNull();
     const hz = radioHorizon(antH, S.droneH, S.radio.k);
     const rng = (p: typeof rc) => km(freeSpaceRange(p));
     const rows: [string, string][] = vd
@@ -130,4 +135,73 @@ export function hardware(el: HTMLElement) {
     lineParams(adv, calcTab, upd);
     adv.appendChild(h('<p class="hint">Пресеты ориентировочные — подставьте паспортные данные своей аппаратуры.</p>'));
   }
+}
+
+/** Направление на прицел от пульта, ° (null — пульта нет или прицел на нём). */
+function aimToCross(): number | null {
+  const st = S.station;
+  if (!st) return null;
+  const c = center();
+  return Math.abs(c.lat - st.lat) + Math.abs(c.lon - st.lon) < 1e-6 ? null : Math.round(bearing(st, c)) % 360;
+}
+
+/**
+ * Антенны на земле: всенаправленная, патч, яги или своя (усиление и ширина луча) — отдельно для пульта и для
+ * видеоприёмника, и одно направление на обе. Направленная антенна: зона покрытия — сектор, вне луча связь слабее.
+ */
+function antennas(el: HTMLElement) {
+  section(el, 'Антенны на земле');
+  const row = (line: LineId, label: string) => {
+    const a = S.antenna[line];
+    el.appendChild(h('<p class="ant-label"></p>')).textContent = label;
+    const seg = h('<div class="seg seg-wrap"></div>');
+    for (const k of Object.keys(ANTENNA_TYPES) as AntennaKind[]) {
+      const t = ANTENNA_TYPES[k];
+      const txt = k === 'omni' ? t.name : k === 'custom' ? t.name : `${t.name} ${t.beamDeg}°`;
+      seg.appendChild(button(txt, a.kind === k ? 'on' : '', () => {
+        const wasDirectional = directional(S.antenna.rc) || directional(S.antenna.video);
+        S.antenna[line] = k === 'custom' ? { kind: k, gainDbi: a.kind === 'omni' ? t.gainDbi : a.gainDbi, beamDeg: a.kind === 'omni' ? t.beamDeg : a.beamDeg } : { kind: k, gainDbi: t.gainDbi, beamDeg: t.beamDeg };
+        // Первая направленная антенна — сразу на прицел: направление «на север» по умолчанию никому не нужно.
+        if (!wasDirectional && k !== 'omni') { const az = aimToCross(); if (az !== null) S.antenna.heading = az; }
+        emit('radio'); emit('station'); render();
+      }));
+    }
+    el.appendChild(seg);
+    if (a.kind === 'custom') {
+      for (const [key, lab, lo, hi] of [['gainDbi', 'Усиление, дБи', 0, 40], ['beamDeg', 'Ширина луча (по −3 дБ), °', 5, 180]] as const) {
+        const f = field(lab, '<input type="number" inputmode="decimal" step="1">');
+        const inp = f.querySelector('input') as HTMLInputElement;
+        inp.value = String(a[key]);
+        inp.addEventListener('change', () => {
+          const v = num(inp.value);
+          if (!Number.isFinite(v) || v < lo || v > hi) { inp.value = String(a[key]); toast(`${lab}: от ${lo} до ${hi}`); return; }
+          a[key] = v;
+          emit('radio'); emit('station');
+        });
+        el.appendChild(f);
+      }
+    } else if (a.kind !== 'omni') {
+      el.appendChild(h('<p class="hint muted"></p>')).textContent = `${a.gainDbi} дБи в луче ${a.beamDeg}°, сзади слабее на ${ANTENNA_TYPES[a.kind].fbrDb} дБ.`;
+    }
+  };
+  row('rc', 'Пульт (управление)');
+  if (S.video.enabled) row('video', 'Видеоприёмник');
+  if (!directional(S.antenna.rc) && !(S.video.enabled && directional(S.antenna.video))) return;
+  const f = field('Куда направлены, °', '<input type="number" inputmode="numeric" min="0" max="359" step="1">');
+  const inp = f.querySelector('input') as HTMLInputElement;
+  inp.value = String(Math.round(S.antenna.heading));
+  inp.addEventListener('change', () => {
+    const v = num(inp.value);
+    if (!Number.isFinite(v)) { inp.value = String(Math.round(S.antenna.heading)); toast('Направление: градусы от севера, 0–359'); return; }
+    S.antenna.heading = ((Math.round(v) % 360) + 360) % 360;
+    inp.value = String(S.antenna.heading);
+    emit('radio'); emit('station');
+  });
+  el.appendChild(f);
+  el.appendChild(button('Направить на прицел', 'ghost', () => {
+    const az = aimToCross();
+    if (az === null) { toast('Поставьте пульт и наведите прицел на цель'); return; }
+    S.antenna.heading = az; emit('radio'); emit('station'); render();
+  }));
+  el.appendChild(h('<p class="hint muted">Усиление направленной антенны заменяет усиление антенны на земле из аппаратуры. Зона покрытия — сектор по направлению; на карте у пульта показан луч.</p>'));
 }

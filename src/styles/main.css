@@ -23,8 +23,6 @@ textarea.txt { min-height: 70px; resize: vertical; font: inherit; color: var(--t
   .li { min-height: 44px; }
   .dr-item { min-height: 48px; }
   .seg button { font-size: 14px; }
-  #toast { top: calc(64px + var(--safe-t)); }
-  #progress { top: calc(64px + var(--safe-t)); }
 }
 
 /* Компактные плашки: узкий портрет и ландшафт телефона */
@@ -60,5 +58,4 @@ textarea.txt { min-height: 70px; resize: vertical; font: inherit; color: var(--t
   #drBody { padding-bottom: calc(24px + var(--safe-b)); }
   #sheet { left: calc(8px + var(--safe-l)); transform: none; top: calc(8px + var(--safe-t)); bottom: calc(8px + var(--safe-b)); width: min(44vw, 400px); max-height: none; }
   #profileCanvas { height: 150px; }
-  #toast { top: calc(8px + var(--safe-t)); }
 }

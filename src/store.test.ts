@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, expect, it, vi } from 'vitest';
-import { COV_MAX_HEIGHTS, defaults, importText, Mark, Route, save, State, toGeoJSON, toGPX, toKML } from './store';
+import { COV_MAX_HEIGHTS, defaults, importText, Mark, Route, sanitize, save, State, toGeoJSON, toGPX, toKML } from './store';
 import { DEFAULT_RADIO } from './radio';
 
 const mark = (name: string, lat: number, lon: number, note = ''): Mark =>
@@ -390,5 +390,16 @@ describe('миграция v1 → v2: отмывка рельефа по умо�
   });
   it('новый проект — отмывка включена', () => {
     expect(defaults().map.hillshade).toBe(true);
+  });
+});
+
+describe('антенны на земле в проекте', () => {
+  it('по умолчанию всенаправленные; мусор из файла не проходит, направление — в 0..359', () => {
+    expect(defaults().antenna.rc.kind).toBe('omni');
+    const bad = { ...defaults(), antenna: { rc: { kind: 'laser', gainDbi: 999, beamDeg: 1 }, video: { kind: 'yagi', gainDbi: 13, beamDeg: 30 }, heading: -90 } } as unknown as State;
+    const s = sanitize(bad);
+    expect(s.antenna.rc).toEqual({ kind: 'omni', gainDbi: 8, beamDeg: 60 });
+    expect(s.antenna.video).toEqual({ kind: 'yagi', gainDbi: 13, beamDeg: 30 });
+    expect(s.antenna.heading).toBe(270);
   });
 });

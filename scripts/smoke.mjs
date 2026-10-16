@@ -183,7 +183,7 @@ async function scenario() {
   await shot('2-link');
 
   await step('профиль трассы', async () => {
-    await ev(`document.getElementById('btnProfile').click(); true`);
+    await ev(`document.querySelector('#lsStatus .ls-need').click(); true`); // нажатие на строку связи — профиль
     await waitFor(`!document.getElementById('sheet').hidden && !!document.getElementById('profileCanvas')`);
     return ev(`document.querySelector('#shBody .verdict')?.textContent`);
   });

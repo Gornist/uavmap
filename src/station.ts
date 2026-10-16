@@ -3,19 +3,31 @@
 import maplibregl from 'maplibre-gl';
 import { S, map, center, setGeo, fc, toast, openSheet, closeSheet, emit, on } from './app';
 import { h } from './ui';
-import { LatLon, distance, bearing } from './geo';
+import { LatLon, distance, bearing, destination } from './geo';
 import { elevationAt, profile, demPlan } from './elevation';
 import { analyzePair, minHeightForLink, LinkResult, PairResult, LineId, PRESETS, RadioParams } from './radio';
 import { withClutter } from './clutter';
+import { directional, patternLoss } from './antenna';
 import { formatCoords } from './coords';
 import { presetName, freqName, LineNeed } from './verdict';
 
-/** Радиопараметры с учётом местности у пульта — их и нужно передавать в расчёт. */
-export const effRadio = () => withClutter(S.radio, S.clutter);
+/**
+ * Антенна на земле в радиопараметрах линии: у направленной усиление наземной стороны (у управления — передатчик
+ * пульта, у видео — приёмник) — по диаграмме в направлении az; без az — пиковое (антенна смотрит на цель).
+ */
+export function aimAt(p: RadioParams, line: LineId, az?: number): RadioParams {
+  const a = S.antenna[line];
+  if (!directional(a)) return p;
+  const g = a.gainDbi + (az === undefined ? 0 : patternLoss(a, az, S.antenna.heading));
+  return line === 'rc' ? { ...p, txGainDbi: g } : { ...p, rxGainDbi: g };
+}
+
+/** Радиопараметры с учётом местности и антенны у пульта (az — направление на цель) — их и нужно передавать в расчёт. */
+export const effRadio = (az?: number) => aimAt(withClutter(S.radio, S.clutter), 'rc', az);
 /** То же для линии видео (местность у пульта общая для обеих линий). */
-export const effVideo = () => withClutter(S.video.radio, S.clutter);
+export const effVideo = (az?: number) => aimAt(withClutter(S.video.radio, S.clutter), 'video', az);
 /** Видео для расчёта: null, если линия выключена. */
-export const effVideoOrNull = (): RadioParams | null => (S.video.enabled ? effVideo() : null);
+export const effVideoOrNull = (az?: number): RadioParams | null => (S.video.enabled ? effVideo(az) : null);
 
 export let stationGround: number | null = null;
 let stationMarker: maplibregl.Marker | null = null;
@@ -75,7 +87,34 @@ export function removeStation() {
   emit('station');
 }
 
+/** Луч направленной антенны у пульта: сектор шириной луча (по −3 дБ) на 2,5 км — видно, куда «смотрит» пульт. */
+const AIM_R = 2500;
+function renderAim() {
+  if (!map.getSource('aim')) {
+    // Стиль ещё не готов (карта только создаётся) — дорисуем, когда успокоится.
+    try { map.addSource('aim', { type: 'geojson', data: fc() }); } catch { map.once('idle', renderAim); return; }
+    const before = map.getStyle().layers.find((l) => l.id.startsWith('ov-'))?.id;
+    map.addLayer({ id: 'aim-fill', type: 'fill', source: 'aim', paint: { 'fill-color': '#d9a446', 'fill-opacity': 0.14 } }, before);
+    map.addLayer({ id: 'aim-line', type: 'line', source: 'aim', paint: { 'line-color': '#d9a446', 'line-width': 1.5, 'line-dasharray': [3, 2], 'line-opacity': 0.9 } }, before);
+  }
+  const st = S.station;
+  const feats: GeoJSON.Feature[] = [];
+  const lines = (['rc', 'video'] as const).filter((l) => directional(S.antenna[l]) && (l === 'rc' || S.video.enabled));
+  const beams = [...new Set(lines.map((l) => S.antenna[l].beamDeg))]; // одинаковые лучи — один сектор
+  if (st) for (const beam of beams) {
+    const pts: [number, number][] = [[st.lon, st.lat]];
+    for (let a = -beam / 2; a <= beam / 2 + 1e-9; a += Math.max(1, beam / 30)) {
+      const p = destination(st, S.antenna.heading + a, AIM_R);
+      pts.push([p.lon, p.lat]);
+    }
+    pts.push([st.lon, st.lat]);
+    feats.push({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [pts] }, properties: {} });
+  }
+  setGeo('aim', fc(feats));
+}
+
 function renderStation() {
+  renderAim();
   if (!S.station) { stationMarker?.remove(); stationMarker = null; return; }
   if (!stationMarker) {
     const el = h('<div class="station" title="Пульт">📡</div>');
@@ -119,19 +158,24 @@ export interface LinkCalc {
   pair: PairResult;
   elev: Float32Array; dist: number; az: number; target: LatLon;
   groundA: number; groundB: number; antH: number; hA: number;
+  /** Радиопараметры, с которыми посчитана трасса (местность и антенна в направлении на цель). */
+  rp: RadioParams; vp: RadioParams | null;
 }
 
 /**
  * Расчёт трассы пульт → target. null — пульта нет, его высота не загружена, точки совпадают
  * или пульт успели перенести, пока грузился профиль. При нехватке рельефа — DemMissingError.
  */
-export async function calcLink(target: LatLon, radio: RadioParams = effRadio(), video: RadioParams | null = effVideoOrNull(), maxN = 600): Promise<LinkCalc | null> {
+export async function calcLink(target: LatLon, maxN = 600): Promise<LinkCalc | null> {
   if (!S.station || stationGround === null) return null;
   // Снимок входных данных: после await глобальное состояние могло измениться.
   const rev = stationRev, groundA = stationGround, antH = S.station.antH;
   const a = { lat: S.station.lat, lon: S.station.lon };
   const dist = distance(a, target);
   if (dist < 5) return null;
+  const az = bearing(a, target);
+  // Снимок радиопараметров до await (с антенной в направлении на цель).
+  const radio = effRadio(az), video = effVideoOrNull(az);
   const { z, step } = demPlan(a.lat, dist);
   const n = Math.max(16, Math.min(maxN, Math.round(dist / step)));
   const elev = await profile(a, target, n, z);
@@ -140,7 +184,7 @@ export async function calcLink(target: LatLon, radio: RadioParams = effRadio(), 
   const groundB = elev[n];
   const hA = groundA + antH;
   const pair = analyzePair(elev, dist, hA, droneAbs(groundB, S.droneH, groundA), radio, video);
-  return { res: pair.rc, vres: pair.video, pair, elev, dist, az: bearing(a, target), target, groundA, groundB, antH, hA };
+  return { res: pair.rc, vres: pair.video, pair, elev, dist, az, target, groundA, groundB, antH, hA, rp: radio, vp: video };
 }
 
 /** Высота дрона (в текущем режиме отсчёта) для трассы r: h → абсолютная высота над точкой цели. */
@@ -150,7 +194,7 @@ export const heightFnFor = (r: LinkCalc) => (hh: number) => droneAbs(r.groundB, 
  * Нужная высота по каждой линии трассы r (radio/video — те же параметры, что дали r). Для строки связи и профиля:
  * «Управление — от 300 м · Видео 5,8 ГГц не добьёт».
  */
-export function lineNeeds(r: LinkCalc, radio: RadioParams = effRadio(), video: RadioParams | null = r.vres ? effVideo() : null,
+export function lineNeeds(r: LinkCalc, radio: RadioParams = r.rp, video: RadioParams | null = r.vp,
   known?: { rc: number | null; video: number | null }): LineNeed[] {
   const fn = heightFnFor(r);
   const need = (p: RadioParams) => minHeightForLink(r.elev, r.dist, r.hA, fn, p);
@@ -172,3 +216,5 @@ export function applyPreset(id: string, line?: LineId) {
 
 // Маркер пульта — до живой строки (live.ts подписывается на 'station' следом).
 on('station', () => renderStation());
+// Луч антенны зависит и от радио (видео включили/выключили).
+on('radio', () => renderAim());

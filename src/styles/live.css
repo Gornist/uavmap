@@ -1,24 +1,21 @@
-/* Нижняя панель (Метка · Зона · Где встать · Меню), строка связи над ней, логотип, ромбы «Где встать»,
- * кнопки «Применить» в таблицах. Высота панели — --bar-h: от неё отсчитываются строка связи, линейка и контролы карты. */
+/* Нижняя панель (Метка · Зона · Где встать · Меню), строка связи (вверху), ромбы «Где встать»,
+ * кнопки «Применить» в таблицах. Высота панели — --bar-h: от неё отсчитываются линейка, высотомер и контролы карты. */
 :root { --bar-h: 60px; }
 
-/* Логотипа на карте нет (он в шапке меню). Верхний левый угол — атрибуция подложки (внизу её перекрывали бы
- * строка связи и кнопки) и масштаб. */
-.maplibregl-ctrl-bottom-right { top: calc(4px + var(--safe-t)); left: calc(4px + var(--safe-l)); right: auto; bottom: auto !important; z-index: 3; } /* развёрнутая — поверх масштаба */
-.maplibregl-ctrl-bottom-right .maplibregl-ctrl { margin: 6px 0 0 6px; }
-/* Атрибуция свёрнута в значок ⓘ (main.ts сворачивает её сразу после загрузки), развёрнутая — мелкий текст. */
-.maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib { max-width: calc(100vw - 290px - var(--safe-l) - var(--safe-r)); }
+/* Логотипа на карте нет (он в шапке меню). Атрибуция подложки и масштаб — в правом нижнем углу над панелью:
+ * верх занят строкой связи, левый низ — высотомером, правый край по центру — кнопками карты. */
+.maplibregl-ctrl-bottom-right { top: auto; left: auto; right: calc(6px + var(--safe-r)); bottom: calc(var(--bar-h) + 6px + var(--safe-b)) !important; z-index: 3; } /* развёрнутая — поверх масштаба */
+.maplibregl-ctrl-bottom-right .maplibregl-ctrl { margin: 0; }
+/* Атрибуция свёрнута в значок ⓘ (main.ts держит её свёрнутой), развёрнутая — мелкий текст влево от значка. */
+.maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib { max-width: calc(100vw - 80px - var(--safe-l) - var(--safe-r)); }
 .maplibregl-ctrl-attrib.maplibregl-compact { min-height: 24px; }
 .maplibregl-ctrl-attrib.maplibregl-compact:not(.maplibregl-compact-show) { background: transparent !important; }
 .maplibregl-ctrl-attrib-button { background-repeat: no-repeat; background-position: center; background-color: rgba(255, 255, 255, 0.85) !important; }
 /* На сенсорном экране цель нажатия 44×44 — невидимой рамкой вокруг значка. */
 @media (pointer: coarse) { .maplibregl-ctrl-attrib-button::after { content: ""; position: absolute; top: -10px; right: -10px; bottom: -10px; left: -10px; } }
-/* Масштаб — сверху слева, правее значка ⓘ (внизу его закрывали бы строка связи и панели). */
-.maplibregl-ctrl-bottom-left { top: calc(4px + var(--safe-t)); bottom: auto !important; left: calc(40px + var(--safe-l)); }
-.maplibregl-ctrl-bottom-left .maplibregl-ctrl-scale { margin: 8px 0 0 6px; }
-@media (max-width: 640px), (max-height: 520px) and (orientation: landscape) {
-  .maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib { max-width: calc(100vw - 240px - var(--safe-l) - var(--safe-r)); }
-}
+/* Масштаб — левее значка ⓘ. */
+.maplibregl-ctrl-bottom-left { top: auto; left: auto; right: calc(40px + var(--safe-r)); bottom: calc(var(--bar-h) + 8px + var(--safe-b)) !important; }
+.maplibregl-ctrl-bottom-left .maplibregl-ctrl-scale { margin: 0; }
 
 /* Линия пульт → прицел на время движения карты (live.ts, ghost) — поверх карты, под маркерами. */
 .link-ghost { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
@@ -33,7 +30,8 @@
 .no-flexgap #bottomBar button > * + * { margin-left: 8px; }
 
 /* ---------- Строка связи ---------- */
-#linkStrip { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(var(--bar-h) + 8px + var(--safe-b)); z-index: 6; width: min(620px, calc(100% - 16px)); background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow-lg); padding: 8px 10px; }
+/* Вверху: низ карты — у прицела и линии от пульта — остаётся для обзора. */
+#linkStrip { position: absolute; left: 50%; transform: translateX(-50%); top: calc(8px + var(--safe-t)); z-index: 6; width: min(620px, calc(100% - 16px)); background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow-lg); padding: 8px 10px; }
 /* Ручка линейки (ruler.ts) ставит hidden; открытая шторка закрывает строку целиком — прячем, чтобы не мелькала. */
 #linkStrip[hidden], body.sheet-open #linkStrip { display: none; }
 
@@ -58,12 +56,16 @@
 .ls-sub { margin-top: 2px; font-size: 13px; line-height: 1.35; }
 .ls-msg { font-size: 16px; font-weight: 600; }
 .ls-dl { margin-top: 6px; min-height: 44px; }
+.ls-aim { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; font-size: 14px; font-weight: 600; }
+.ls-aim button { min-height: 40px; padding: 6px 12px; }
+.no-flexgap .ls-aim > * + * { margin-left: 8px; }
 
 /* С пультом: слева вердикт, подсказка по высоте и запасы; справа «Профиль». Высоту дрона меняют на высотомере. */
-#lsMain { display: flex; align-items: center; gap: 10px; }
-#lsMain .ls-status { flex: 1 1 auto; min-width: 0; padding: 2px; }
-.ls-prof { flex: none; min-height: 44px; }
-.no-flexgap .ls-acts > * + *, .no-flexgap .ls-offer > * + *, .no-flexgap #lsMain > * + * { margin-left: 8px; }
+/* Нажатие на строку (кроме кнопок в ней) — профиль трассы; «›» в конце вердикта — подсказка, что строка нажимается. */
+#lsMain .ls-status { padding: 2px; cursor: pointer; }
+#lsMain .ls-status:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+.ls-more { color: var(--muted); font-weight: 400; margin-left: 4px; }
+.no-flexgap .ls-acts > * + *, .no-flexgap .ls-offer > * + * { margin-left: 8px; }
 
 /* ---------- Чип под прицелом: высота места (относительно пульта); нажатие — «Точка» ---------- */
 .cross-chip { position: absolute; left: 50%; top: calc(50% + 30px); transform: translateX(-50%); z-index: 4; display: flex; align-items: center; gap: 6px; min-height: 36px; padding: 4px 8px 4px 12px; background: var(--panel); color: var(--text); border: 1px solid var(--line-strong); border-radius: 18px; box-shadow: var(--shadow); font-size: 14px; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -107,12 +109,6 @@ table.rt td:last-child { width: 1%; }
 .prof-need { margin: 0 0 10px; font-weight: 600; }
 .prof-need span { white-space: nowrap; }
 
-/* Окно уже ~740 px: строка связи по центру заходит под высотомер у края — тогда высотомер выше строки.
- * Привязан к середине экрана, а не к строке: её высота меняется с текстом вердикта, и шкала прыгала бы под пальцем.
- * Строка лишь ограничивает высоту шкалы снизу (на обычных телефонах места хватает). */
-@media (max-width: 740px) {
-  .altimeter { top: calc(50% - 200px); bottom: auto; max-height: calc(50% + 200px - var(--bar-h) - var(--strip-h, 0px) - 14px - var(--safe-b)); }
-}
 
 /* ---------- Портрет телефона: панель — «вкладки» со значком над подписью ---------- */
 @media (max-width: 640px) {
@@ -125,14 +121,14 @@ table.rt td:last-child { width: 1%; }
   .no-flexgap #bottomBar > #btnMenu { margin-left: 6px; }
   .no-flexgap #bottomBar button > * + * { margin-left: 0; margin-top: 2px; }
 
-  #linkStrip { width: calc(100% - 12px - var(--safe-l) - var(--safe-r)); bottom: calc(var(--bar-h) + 6px + var(--safe-b)); padding: 8px; }
+  #linkStrip { width: calc(100% - 12px - var(--safe-l) - var(--safe-r)); top: calc(6px + var(--safe-t)); padding: 8px; }
   .ls-offer .ls-x { order: 1; }
   .ls-offer .primary { order: 2; flex: 1 1 100%; }
   .ls-verdict { font-size: 19px; }
   .ls-need { font-size: 14px; }
-  .ls-prof { padding: 0 12px; }
   /* строка связи на всю ширину — высотомер над ней */
-  .altimeter { left: calc(8px + var(--safe-l)); height: 300px; }
+  /* от нижней панели (строка связи вверху); на маленьком экране не заходит под строку */
+  .altimeter { left: calc(8px + var(--safe-l)); bottom: calc(var(--bar-h) + 16px + var(--safe-b)); height: 300px; max-height: calc(100% - var(--bar-h) - var(--strip-h, 0px) - 40px - var(--safe-t) - var(--safe-b)); }
   .cross-chip { font-size: 13px; padding: 4px 10px; max-width: calc(100vw - 216px - var(--safe-l) - var(--safe-r)); }
   .cc-more { display: none; } /* узко: стрелка не влезает, чип и так кнопка */
   #crossChipText { overflow: hidden; text-overflow: ellipsis; }
@@ -146,9 +142,10 @@ table.rt td:last-child { width: 1%; }
   #linkStrip { left: auto; right: calc(8px + var(--safe-r)); transform: none; width: min(380px, 44vw); padding: 6px 8px; }
   .ls-offer .ls-x { order: 1; }
   .ls-offer .primary { order: 2; flex: 1 1 100%; }
-  .cross-chip { top: auto; bottom: calc(50% + 30px); } /* чип — над прицелом: снизу справа стоит строка связи */
-  /* кнопки карты здесь — ряд внизу слева; высотомер — у самого края над ними (сверху — ⓘ и масштаб) */
-  .altimeter { left: calc(12px + var(--safe-l)); bottom: calc(var(--bar-h) + 62px + var(--safe-b)); height: auto; max-height: none; top: calc(44px + var(--safe-t)); }
+  /* кнопки карты здесь — ряд внизу слева; высотомер — у самого края над ними; строка связи — вверху справа,
+     плашка зоны — вверху слева, правее высотомера (по центру под строкой она легла бы на прицел) */
+  body .cov-pill { top: calc(8px + var(--safe-t)); left: calc(64px + var(--safe-l)); transform: none; max-width: calc(56vw - 80px); } /* body — coverage.css подключается позже */
+  .altimeter { left: calc(12px + var(--safe-l)); bottom: calc(var(--bar-h) + 62px + var(--safe-b)); height: auto; max-height: none; top: calc(8px + var(--safe-t)); }
   .alt-name { margin-bottom: 18px; }
   .alt-name + .alt-track + .alt-cap { margin-top: 18px; white-space: nowrap; align-self: flex-start; } /* у края экрана — растёт вправо */
   .alt-cap br { display: none; }
@@ -157,7 +154,6 @@ table.rt td:last-child { width: 1%; }
   .ls-need { font-size: 13px; margin-top: 1px; }
   .ls-sub { margin-top: 0; }
   .ls-empty p { font-size: 15px; margin-bottom: 6px; }
-  .ls-prof { padding: 0 10px; }
 }
 
 /* ---------- Читаемость (readability.ts): «Яркое солнце» и «Крупный текст» ---------- */
@@ -195,5 +191,5 @@ table.rt td:last-child { width: 1%; }
   .zoom-pill { border-radius: 26px; }
   .altimeter { width: 48px; }
   .alt-lbl { height: 48px; font-size: 16px; }
-  .ls-prof, .ls-acts button { min-height: 52px; }
+  .ls-acts button { min-height: 52px; }
 }

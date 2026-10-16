@@ -1,13 +1,14 @@
-// Строка связи над нижней панелью: пока пульта нет — «Пульт здесь / По GPS»; с пультом — вердикт до прицела,
-// одна подсказка по высоте («Поднимите до 480 м — будет и видео»), мелко запасы и азимут, «Профиль».
+// Строка связи вверху карты: пока пульта нет — «Пульт здесь / По GPS»; с пультом — вердикт до прицела,
+// одна подсказка по высоте («Поднимите до 480 м — будет и видео»), мелко запасы и азимут; нажатие на строку — профиль трассы.
 // Данные для высотомера (связь на каждой высоте), линия пульт → прицел и планировщик пересчёта при движении карты.
-import { S, $, map, center, setGeo, fc, line, toast, on } from './app';
+import { S, $, map, center, setGeo, fc, line, toast, on, emit } from './app';
+import { directional, inBeam, angleOff } from './antenna';
 import { km, dB, escapeHtml } from './format';
 import { LatLon, distance, bearing, interpolate } from './geo';
 import { DemMissingError } from './elevation';
 import { LinkResult, PairResult, RadioParams, analyzePair, minHeightsForPair, lossAlong } from './radio';
 import { ICON, stCls, pairVerdict, statusCss, heightHint, HeightNeeds, freqName } from './verdict';
-import { setStation, stationGround, stationGroundFailed, effRadio, effVideoOrNull, calcLink, heightFnFor, LinkCalc } from './station';
+import { setStation, stationGround, stationGroundFailed, calcLink, heightFnFor, LinkCalc } from './station';
 import { setAltData, setAltPreview } from './altimeter';
 import { AltLevel } from './altScale';
 import { showProfile } from './lazy';
@@ -87,6 +88,15 @@ function subLine(pair: PairResult, az: number, loss: string): string {
   return `${lines} · аз. <span class="num">${Math.round(az) % 360}°</span>${loss}${offlineNote()}`;
 }
 
+/** Прицел вне луча направленной антенны на земле — сказать и предложить развернуть её на прицел. */
+function aimNote(az: number): string {
+  const ls = (['rc', 'video'] as const).filter((x) => directional(S.antenna[x]) && (x === 'rc' || S.video.enabled));
+  const out = ls.filter((x) => !inBeam(S.antenna[x], az, S.antenna.heading));
+  if (!out.length) return '';
+  const off = Math.round(angleOff(az, S.antenna.heading));
+  return `<div class="ls-aim"><span class="status-weak">Прицел вне луча антенны (на ${off}°)</span><button class="ghost" data-act="aim">Антенну на прицел</button></div>`;
+}
+
 /** Готовность к полёту без сети: трасса внутри скачанного района или нет (молчим, если районов нет вовсе). */
 function offlineNote(): string {
   const st = S.station, tg = last?.r.target;
@@ -140,8 +150,9 @@ const pairAt = (l: NonNullable<typeof last>, hh: number) => analyzePair(l.r.elev
 function renderStrip(l: NonNullable<typeof last>, pair: PairResult, hh: number) {
   const vName = l.video ? `Видео ${freqName(l.video.freqMHz)}` : undefined;
   const loss = lossInfo(l, hh); // доли миллисекунды — и при перетаскивании высотомера
-  $('lsStatus').innerHTML = `<div class="ls-verdict ${stCls(pair.status)}">${ICON[pair.status]} ${pairVerdict(pair)} · <span class="num">${km(l.r.dist)}</span></div>`
-    + `<div class="ls-need">${escapeHtml(heightHint(hh, l.needs, vName, { rc: pair.rc.status, video: pair.video?.status }))}</div><div class="ls-sub muted">${subLine(pair, l.r.az, loss.text)}</div>`;
+  $('lsStatus').innerHTML = `<div class="ls-verdict ${stCls(pair.status)}">${ICON[pair.status]} ${pairVerdict(pair)} · <span class="num">${km(l.r.dist)}</span><span class="ls-more" aria-hidden="true">›</span></div>`
+    + `<div class="ls-need">${escapeHtml(heightHint(hh, l.needs, vName, { rc: pair.rc.status, video: pair.video?.status }))}</div><div class="ls-sub muted">${subLine(pair, l.r.az, loss.text)}</div>`
+    + aimNote(l.r.az);
   if (S.station) linkLine(S.station, l.r.target, { color: statusCss(pair.status), dash: pair.rc.los ? 0 : 1, op: 1 });
   setLoss(loss.features);
 }
@@ -201,8 +212,7 @@ export async function updateLive() {
   try {
     const c = center();
     let r: LinkCalc | null;
-    const radio = effRadio(), video = effVideoOrNull();
-    try { r = await calcLink(c, radio, video, LIVE_N); } catch (e) {
+    try { r = await calcLink(c, LIVE_N); } catch (e) {
       if (!(e instanceof DemMissingError)) throw e;
       if (distance(center(), c) > 2) return; // прицел уже ушёл — устаревший ответ
       stripMessage('Нет данных рельефа здесь', true); setLink(null);
@@ -219,6 +229,7 @@ export async function updateLive() {
       setLink(null);
       last = null; setAltData(null);
     } else {
+      const radio = r.rp, video = r.vp; // с антенной в направлении на прицел
       const m = minHeightsForPair(r.elev, r.dist, r.hA, heightFnFor(r), radio, video);
       last = { r, radio, video, needs: video ? m : { rc: m.rc, pair: m.pair } };
       renderStrip(last, r.pair, S.droneH);
@@ -340,6 +351,7 @@ export function initLinkStrip() {
     if (act === 'offline') openOfflineSheet();
     else if (act === 'gps-set' && offerAt) { setStation(offerAt); closeOffer(); toast('Пульт поставлен в вашу точку'); }
     else if (act === 'gps-close') closeOffer();
+    else if (act === 'aim' && last) { S.antenna.heading = Math.round(last.r.az) % 360; emit('radio'); emit('station'); toast(`Антенны направлены на ${S.antenna.heading}°`); }
   });
 
   // Высотомер: пока тянут метку дрона — строка показывает связь на этой высоте (без нового профиля).
@@ -349,11 +361,23 @@ export function initLinkStrip() {
   on('station', syncMode);
   syncMode();
 
-  $('btnProfile').addEventListener('click', () => showProfile());
+  // Вся строка связи — вход в профиль трассы (кнопок «Профиль» нет — ширина строки целиком под текст).
+  // Кнопки в строке («Антенну на прицел», «Скачать район») и сообщения без расчёта профиль не открывают.
+  const openProf = (e: Event) => {
+    if ((e.target as HTMLElement).closest('button') || !$('lsStatus').querySelector('.ls-verdict')) return;
+    showProfile();
+  };
+  $('lsStatus').addEventListener('click', openProf);
+  $('lsStatus').addEventListener('keydown', (e) => {
+    if ((e.key !== 'Enter' && e.key !== ' ') || (e.target as HTMLElement).closest('button')) return; // кнопки в строке — сами
+    e.preventDefault();
+    openProf(e);
+  });
 
-  // Высота строки (по содержимому) — в CSS-переменную: на узком экране высотомер не заходит на строку.
+  // Высота строки (по содержимому) — в CSS-переменную: под строкой стоит плашка зоны, на узком экране высотомер
+  // не заходит на строку. Скрытая строка (шторка, линейка) высоту не обнуляет: при её возврате плашка не наедет.
   const strip = $('linkStrip');
-  const setH = () => document.documentElement.style.setProperty('--strip-h', `${strip.offsetHeight}px`);
+  const setH = () => { if (strip.offsetHeight) document.documentElement.style.setProperty('--strip-h', `${strip.offsetHeight}px`); };
   if (typeof ResizeObserver === 'function') new ResizeObserver(setH).observe(strip);
   setH();
   updateLive();

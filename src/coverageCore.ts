@@ -18,6 +18,7 @@ import { destination, lonLatToPixel, R_EARTH } from './geo';
 import { DemGrid, sampleGrid, sampleRay, sampleRayPoints } from './elevation';
 import { C, clampK } from './radio';
 import { bullingtonPointNu, bullingtonTaper, deltaBullingtonTail, knifeEdgeJ, smoothSurfaceHeights } from './diffraction';
+import { Antenna, patternLoss } from './antenna';
 
 export interface CoverageJob {
   grid: DemGrid;
@@ -27,6 +28,8 @@ export interface CoverageJob {
   mode: 'takeoff' | 'terrain';
   radius: number; step: number; rays: number;
   freqMHz: number; budget: number; k: number; fade: number;
+  /** Направленная антенна на земле: budget — с её пиковым усилением, к лучу добавляется ослабление по диаграмме. */
+  aim?: { antenna: Antenna; heading: number };
   r0?: number; r1?: number;  // считать лучи r0..r1−1 (по умолчанию все)
   exact?: boolean;           // false — заведомо «нет связи» без точного запаса (см. выше); по умолчанию true
 }
@@ -92,13 +95,15 @@ export function computeCoverage(j: CoverageJob, onProgress?: (frac: number) => v
   const [px0, py0] = lonLatToPixel(j.lon, j.lat, j.grid.z);
   const ground0 = sampleGrid(j.grid, px0, py0);
   const tx = ground0 + j.antH;
-  // Дальше sFree запас < thr уже в свободном пространстве (дифракция только добавляет потери).
-  let sFree = nS;
-  if (!exact) for (let s = 1; s < nS; s++) if (j.budget - fsl[s] < thr) { sFree = s; break; }
 
   for (let r = r0; r < r1; r++) {
     const ro = r - r0;
     const az = (360 * r) / j.rays;
+    // Бюджет луча: направленная антенна на земле слабее вне своей оси (antenna.ts).
+    const bud = j.aim ? j.budget + patternLoss(j.aim.antenna, az, j.aim.heading) : j.budget;
+    // Дальше sFree запас < thr уже в свободном пространстве (дифракция только добавляет потери).
+    let sFree = nS;
+    if (!exact) for (let s = 1; s < nS; s++) if (bud - fsl[s] < thr) { sFree = s; break; }
     if (cache?.filled) {
       g.set(cache.g.subarray(ro * nS, ro * nS + nS));
       gp.set(cache.gp.subarray(ro * nS, ro * nS + nS));
@@ -121,12 +126,12 @@ export function computeCoverage(j: CoverageJob, onProgress?: (frac: number) => v
 
     for (let s = 1; s < nS; s++) {
       const D = dd[s];
-      const fsm = j.budget - fsl[s];           // запас в свободном пространстве
+      const fsm = bud - fsl[s];                // запас в свободном пространстве
       if (s >= sFree) {
         // Заведомо «нет связи» до конца луча: верхняя оценка запаса.
         for (let h = 0; h < nH; h++) {
           const o = (h * nr + ro) * nS;
-          for (let q = s; q < nS; q++) margins[o + q] = j.budget - fsl[q];
+          for (let q = s; q < nS; q++) margins[o + q] = bud - fsl[q];
           if (!lost[h]) { lost[h] = 1; firstLoss[h * nr + ro] = dd[s - 1]; }
         }
         break;
@@ -245,7 +250,7 @@ export function computeCoverage(j: CoverageJob, onProgress?: (frac: number) => v
 // ---------- Параллельный расчёт: части лучей в разных воркерах ----------
 
 /** Радиопараметры одной линии (управление / видео) — частота влияет на дифракцию, поэтому прогоны раздельные. */
-export interface CoverageLine { freqMHz: number; budget: number; k: number; fade: number }
+export interface CoverageLine { freqMHz: number; budget: number; k: number; fade: number; aim?: CoverageJob['aim'] }
 
 /** Часть зоны: лучи r0..r1−1 для всех линий на одной (вырезанной под сектор) сетке. */
 export interface CoverageChunk extends Omit<CoverageJob, 'freqMHz' | 'budget' | 'k' | 'fade'> {

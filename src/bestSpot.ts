@@ -11,6 +11,7 @@ import { demTileCount } from './demTiles';
 import { ICON, stCls, pairVerdict, statusCss } from './verdict';
 import { setStation, effRadio, effVideoOrNull, droneAbs } from './station';
 import { openOfflineSheet } from './offline';
+import { directional } from './antenna';
 
 /** Сколько вариантов показываем (ромбы «1, 2, 3»). */
 const TOP_N = 3;
@@ -96,12 +97,17 @@ function nothingFound(radius: number) {
   b.querySelector('#bsClose')!.addEventListener('click', closeSheet);
 }
 
-/** Поставить пульт в вариант и вернуть прицел на цель — строка связи сразу покажет связь оттуда. */
+/**
+ * Поставить пульт в вариант и вернуть прицел на цель — строка связи сразу покажет связь оттуда.
+ * Варианты оценены с направленной антенной, смотрящей на цель (на новом месте пилот её так и поставит),
+ * поэтому и направление антенн разворачиваем на цель — иначе строка связи сказала бы «вне луча».
+ */
 function choose(t: Spot, i: number, target: LatLon) {
+  if (directional(S.antenna.rc) || directional(S.antenna.video)) S.antenna.heading = Math.round(bearing(t.p, target)) % 360;
   setStation(t.p);
   closeSheet(); // onClose шторки убирает ромбы
   map.flyTo({ center: [target.lon, target.lat] });
-  toast(`Пульт поставлен в вариант ${i + 1}`);
+  toast(`Пульт поставлен в вариант ${i + 1}${directional(S.antenna.rc) || directional(S.antenna.video) ? `, антенны — на цель (${S.antenna.heading}°)` : ''}`);
 }
 
 function showSpots(top: Spot[], target: LatLon, radius: number) {

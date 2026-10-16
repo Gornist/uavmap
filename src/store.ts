@@ -2,6 +2,7 @@
 import { DEFAULT_RADIO, DEFAULT_VIDEO, DEFAULT_VIDEO_PRESET, RadioParams } from './radio';
 import type { CoordFormat } from './coords';
 import type { ClutterClass } from './clutter';
+import { Antenna, DEFAULT_ANTENNA } from './antenna';
 import { escapeHtml as esc } from './format';
 import { isObj, num, fin, oneOf } from './validate';
 
@@ -28,6 +29,8 @@ export interface State {
   map: { base: string; labels: boolean; hillshade: boolean; contours: boolean; dim: number; center: [number, number]; zoom: number };
   coordFormat: CoordFormat;
   clutter: ClutterClass;   // местность у пульта
+  /** Антенны на земле (управление — у пульта, видео — у приёмника) и куда они направлены, ° от севера. */
+  antenna: { rc: Antenna; video: Antenna; heading: number };
 }
 
 const KEY = 'radius.project.v1';
@@ -49,6 +52,7 @@ export const defaults = (): State => ({
   map: { base: 'sat', labels: true, hillshade: true, contours: true, dim: 0.35, center: [40.2045, 43.6805], zoom: 12 },
   coordFormat: 'sk42',
   clutter: 'open',
+  antenna: { rc: { ...DEFAULT_ANTENNA }, video: { ...DEFAULT_ANTENNA }, heading: 0 },
 });
 
 function merge<T>(base: T, over: unknown): T {
@@ -163,6 +167,12 @@ export function sanitize(s: State): State {
   };
   out.coordFormat = oneOf(s.coordFormat, ['sk42', 'dd', 'dms'] as const, d.coordFormat);
   out.clutter = oneOf(s.clutter, ['open', 'sparse', 'village', 'forest'] as const, d.clutter);
+  const an: Record<string, unknown> = isObj(s.antenna) ? s.antenna : {};
+  const ant = (src: unknown, def: Antenna): Antenna => {
+    const a: Record<string, unknown> = isObj(src) ? src : {};
+    return { kind: oneOf(a.kind, ['omni', 'patch', 'yagi', 'custom'] as const, def.kind), gainDbi: fin(a.gainDbi, 0, 40, def.gainDbi), beamDeg: fin(a.beamDeg, 5, 180, def.beamDeg) };
+  };
+  out.antenna = { rc: ant(an.rc, d.antenna.rc), video: ant(an.video, d.antenna.video), heading: ((fin(an.heading, -1e4, 1e4, 0) % 360) + 360) % 360 };
   return out;
 }
 

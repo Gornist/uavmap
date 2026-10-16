@@ -6,6 +6,7 @@ import { LatLon } from './geo';
 import { fetchGrid, coverageBox, coverageZoom, demPixelM, DemMissingError, DemGrid } from './elevation';
 import { demTileCount } from './demTiles';
 import { budget } from './radio';
+import { directional } from './antenna';
 import { effRadio, effVideo, effVideoOrNull } from './station';
 import { emptyResult, mergeChunk, sectorCrop, splitRays } from './coverageCore';
 import type { CoverageChunk, CoverageLine, CoverageResult } from './coverageCore';
@@ -46,7 +47,7 @@ export function markInputsChanged(): void {
 }
 
 /** Радиопараметры расчёта без высоты дрона: событие 'radio' приходит и при смене одной только S.droneH. */
-const radioSig = () => JSON.stringify([effRadio(), effVideoOrNull()]);
+const radioSig = () => JSON.stringify([effRadio(), effVideoOrNull(), S.antenna]);
 
 /** Подписка на смену пульта и радио. */
 export function initCoverageRun(): void {
@@ -168,7 +169,9 @@ export async function startCoverage(): Promise<void> {
   const radio = { ...effRadio() }, mode = 'takeoff' as const; // копия: effRadio() может вернуть сам S.radio; высота — от взлёта (station.ts)
   const vRadio = S.video.enabled ? { ...effVideo() } : null;
   // Частота влияет на дифракцию, поэтому у видео свой прогон; обе линии считаются в одной части на одной вырезке.
-  const lines: CoverageLine[] = [radio, ...(vRadio ? [vRadio] : [])].map((rp) => ({ freqMHz: rp.freqMHz, budget: budget(rp), k: rp.k, fade: rp.fadeMarginDb }));
+  // Направленная антенна на земле: бюджет — с пиковым усилением (effRadio без азимута), по лучам — диаграмма.
+  const aimOf = (line: 'rc' | 'video') => (directional(S.antenna[line]) ? { antenna: { ...S.antenna[line] }, heading: S.antenna.heading } : undefined);
+  const lines: CoverageLine[] = [radio, ...(vRadio ? [vRadio] : [])].map((rp, i) => ({ freqMHz: rp.freqMHz, budget: budget(rp), k: rp.k, fade: rp.fadeMarginDb, aim: aimOf(i === 0 ? 'rc' : 'video') }));
   const rays = heights.length <= 2 ? 720 : 360;
   const base = { lat: center.lat, lon: center.lon, antH: st.antH, heights, mode, radius, step, rays, exact: false, lines };
   const mkShown = (r: CoverageResult[], stp: number, ry: number, prelim: boolean): CoverageShown => ({

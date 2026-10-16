@@ -5,7 +5,7 @@ import maplibregl from 'maplibre-gl';
 import mlcontour from 'maplibre-contour';
 import { DEM_URL, SHARED_DEM_MAX_Z, demTileUrl } from './demTiles';
 import { fetchBuffer, HttpStatusError } from './netTiles';
-import { PRIMARY_TIMEOUT_MS, primaryDown, reportPrimary, awsStitched, canvasPng, cachedPrimary } from './demNet';
+import { PRIMARY_TIMEOUT_MS, primaryDown, reportPrimary, awsStitched, canvasPng, cachedPrimary, AWS_URL } from './demNet';
 import { setSharedDem } from './elevation';
 
 /**
@@ -44,21 +44,43 @@ function bounded<T>(run: (ac: AbortController) => Promise<T>, outer: AbortContro
 }
 
 /**
- * Горизонтали: тайл, не пришедший за 15 с (ответ с ошибкой потерялся в старом Chrome), запрашиваем ещё раз.
- * Ошибку наружу не отдаём никогда: векторные тайлы грузит воркер MapLibre, и ответ протокола с ошибкой
- * (Error, AbortError) старый Chrome не может ему переслать (DataCloneError) — тайл висел бы «загружается»
- * до перезагрузки, так на пульте пропадали все горизонтали. Не вышло — пустой тайл: на этом участке нет линий.
+ * Запасной источник горизонталей — тайлы AWS (demNet.ts): 256 px до z13 (по детальности — как z12 Mapterhorn
+ * в 512 px). Создаётся при первой надобности; свой воркер maplibre-contour, свой кеш.
+ */
+let awsSource: InstanceType<typeof mlcontour.DemSource> | null = null;
+const awsContours = () => (awsSource ??= new mlcontour.DemSource({
+  url: AWS_URL, encoding: 'terrarium', maxzoom: SHARED_DEM_MAX_Z + 1, worker: true, cacheSize: 80, timeoutMs: 20000, id: 'uavaws',
+}));
+
+/**
+ * Горизонтали: тайл, не пришедший за 15 с, запрашиваем ещё раз — уже из запасного источника (AWS): основной
+ * завис (Cloudflare без VPN) или ответ с ошибкой потерялся в старом Chrome. Основной помечен недоступным
+ * (предохранитель demNet.ts) — сразу запасной. Ошибку наружу не отдаём никогда: векторные тайлы грузит воркер
+ * MapLibre, и ответ протокола с ошибкой (Error, AbortError) старый Chrome не может ему переслать (DataCloneError) —
+ * тайл висел бы «загружается» до перезагрузки. Не вышло — пустой тайл: на этом участке нет линий.
  */
 const CONTOUR_PROTO = 'uavcontour';
 const CONTOUR_WAIT_MS = 15000;
 const EMPTY_TILE = () => ({ data: new ArrayBuffer(0) });
 maplibregl.addProtocol(CONTOUR_PROTO, async (params, ac) => {
-  const url = params.url.replace(`${CONTOUR_PROTO}://`, `${demSource.contourProtocolId}://`);
+  // Тайл рельефа основного источника под этим тайлом горизонталей (overzoom 1, не выше SHARED_DEM_MAX_Z):
+  // лежит в кеше (офлайн-район, подкачка) — горизонтали по нему, даже когда основной помечен недоступным.
+  const m = /^uavcontour:\/\/(\d+)\/(\d+)\/(\d+)/.exec(params.url);
+  const cachedDem = async () => {
+    if (!m) return false;
+    const [z, x, y] = [+m[1], +m[2], +m[3]];
+    const dz = Math.max(0, Math.min(z - 1, SHARED_DEM_MAX_Z)), k = z - dz;
+    return !!(await cachedPrimary(demTileUrl(dz, x >> k, y >> k)));
+  };
   for (let i = 0; i < 2 && !ac.signal.aborted; i++) {
+    const aws = i > 0 || (primaryDown() && !(await cachedDem()));
+    // Тайлы AWS вдвое мельче (256 px): горизонтали — по тайлу того же уровня, без overzoom.
+    const src = aws ? awsContours() : demSource;
+    const url = params.url.replace(`${CONTOUR_PROTO}://`, `${src.contourProtocolId}://`).replace(/([?&])overzoom=\d+/, aws ? '$1overzoom=0' : '$&');
     try {
-      return await bounded((inner) => demSource.contourProtocolV4({ ...params, url }, inner), ac, CONTOUR_WAIT_MS);
+      return await bounded((inner) => src.contourProtocolV4({ ...params, url }, inner), ac, CONTOUR_WAIT_MS);
     } catch {
-      // повторим один раз; отменённый запрос (карту сдвинули) MapLibre уже не ждёт
+      // второй раз — из запасного; отменённый запрос (карту сдвинули) MapLibre уже не ждёт
     }
   }
   return EMPTY_TILE();

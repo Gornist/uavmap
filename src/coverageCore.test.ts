@@ -305,3 +305,18 @@ describe('общий рельеф лучей для нескольких лин�
     });
   });
 });
+
+describe('computeCoverage: направленная антенна на земле', () => {
+  const flat = grid(() => 100);
+  const patch = { kind: 'patch' as const, gainDbi: 8, beamDeg: 60 };
+  it('на оси — как без поправки, сзади — слабее на отношение «вперёд/назад», на краю луча — на 3 дБ', () => {
+    // 4 луча: 0°, 90°, 180°, 270°; антенна смотрит на восток (90°).
+    const plain = computeCoverage(job(flat));
+    const aimed = computeCoverage(job(flat, { aim: { antenna: patch, heading: 90 } }));
+    const s = 40;
+    expect(M(aimed, 0, 1, 4, s)).toBeCloseTo(M(plain, 0, 1, 4, s), 4);       // 90° — на оси
+    expect(M(plain, 0, 3, 4, s) - M(aimed, 0, 3, 4, s)).toBeCloseTo(20, 4);  // 270° — сзади, FBR патча 20 дБ
+    const edge = computeCoverage(job(flat, { aim: { antenna: patch, heading: 30 } })); // луч 0° — край луча (30°)
+    expect(M(plain, 0, 0, 4, s) - M(edge, 0, 0, 4, s)).toBeCloseTo(3, 4); // запасы — Float32
+  });
+});
