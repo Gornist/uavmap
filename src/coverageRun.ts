@@ -46,7 +46,7 @@ export function markInputsChanged(): void {
 }
 
 /** Радиопараметры расчёта без высоты дрона: событие 'radio' приходит и при смене одной только S.droneH. */
-const radioSig = () => JSON.stringify([effRadio(), effVideoOrNull(), S.altMode]);
+const radioSig = () => JSON.stringify([effRadio(), effVideoOrNull()]);
 
 /** Подписка на смену пульта и радио. */
 export function initCoverageRun(): void {
@@ -165,7 +165,7 @@ export async function startCoverage(): Promise<void> {
   const id = ++runId;
   const rev = inputsRev;
   // Снимок радиопараметров до await: иначе старый пульт смешается с новыми настройками.
-  const radio = { ...effRadio() }, mode = S.altMode; // копия: effRadio() может вернуть сам S.radio
+  const radio = { ...effRadio() }, mode = 'takeoff' as const; // копия: effRadio() может вернуть сам S.radio; высота — от взлёта (station.ts)
   const vRadio = S.video.enabled ? { ...effVideo() } : null;
   // Частота влияет на дифракцию, поэтому у видео свой прогон; обе линии считаются в одной части на одной вырезке.
   const lines: CoverageLine[] = [radio, ...(vRadio ? [vRadio] : [])].map((rp) => ({ freqMHz: rp.freqMHz, budget: budget(rp), k: rp.k, fade: rp.fadeMarginDb }));

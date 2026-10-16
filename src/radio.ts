@@ -155,6 +155,24 @@ export function minHeightForLink(elev: ArrayLike<number>, dist: number, hA: numb
   return Math.ceil(hi);
 }
 
+/**
+ * Где по пути к цели пропадёт связь: дрон летит от пульта к цели на постоянной абсолютной высоте hB.
+ * Возвращает расстояние от пульта (м) до первой точки, где связи нет (запас < 0 или дрон ниже склона),
+ * или null — связь есть на всём пути. Перебор всех отсчётов: связь вдоль рельефа не монотонна (может пропасть
+ * за бугром и вернуться), грубый шаг пропустил бы короткий провал. 200 отсчётов — около миллисекунды.
+ */
+export function lossAlong(elev: ArrayLike<number>, dist: number, hA: number, hB: number, p: RadioParams): number | null {
+  const n = elev.length - 1;
+  if (n < 2) return null;
+  const sub = (k: number) => (elev instanceof Float32Array || elev instanceof Float64Array ? elev.subarray(0, k + 1) : Array.prototype.slice.call(elev, 0, k + 1));
+  const lost = (k: number) => {
+    const r = analyzeLink(sub(k), (dist * k) / n, hA, hB, p);
+    return r.belowGround || r.status === 'none';
+  };
+  for (let k = 2; k <= n; k++) if (lost(k)) return (dist * k) / n;
+  return null;
+}
+
 // ---------- Две линии: управление и видео ----------
 
 export interface PairResult {

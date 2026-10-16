@@ -3,15 +3,15 @@
 // Данные для высотомера (связь на каждой высоте), линия пульт → прицел и планировщик пересчёта при движении карты.
 import { S, $, map, center, setGeo, fc, line, toast, on } from './app';
 import { km, dB, escapeHtml } from './format';
-import { LatLon, distance, bearing } from './geo';
+import { LatLon, distance, bearing, interpolate } from './geo';
 import { DemMissingError } from './elevation';
-import { LinkResult, PairResult, RadioParams, analyzePair, minHeightsForPair } from './radio';
+import { LinkResult, PairResult, RadioParams, analyzePair, minHeightsForPair, lossAlong } from './radio';
 import { ICON, stCls, pairVerdict, statusCss, heightHint, HeightNeeds, freqName } from './verdict';
 import { setStation, stationGround, stationGroundFailed, effRadio, effVideoOrNull, calcLink, heightFnFor, LinkCalc } from './station';
 import { setAltData, setAltPreview } from './altimeter';
 import { AltLevel } from './altScale';
 import { showProfile } from './lazy';
-import { openOfflineSheet } from './offline';
+import { openOfflineSheet, offlineCover } from './offline';
 
 let liveBusy = false, livePending = false;
 /** Для живой строки хватает 200 отсчётов: запас расходится с полным профилем (до 600) не более чем на 0,2 дБ. */
@@ -19,9 +19,17 @@ const LIVE_N = 200;
 const PENDING_COL = '#8b949e';
 
 let linkDrawn = false; // в источнике 'link' есть линия
+let lossDrawn = false;  // в источнике 'link-loss' есть метки
+/** Метки «здесь пропадёт связь» на линии (только у посчитанного результата — при любом другом виде линии убираются). */
+function setLoss(features: GeoJSON.Feature[]) {
+  if (!features.length && !lossDrawn) return;
+  lossDrawn = features.length > 0;
+  setGeo('link-loss', fc(features));
+}
 /** Линия связи в слое карты (GeoJSON → воркер MapLibre); null — убрать. Призрак движения при этом прячется. */
 function setLink(a: LatLon | null, c?: LatLon, props: Record<string, unknown> = {}) {
   ghost.hide();
+  setLoss([]);
   linkDrawn = !!(a && c);
   setGeo('link', a && c ? fc([line([[a.lon, a.lat], [c.lon, c.lat]], props)]) : fc());
 }
@@ -73,10 +81,53 @@ const ghost = (() => {
 let moving = false; // карта движется (между первым move и moveend)
 
 /** Третья строка (мелко): запасы линий и азимут. Прочерк вместо служебного запаса «дрон ниже склона». */
-function subLine(pair: PairResult, az: number): string {
+function subLine(pair: PairResult, az: number, loss: string): string {
   const m = (x: LinkResult) => `<span class="${stCls(x.status)} num">${x.belowGround ? '—' : dB(x.margin)}</span>`;
   const lines = pair.video ? `Упр. ${m(pair.rc)} · Видео ${m(pair.video)}` : `Запас ${m(pair.rc)}`;
-  return `${lines} · аз. <span class="num">${Math.round(az) % 360}°</span>`;
+  return `${lines} · аз. <span class="num">${Math.round(az) % 360}°</span>${loss}${offlineNote()}`;
+}
+
+/** Готовность к полёту без сети: трасса внутри скачанного района или нет (молчим, если районов нет вовсе). */
+function offlineNote(): string {
+  const st = S.station, tg = last?.r.target;
+  if (!st || !tg) return '';
+  const c = offlineCover([st, tg]);
+  return c === 'yes' ? ' · <span class="status-ok">офлайн ✓</span>' : c === 'no' ? ' · вне скачанных районов' : '';
+}
+
+/**
+ * Где по пути к прицелу пропадёт связь (дрон летит к нему на высоте hh): метки на линии и строка для строки связи.
+ * Только если это случится раньше прицела — у самого прицела об этом и так говорит вердикт.
+ */
+function lossInfo(l: NonNullable<typeof last>, hh: number): { features: GeoJSON.Feature[]; text: string } {
+  const st = S.station;
+  if (!st) return { features: [], text: '' };
+  const hB = heightFnFor(l.r)(hh);
+  const early = (d: number | null) => (d !== null && d < l.r.dist * 0.97 ? d : null);
+  const rc = early(lossAlong(l.r.elev, l.r.dist, l.r.hA, hB, l.radio));
+  const v = l.video ? early(lossAlong(l.r.elev, l.r.dist, l.r.hA, hB, l.video)) : null;
+  // Склон по пути выше дрона — это уже столкновение, а не только связь: говорим об этом отдельно.
+  const n = l.r.elev.length - 1;
+  let wall: number | null = null;
+  for (let k = 1; k < n && wall === null; k++) if (l.r.elev[k] > hB) wall = (l.r.dist * k) / n;
+  const pts: { d: number; label: string; text: string }[] = [];
+  const wallD = wall !== null && wall < l.r.dist * 0.97 ? wall : null;
+  if (wallD !== null) pts.push({ d: wallD, label: 'склон выше дрона', text: 'склон выше дрона на' });
+  // Потеря связи — если она раньше склона (после склона дальше лететь некуда).
+  const rcE = rc !== null && (wallD === null || rc < wallD) ? rc : null;
+  const vE = v !== null && (wallD === null || v < wallD) ? v : null;
+  if (rcE !== null && vE !== null && Math.abs(rcE - vE) < l.r.dist * 0.03) pts.push({ d: Math.min(rcE, vE), label: 'нет связи', text: 'связь пропадёт на' });
+  else {
+    if (rcE !== null) pts.push({ d: rcE, label: 'нет управления', text: 'управление пропадёт на' });
+    if (vE !== null) pts.push({ d: vE, label: 'нет видео', text: 'видео пропадёт на' });
+  }
+  const features = pts.map((p): GeoJSON.Feature => {
+    const q = interpolate(st, l.r.target, p.d / l.r.dist);
+    return { type: 'Feature', geometry: { type: 'Point', coordinates: [q.lon, q.lat] }, properties: { label: `${p.label} · ${km(p.d)}` } };
+  });
+  const first = pts.reduce<typeof pts[0] | null>((a, p) => (!a || p.d < a.d ? p : a), null);
+  const text = first ? ` · <span class="status-none">${first.text} <span class="num">${km(first.d)}</span></span>` : '';
+  return { features, text };
 }
 
 /** Последний расчёт трассы — для предпросмотра высоты на высотомере без нового профиля. */
@@ -88,9 +139,11 @@ const pairAt = (l: NonNullable<typeof last>, hh: number) => analyzePair(l.r.elev
 /** Вердикт, подсказка по высоте, запасы; линия на карте — цветом статуса. */
 function renderStrip(l: NonNullable<typeof last>, pair: PairResult, hh: number) {
   const vName = l.video ? `Видео ${freqName(l.video.freqMHz)}` : undefined;
+  const loss = lossInfo(l, hh); // доли миллисекунды — и при перетаскивании высотомера
   $('lsStatus').innerHTML = `<div class="ls-verdict ${stCls(pair.status)}">${ICON[pair.status]} ${pairVerdict(pair)} · <span class="num">${km(l.r.dist)}</span></div>`
-    + `<div class="ls-need">${escapeHtml(heightHint(hh, l.needs, vName, { rc: pair.rc.status, video: pair.video?.status }))}</div><div class="ls-sub muted">${subLine(pair, l.r.az)}</div>`;
+    + `<div class="ls-need">${escapeHtml(heightHint(hh, l.needs, vName, { rc: pair.rc.status, video: pair.video?.status }))}</div><div class="ls-sub muted">${subLine(pair, l.r.az, loss.text)}</div>`;
   if (S.station) linkLine(S.station, l.r.target, { color: statusCss(pair.status), dash: pair.rc.los ? 0 : 1, op: 1 });
+  setLoss(loss.features);
 }
 
 /** Данные высотомера: какая связь на каждой высоте; склон — если дрон оказался бы ниже рельефа у прицела. */
@@ -129,6 +182,7 @@ export function liveFollow() {
   if (dist < 5) { setLink(null); return; }
   if (moving) {
     if (linkDrawn) { linkDrawn = false; setGeo('link', fc()); }
+    setLoss([]);
     ghost.show(a);
   } else linkLine(a, c, { color: PENDING_COL, dash: 0, op: 0.55 });
   const az = Math.round(bearing(a, c)) % 360;
@@ -227,6 +281,14 @@ export function addLinkLayers() {
   map.addLayer({ id: 'ov-link-casing', type: 'line', source: 'link', paint: { 'line-color': '#000', 'line-width': 6, 'line-opacity': 0.45 } });
   map.addLayer({ id: 'ov-link', type: 'line', source: 'link', filter: ['==', ['get', 'dash'], 0], paint: { 'line-color': ['get', 'color'], 'line-width': 3, 'line-opacity': ['coalesce', ['get', 'op'], 1] } });
   map.addLayer({ id: 'ov-link-dash', type: 'line', source: 'link', filter: ['==', ['get', 'dash'], 1], paint: { 'line-color': ['get', 'color'], 'line-width': 3, 'line-opacity': ['coalesce', ['get', 'op'], 1], 'line-dasharray': [2, 2] } });
+  // Где по пути пропадёт связь: точка на линии и подпись на тёмной обводке (читается и на снимке, и на топо).
+  map.addSource('link-loss', { type: 'geojson', data: fc() });
+  map.addLayer({ id: 'ov-loss', type: 'circle', source: 'link-loss', paint: { 'circle-radius': 6, 'circle-color': statusCss('none'), 'circle-stroke-color': '#fff', 'circle-stroke-width': 2 } });
+  map.addLayer({
+    id: 'ov-loss-label', type: 'symbol', source: 'link-loss',
+    layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Regular'], 'text-size': 13, 'text-anchor': 'top', 'text-offset': [0, 0.8], 'text-max-width': 30, 'text-allow-overlap': true },
+    paint: { 'text-color': '#fff', 'text-halo-color': 'rgba(0, 0, 0, 0.85)', 'text-halo-width': 2 },
+  });
 }
 
 let offerAt: LatLon | null = null;

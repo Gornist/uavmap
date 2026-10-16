@@ -149,7 +149,7 @@ async function scenario() {
     const big = await ev(`document.querySelector('#lsStatus .ls-verdict')?.className || ''`);
     if (!/status-(ok|weak|none)/.test(big)) throw new Error('у вердикта нет класса статуса: ' + big);
     const need = await ev(`document.querySelector('#lsStatus .ls-need')?.textContent || ''`);
-    if (!/(Поднимите до \d+ м|держ|не добьёт|даже на|Даже на)/.test(need)) throw new Error('нет подсказки по высоте: ' + need);
+    if (!/(Поднимите до \d+ м|держ|не добьёт|на грани)/.test(need)) throw new Error('нет подсказки по высоте: ' + need);
     if (/−99|ниже рельефа|поднимите дрон/i.test(t)) throw new Error('служебный текст в строке: ' + t);
     // Вердикт — одна строка, не обрезан (высота строки по содержимому).
     const clip = await ev(`(() => { const e = document.getElementById('linkStrip'); return e.scrollHeight > e.clientHeight + 1; })()`);
@@ -175,7 +175,7 @@ async function scenario() {
     const v = await ev(`+document.getElementById('altimeter').getAttribute('aria-valuenow')`);
     const lbl = await ev(`document.querySelector('#altimeter .alt-lbl').textContent`);
     if (!(v < 1500) || !lbl.includes(String(v))) throw new Error(`после перетаскивания: droneH ${v}, подпись «${lbl}»`);
-    await waitFor(`/(Поднимите до \\d+ м|держ|не добьёт|даже на|Даже на)/.test(document.querySelector('#lsStatus .ls-need')?.textContent || '')`);
+    await waitFor(`/(Поднимите до \\d+ м|держ|не добьёт|на грани)/.test(document.querySelector('#lsStatus .ls-need')?.textContent || '')`);
     await setDrone(1500);
     await waitFor(`/1500/.test(document.querySelector('#altimeter .alt-lbl').textContent)`, 3000);
     return `дрон → ${v} м`;

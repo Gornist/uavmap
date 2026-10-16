@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { tileRange, enumerateTiles, countTiles, estimateBytes, planLayers, parseAreas, exclusiveKeys, tileKey, tileUrl, keyToUrl, Area, DEFAULT_TILE_BYTES } from './offlineCore';
+import { tileRange, enumerateTiles, countTiles, estimateBytes, planLayers, parseAreas, exclusiveKeys, tileKey, tileUrl, keyToUrl, Area, DEFAULT_TILE_BYTES, areasCover } from './offlineCore';
 import { coverageZoom } from './elevation';
 
 const area = (id: string, lat: number, lon: number, km: number, z = [10]): Area => ({
@@ -115,5 +115,26 @@ describe('разбор метаданных', () => {
     ];
     expect(parseAreas(JSON.stringify({ areas: bad })).map((x) => x.id)).toEqual(['a']);
     expect(parseAreas(JSON.stringify([ok, ok])).length).toBe(1);
+  });
+});
+
+describe('areasCover: рельеф без сети для трассы', () => {
+  const a = (over: Partial<Area> = {}): Area => ({ id: 'a', name: 'a', lat: 43.68, lon: 40.2, km: 10, calc: true, view: false, layers: [], tiles: 1, bytes: 1, ts: 1, src: 'mapterhorn', ...over });
+  const st = { lat: 43.68, lon: 40.2 }, near = { lat: 43.70, lon: 40.25 }, far = { lat: 44.2, lon: 40.2 };
+  it('пульт и прицел внутри района — да; прицел вне — нет', () => {
+    expect(areasCover([a()], [st, near])).toBe('yes');
+    expect(areasCover([a()], [st, far])).toBe('no');
+  });
+  it('нет районов, только карта без расчёта, старый источник или недокачанный район — молчим', () => {
+    expect(areasCover([], [st])).toBe('none');
+    expect(areasCover([a({ calc: false }), a({ src: 'aws' }), a({ complete: false })], [st])).toBe('none');
+  });
+  it('признак «недокачан» переживает сохранение; у районов прежних версий его нет — полные', () => {
+    const L = [{ z: 10, km: 10 }]; // район без слоёв parseAreas отбрасывает
+    const raw = JSON.stringify({ v: 1, areas: [a({ id: 'p', complete: false, layers: L }), a({ id: 'q', layers: L })] });
+    expect(parseAreas(raw).map((x) => x.complete)).toEqual([false, undefined]);
+  });
+  it('точки в разных районах — нет: трасса целиком должна быть в одном', () => {
+    expect(areasCover([a(), a({ id: 'b', lat: 44.2 })], [st, far])).toBe('no');
   });
 });

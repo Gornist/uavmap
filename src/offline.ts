@@ -5,9 +5,9 @@ import './styles/offline.css';
 import { S, map, center, openSheet, progress, toast, fc, setGeo } from './app';
 import { h, button, chips, confirmDialog } from './ui';
 import { fmtBytes, escapeHtml } from './format';
-import { destination } from './geo';
+import { destination, LatLon } from './geo';
 import { DEM_SRC_ID } from './demTiles';
-import { OFFLINE_CACHE, OFFLINE_KEY, RADII_KM, DEFAULT_TILE_BYTES, Area, Tile, tileUrl, enumerateTiles, estimateBytes, planLayers, parseAreas, exclusiveKeys, keyToUrl } from './offlineCore';
+import { OFFLINE_CACHE, OFFLINE_KEY, RADII_KM, DEFAULT_TILE_BYTES, Area, Tile, tileUrl, enumerateTiles, estimateBytes, planLayers, parseAreas, exclusiveKeys, keyToUrl, areasCover } from './offlineCore';
 
 // ---------- Хранилище метаданных ----------
 function loadAreas(): Area[] {
@@ -19,6 +19,16 @@ function saveAreas(a: Area[]) {
 
 /** Сколько районов скачано (для меню). */
 export const offlineAreaCount = () => loadAreas().length;
+
+// Разбор списка районов — по изменению строки в localStorage (строка связи спрашивает на каждый пересчёт).
+let coverRaw: string | null | undefined, coverAreas: Area[] = [];
+/** Есть ли рельеф без сети для трассы: 'yes' / 'no' / 'none' (районов нет) — см. areasCover. */
+export function offlineCover(points: LatLon[]): 'yes' | 'no' | 'none' {
+  let raw: string | null = null;
+  try { raw = localStorage.getItem(OFFLINE_KEY); } catch { /* нет доступа — как без районов */ }
+  if (raw !== coverRaw) { coverRaw = raw; try { coverAreas = parseAreas(raw); } catch { coverAreas = []; } }
+  return areasCover(coverAreas, points);
+}
 
 // ---------- Скачивание ----------
 const sleep = (ms: number, sig?: AbortSignal) => new Promise<void>((res) => {
@@ -152,6 +162,7 @@ async function runDownload(area: Area, reload: boolean) {
   area.bytes = Math.round(res.bytes + res.skipped * avg);
   area.ts = Date.now();
   area.src = DEM_SRC_ID;
+  area.complete = !res.aborted && !res.errors;
   if (!res.aborted || res.done + res.skipped > 0) {
     const cur = loadAreas();
     const k = cur.findIndex((x) => x.id === area.id);

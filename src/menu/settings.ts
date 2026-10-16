@@ -4,6 +4,7 @@ import { h, button, details, confirmDialog } from '../ui';
 import { clearSaved } from '../store';
 import { CoordFormat } from '../coords';
 import { getTheme, setTheme, type ThemeChoice } from '../theme';
+import { readOpt, setReadOpt, type ReadOpt } from '../readability';
 import { close, render, section } from './common';
 
 const REPO = 'https://github.com/Gornist/uavmap';
@@ -59,6 +60,20 @@ export function settings(el: HTMLElement) {
   }
   el.appendChild(tseg);
   el.appendChild(h('<p class="hint muted">Авто — по настройке телефона или времени суток.</p>'));
+
+  section(el, 'Читаемость');
+  for (const [o, label, hint] of [
+    ['sun', 'Яркое солнце', 'плотные плашки под цифрами и подписями на карте; на солнце удобнее тема «День»'],
+    ['big-text', 'Крупный текст', 'строка связи, высотомер, кнопки и шторки'],
+  ] as [ReadOpt, string, string][]) {
+    const c = h('<label class="chk"><input type="checkbox"><span><span class="chk-t"></span><small class="muted"></small></span></label>');
+    c.querySelector('.chk-t')!.textContent = label;
+    c.querySelector('small')!.textContent = hint;
+    const i = c.querySelector('input') as HTMLInputElement;
+    i.checked = readOpt(o);
+    i.addEventListener('change', () => setReadOpt(o, i.checked));
+    el.appendChild(c);
+  }
 
   section(el, 'Формат координат');
   const seg = h('<div class="seg"></div>');

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   analyzeLink, analyzePair, RANK, budget, DEFAULT_VIDEO, minHeightsForPair, presetsFor, C, DEFAULT_RADIO, freeSpaceRange, fresnelR, fspl, minHeightForLink, PRESETS,
-  radioHorizon, RadioParams,
+  radioHorizon, RadioParams, lossAlong,
 } from './radio';
 import { bullingtonTaper, knifeEdgeJ } from './diffraction';
 import { R_EARTH } from './geo';
@@ -431,5 +431,30 @@ describe('ранжирование пар по статусу (ревью Codex)
     const b = analyzePair(flat, 1000, 2, 30, rc, video);
     const sorted = [a, b].sort((x, y) => RANK[y.status] - RANK[x.status] || y.score - x.score);
     expect(RANK[sorted[0].status]).toBeGreaterThanOrEqual(RANK[sorted[1].status]);
+  });
+});
+
+describe('lossAlong: где по пути пропадёт связь', () => {
+  it('ровная короткая трасса — связь на всём пути', () => {
+    expect(lossAlong(profile(200), 3000, 2, 100, P)).toBeNull();
+  });
+  it('хребет выше дрона посередине — связь пропадает у хребта', () => {
+    const e = profile(200, 0, { 100: 300 });
+    const d = lossAlong(e, 4000, 2, 100, P)!;
+    expect(d).toBeGreaterThan(1900);
+    expect(d).toBeLessThanOrEqual(2000);
+  });
+  it('короткий провал у самого пульта не пропускается (связь вдоль рельефа не монотонна)', () => {
+    const e = profile(200, 0, { 3: 101 });
+    expect(lossAlong(e, 4000, 2, 100, { ...P, txPowerDbm: 50 })).toBe(60);
+  });
+  it('точка — первая потерянная (как полный перебор), а не первая на грубом шаге', () => {
+    const e = profile(300, 0, { 77: 250, 230: 400 });
+    let brute: number | null = null;
+    for (let k = 2; k <= 300 && brute === null; k++) {
+      const r = analyzeLink(e.subarray(0, k + 1), (5000 * k) / 300, 2, 120, P);
+      if (r.belowGround || r.status === 'none') brute = (5000 * k) / 300;
+    }
+    expect(lossAlong(e, 5000, 2, 120, P)).toBe(brute);
   });
 });

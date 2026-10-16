@@ -16,7 +16,6 @@ export interface State {
   routes: Route[];
   station: Station | null;
   droneH: number;
-  altMode: 'takeoff' | 'terrain';
   radio: RadioParams;
   presetId: string;
   /** Вторая линия — видео. radio/presetId выше — линия «Управление» (формат прежних проектов). */
@@ -43,7 +42,6 @@ export const defaults = (): State => ({
   routes: [],
   station: null,
   droneH: 100,
-  altMode: 'takeoff',
   radio: { ...DEFAULT_RADIO },
   presetId: 'elrs24',
   video: { enabled: true, radio: { ...DEFAULT_VIDEO }, presetId: DEFAULT_VIDEO_PRESET },
@@ -135,7 +133,6 @@ export function sanitize(s: State): State {
     ? { lat: st.lat as number, lon: st.lon as number, antH: fin(st.antH, 0, 1000, 2), name: str(st.name, 60) || 'Пульт' }
     : null;
   out.droneH = fin(s.droneH, 0, 10000, d.droneH);
-  out.altMode = oneOf(s.altMode, ['takeoff', 'terrain'] as const, d.altMode);
   out.radio = sanitizeRadio(s.radio, d.radio);
   out.presetId = typeof s.presetId === 'string' ? s.presetId.slice(0, 40) : d.presetId;
   const v: Record<string, unknown> = isObj(s.video) ? s.video : {};
@@ -192,7 +189,7 @@ export function toGeoJSON(s: State) {
     type: 'Feature', geometry: { type: 'Point', coordinates: [s.station.lon, s.station.lat] },
     properties: { kind: 'station', name: s.station.name, antH: s.station.antH },
   });
-  return { type: 'FeatureCollection', features, properties: { app: 'radius', droneH: s.droneH, altMode: s.altMode, radio: s.radio, video: s.video } };
+  return { type: 'FeatureCollection', features, properties: { app: 'radius', droneH: s.droneH, radio: s.radio, video: s.video } };
 }
 
 export function toGPX(s: State): string {

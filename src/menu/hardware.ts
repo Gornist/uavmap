@@ -92,17 +92,7 @@ export function hardware(el: HTMLElement) {
   ch.textContent = `${cur.hint[0].toUpperCase()}${cur.hint.slice(1)}${clutterLoss(S.clutter, S.radio.freqMHz) ? ` — сигнал слабее на ${Math.round(clutterLoss(S.clutter, S.radio.freqMHz))} дБ` : ''}.`;
   el.appendChild(ch);
 
-  section(el, 'Высоту дрона считать');
-  const seg = h('<div class="seg"></div>');
-  for (const [m, t] of [['takeoff', 'Над точкой взлёта'], ['terrain', 'Над рельефом']] as const) {
-    seg.appendChild(button(t, S.altMode === m ? 'on' : '', () => { S.altMode = m; emit('radio'); render(); }));
-  }
-  el.appendChild(seg);
-  const am = h('<p class="hint muted"></p>');
-  am.textContent = S.altMode === 'takeoff'
-    ? 'Как показывает пульт: высота от земли в точке взлёта. Саму высоту дрона задайте в строке связи.'
-    : 'Дрон держит высоту над землёй под собой. Саму высоту дрона задайте в строке связи.';
-  el.appendChild(am);
+  el.appendChild(h('<p class="hint muted">Высота дрона — над точкой взлёта, как её показывает барометр в очках. Её задают на высотомере у края карты.</p>'));
 
   // ----- для опытных: итог и числовые параметры линий -----
   const adv = details('Для опытных', advOpen, (v) => { advOpen = v; });

@@ -76,14 +76,16 @@ body.ruler-on .cross-chip { display: none; }
  * Высота шкалы ограничена (360 px, на телефоне 300): во весь экран она закрывала карту справа целиком. */
 .altimeter { position: absolute; z-index: 5; left: calc(10px + var(--safe-l)); bottom: calc(var(--bar-h) + 20px + var(--safe-b)); height: 360px; max-height: calc(100% - var(--bar-h) - 84px - var(--safe-t) - var(--safe-b)); width: 40px; display: flex; flex-direction: column; align-items: center; touch-action: none; -webkit-user-select: none; user-select: none; cursor: ns-resize; outline: none; }
 .altimeter[hidden], body.sheet-open .altimeter, body.ruler-on .altimeter { display: none; }
-.alt-cap { flex: none; margin-top: 4px; font-size: 11px; text-align: center; line-height: 1.2; font-weight: 600; color: #fff; white-space: nowrap; text-shadow: 0 0 3px #000, 0 0 2px #000, 0 0 1px #000; }
-.alt-track { position: relative; flex: 1 1 auto; width: 100%; background: rgba(20, 18, 15, 0.35); border: 2px solid rgba(20, 18, 15, 0.85); border-radius: 10px; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.55); }
+ /* Текст поверх карты — на тёмной плашке, а не белым с тенью: на ярком снимке, снегу и облаках тень не спасает. */
+.alt-cap { flex: none; margin-top: 4px; padding: 1px 4px; border-radius: 4px; background: rgba(15, 13, 10, 0.72); font-size: 11px; text-align: center; line-height: 1.2; font-weight: 600; color: #fff; white-space: nowrap; }
+.alt-track { position: relative; flex: 1 1 auto; width: 100%; background: rgba(20, 18, 15, 0.5); border: 2px solid rgba(20, 18, 15, 0.85); border-radius: 10px; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.55); }
 .alt-name { margin: 0 0 18px; }
 .alt-name + .alt-track + .alt-cap { margin-top: 18px; } /* бегунок у края шкалы не закрывает подписи */
 .altimeter:focus-visible .alt-track { box-shadow: 0 0 0 3px var(--accent); }
 .alt-bands { position: absolute; top: 0; right: 0; bottom: 0; left: 0; overflow: hidden; border-radius: 8px; }
-.alt-band { position: absolute; left: 0; right: 0; opacity: 0.82; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: #fff; text-shadow: 0 0 2px #000; }
-.alt-tick { position: absolute; left: 0; right: 0; transform: translateY(50%); text-align: center; font: 600 11px/1 var(--font-mono); color: #fff; text-shadow: 0 0 3px #000, 0 0 2px #000, 0 0 1px #000; pointer-events: none; }
+.alt-band { position: absolute; left: 0; right: 0; opacity: 0.85; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: #fff; }
+.alt-band span { padding: 1px 3px; border-radius: 3px; background: rgba(15, 13, 10, 0.72); }
+.alt-tick { position: absolute; left: 50%; transform: translate(-50%, 50%); padding: 1px 3px; border-radius: 3px; background: rgba(15, 13, 10, 0.6); font: 600 11px/1 var(--font-mono); color: #fff; white-space: nowrap; pointer-events: none; }
 /* Бегунок — внутри шкалы (наружу ничего не торчит и не закрывает чип у прицела): число метров на белой плашке.
  * Ширина — width: 100%: кнопка в Chrome 68 не растягивается от left/right. */
 .alt-drone { position: absolute; left: -5px; right: -5px; height: 0; }
@@ -156,4 +158,42 @@ table.rt td:last-child { width: 1%; }
   .ls-sub { margin-top: 0; }
   .ls-empty p { font-size: 15px; margin-bottom: 6px; }
   .ls-prof { padding: 0 10px; }
+}
+
+/* ---------- Читаемость (readability.ts): «Яркое солнце» и «Крупный текст» ---------- */
+/* Яркое солнце: плашки непрозрачные, обводки толще, полосы высотомера без прозрачности. */
+.sun .alt-cap, .sun .alt-tick, .sun .alt-band span { background: #000; font-weight: 700; }
+.sun .alt-track { background: rgba(20, 18, 15, 0.8); border: 3px solid #000; box-shadow: 0 0 0 2px #fff; }
+.sun .alt-band { opacity: 1; }
+.sun .alt-lbl { border-width: 3px; }
+.sun #linkStrip, .sun .cross-chip, .sun .round, .sun .zoom-pill, .sun #bottomBar button { border: 2px solid var(--text); }
+.sun .maplibregl-ctrl-scale { background: #fff !important; border-width: 3px !important; font-weight: 700; }
+
+/* Крупный текст: строка связи, чип у прицела, высотомер, нижняя панель, шторки и меню. */
+.big-text body, .big-text #sheet, .big-text #drawer { font-size: 18px; }
+.big-text .ls-verdict { font-size: 24px; }
+.big-text .ls-need { font-size: 18px; }
+.big-text .ls-sub { font-size: 15px; }
+.big-text .ls-msg, .big-text .ls-empty p { font-size: 19px; }
+.big-text .cross-chip { font-size: 17px; }
+.big-text #bottomBar button { font-size: 18px; }
+.big-text .altimeter { width: 48px; }
+.big-text .alt-lbl { font-size: 17px; }
+.big-text .alt-tick, .big-text .alt-cap, .big-text .alt-band { font-size: 13px; }
+@media (max-width: 640px) {
+  .big-text .ls-verdict { font-size: 21px; }
+  .big-text .ls-need { font-size: 16px; }
+  .big-text #bottomBar button { font-size: 15px; }
+}
+
+/* ---------- Сенсорный планшет-пульт: цели нажатия крупнее (большой палец, бывает в перчатках) ----------
+ * На телефоне (узкий экран или ландшафт) места нет — там остаются 44–50 px. */
+@media (pointer: coarse) and (min-width: 641px) and (min-height: 521px) {
+  :root { --bar-h: 68px; }
+  #bottomBar button { height: 52px; padding: 0 20px; }
+  .round, .zoom-pill button { width: 52px; height: 52px; }
+  .zoom-pill { border-radius: 26px; }
+  .altimeter { width: 48px; }
+  .alt-lbl { height: 48px; font-size: 16px; }
+  .ls-prof, .ls-acts button { min-height: 52px; }
 }

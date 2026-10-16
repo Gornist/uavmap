@@ -23,8 +23,10 @@ import { initMyMaps } from './mymaps';
 import { initMobile } from './mobile';
 import { elevationAt } from './elevation';
 import { initTheme } from './theme';
+import { initReadability, readOpt } from './readability';
 
 initTheme(); // первым делом: тема до отрисовки панелей
+initReadability();
 
 // Для отладки в консоли браузера (только dev-сборка).
 if (import.meta.env.DEV) (window as unknown as { __map: typeof map }).__map = map;
@@ -112,6 +114,22 @@ initMobile({ onPointPress: openPointSheet });
     new MutationObserver(fold).observe(attrib, { attributes: true, attributeFilter: ['class'] });
     fold();
   }
+}
+
+// «Яркое солнце»: у подписей на самой карте (горизонтали, метки потери связи, названия) ореол толще.
+// Исходная ширина ореола слоя запоминается при первой встрече — слои добавляют разные модули и в разное время.
+{
+  const haloBase = new Map<string, unknown>();
+  const applyHalo = () => {
+    const sun = readOpt('sun');
+    for (const l of map.getStyle().layers) {
+      if (l.type !== 'symbol') continue;
+      if (!haloBase.has(l.id)) haloBase.set(l.id, map.getPaintProperty(l.id, 'text-halo-width') ?? 0);
+      map.setPaintProperty(l.id, 'text-halo-width', sun ? 2.6 : haloBase.get(l.id)); // то же значение — MapLibre ничего не делает
+    }
+  };
+  map.on('styledata', applyHalo);
+  window.addEventListener('uavmap:readability', applyHalo);
 }
 
 $('zIn').addEventListener('click', () => map.zoomIn());

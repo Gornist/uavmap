@@ -20,15 +20,17 @@ export const effVideoOrNull = (): RadioParams | null => (S.video.enabled ? effVi
 export let stationGround: number | null = null;
 let stationMarker: maplibregl.Marker | null = null;
 
-export function altModeText() {
-  return S.altMode === 'takeoff' ? 'над точкой взлёта' : 'над рельефом';
-}
+/**
+ * Высота дрона везде одна — над точкой взлёта (у пульта), как барометр показывает её в очках и на пульте.
+ * Над землёй под дроном она меньше на подъём склона: это видно полосой «склон» на высотомере и в вердикте.
+ */
+export const ALT_TEXT = 'над точкой взлёта';
 
-/** Абсолютная высота дрона над точкой с рельефом groundB. */
-export function droneAbs(groundB: number, hDrone = S.droneH, groundA = stationGround ?? 0) {
+/** Абсолютная высота дрона (над уровнем моря) для точки с рельефом groundB: groundB не влияет — высота от взлёта. */
+export function droneAbs(_groundB: number, hDrone = S.droneH, groundA = stationGround ?? 0) {
   // Отрицательный рельеф не обрезаем: суша ниже уровня моря (Прикаспий) неотличима от батиметрии,
   // а ошибка над морем пессимистична (дрон ниже реального) — для оценки дальности это безопаснее.
-  return (S.altMode === 'takeoff' ? groundA : groundB) + hDrone;
+  return groundA + hDrone;
 }
 
 // Ревизия пульта: каждый перенос/удаление увеличивает её, и ответы,

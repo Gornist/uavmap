@@ -65,7 +65,8 @@ const SEARCH_MAX = 1500;
 
 /**
  * Одна подсказка-действие для высоты дрона h: что будет, если подняться или можно ли снизиться.
- * «Поднимите до 480 м — будет и видео», «Связь держится; можно снизиться до 210 м», «Даже на 1500 м …».
+ * «Поднимите до 480 м — будет и видео», «Связь держится; можно снизиться до 210 м», «… не добьёт и на 1500 м».
+ * Коротко: строка связи на телефоне — две строки текста, не больше.
  */
 export function heightHint(h: number, needs: HeightNeeds, videoName = 'Видео', now?: LinesNow): string {
   // Поиск нужной высоты ограничен 1500 м: выше этого линия может работать — тогда её «нужная» — текущая высота.
@@ -77,17 +78,17 @@ export function heightHint(h: number, needs: HeightNeeds, videoName = 'Виде�
   const lower = (to: number, what: string) => (to <= 0 ? `${what} на любой высоте` : to < h ? `${what}; можно снизиться до ${to} м` : what);
   const top = `${SEARCH_MAX} м`;
   if (n.rc === null) {
-    return now?.rc === 'weak' ? `Даже на ${top} управление на грани — подойдите ближе`
-      : `Управление не добьёт даже на ${top} — подойдите ближе или нажмите «Где встать»`;
+    return now?.rc === 'weak' ? `Управление на грани и на ${top} — подойдите ближе`
+      : `Управление не добьёт и на ${top} — подойдите ближе`;
   }
-  if (n.video === undefined) return h < n.rc ? `Поднимите до ${n.rc} м — появится связь` : lower(n.rc, 'Связь держится');
+  if (n.video === undefined) return h < n.rc ? `Поднимите до ${n.rc} м — будет связь` : lower(n.rc, 'Связь держится');
   const vn = videoName.charAt(0).toLowerCase() + videoName.slice(1); // «видео 5,8 ГГц» — единицы не трогаем
-  const noVideo = now?.video === 'weak' ? `${vn} на грани даже на ${top}` : `${vn} не добьёт даже на ${top}`;
+  const noVideo = now?.video === 'weak' ? `${vn} на грани` : `${vn} не добьёт`;
   if (h < n.rc) {
-    if (n.pair === null) return `Поднимите до ${n.rc} м — появится управление; ${noVideo}`;
-    return n.pair > n.rc ? `Поднимите до ${n.rc} м — появится управление, до ${n.pair} м — и видео` : `Поднимите до ${n.rc} м — появится связь`;
+    if (n.pair === null) return `Поднимите до ${n.rc} м — будет управление; ${noVideo}`;
+    return n.pair > n.rc ? `Поднимите до ${n.rc} м — будет управление, до ${n.pair} м — и видео` : `Поднимите до ${n.rc} м — будет связь`;
   }
-  if (n.pair === null) return `${noVideo.charAt(0).toUpperCase()}${noVideo.slice(1)} — подойдите ближе`;
+  if (n.pair === null) return `${noVideo.charAt(0).toUpperCase()}${noVideo.slice(1)} и на ${top} — подойдите ближе`;
   if (h < n.pair) return `Поднимите до ${n.pair} м — будет и видео`;
   return lower(n.pair, 'Управление и видео держатся');
 }

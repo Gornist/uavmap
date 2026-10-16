@@ -1,7 +1,7 @@
 // Офлайн-районы: чистые функции (перечень тайлов, план слоёв, разбор метаданных) — без DOM и карты.
-import { demTileUrl, srcOf } from './demTiles';
+import { demTileUrl, srcOf, DEM_SRC_ID } from './demTiles';
 import { demPlan, coverageZoom, COVERAGE_RADII_KM } from './elevation';
-import { R_EARTH, D2R } from './geo';
+import { R_EARTH, D2R, distance, LatLon } from './geo';
 import { isObj, inRange as num } from './validate';
 
 export const OFFLINE_CACHE = 'uavmap-dem-v1';
@@ -22,6 +22,8 @@ export interface Area {
   calc: boolean; view: boolean; layers: Layer[]; tiles: number; bytes: number; ts: number;
   /** Источник рельефа, с которого скачан район (DEM_SRC_ID); другой — район устарел, нужно «Обновить». */
   src: string;
+  /** false — скачивание отменили или часть данных не загрузилась; нет поля (районы прежних версий) — полный. */
+  complete?: boolean;
 }
 export interface Tile { z: number; x: number; y: number }
 
@@ -111,7 +113,7 @@ export function parseAreas(raw: string | null): Area[] {
     if (bad) continue;
     if (!num(a.tiles, 0, 1e7) || !num(a.bytes, 0, 1e12) || !num(a.ts, 0, 1e14)) continue;
     ids.add(a.id);
-    out.push({ id: a.id, name: a.name.slice(0, 80), lat: a.lat, lon: a.lon, km: a.km, calc: a.calc === true, view: a.view === true, layers, tiles: a.tiles, bytes: a.bytes, ts: a.ts, src: typeof a.src === 'string' ? a.src.slice(0, 40) : 'aws' });
+    out.push({ id: a.id, name: a.name.slice(0, 80), lat: a.lat, lon: a.lon, km: a.km, calc: a.calc === true, view: a.view === true, layers, tiles: a.tiles, bytes: a.bytes, ts: a.ts, src: typeof a.src === 'string' ? a.src.slice(0, 40) : 'aws', ...(a.complete === false ? { complete: false } : {}) });
   }
   return out;
 }
@@ -124,3 +126,13 @@ export function exclusiveKeys(area: Area, others: Area[]): string[] {
 }
 
 export const keyToUrl = (k: string) => { const [z, x, y] = k.split('/'); return tileUrl({ z: +z, x: +x, y: +y }); };
+
+/**
+ * Покрыты ли точки (пульт, прицел) рельефом скачанных районов для расчёта: 'yes' — все точки внутри одного
+ * полностью скачанного района с данными расчёта текущего источника; 'no' — хоть одна вне; 'none' — пригодных районов нет вовсе.
+ */
+export function areasCover(areas: Area[], points: LatLon[]): 'yes' | 'no' | 'none' {
+  const usable = areas.filter((a) => a.calc && a.src === DEM_SRC_ID && a.complete !== false);
+  if (!usable.length) return 'none';
+  return usable.some((a) => points.every((p) => distance(a, p) <= a.km * 1000)) ? 'yes' : 'no';
+}

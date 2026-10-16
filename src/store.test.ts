@@ -28,7 +28,7 @@ describe('defaults', () => {
     expect(d.coverage.heights.length).toBeLessThanOrEqual(COV_MAX_HEIGHTS);
     expect(d.coverage.compare).toBe(false); // по умолчанию зона считает одну высоту — S.droneH
     expect('heightIdx' in d.coverage).toBe(false);
-    expect(['takeoff', 'terrain']).toContain(d.altMode);
+    expect('altMode' in d).toBe(false); // высота дрона одна — над точкой взлёта
   });
 });
 

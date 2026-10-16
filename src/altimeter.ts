@@ -41,7 +41,6 @@ function render() {
   const root = el();
   root.hidden = !S.station;
   if (root.hidden) return;
-  root.querySelector('.alt-cap:not(.alt-name)')!.innerHTML = S.altMode === 'takeoff' ? 'м над <br>пультом' : 'м над <br>рельефом';
   const bx = root.querySelector('.alt-bands') as HTMLElement;
   bx.innerHTML = '';
   const list = bands.length ? bands : [{ from: 0, to: top, level: 'pending' as const }];
@@ -51,7 +50,7 @@ function render() {
     d.style.bottom = pct(b.from);
     d.style.height = pct(b.to - b.from);
     d.style.background = b.level === 'ground' ? GROUND_FILL : b.level === 'pending' ? PENDING_FILL : STATUS_MAP[b.level];
-    if (b.level === 'ground' && b.to / top > 0.07) d.textContent = 'склон';
+    if (b.level === 'ground' && b.to / top > 0.07) d.innerHTML = '<span>склон</span>'; // span — под плашку (styles/live.css)
     bx.appendChild(d);
   }
   const tx = root.querySelector('.alt-ticks') as HTMLElement;
@@ -77,7 +76,7 @@ function renderDrone() {
   mk.style.bottom = pct(hh);
   (root.querySelector('.alt-lbl') as HTMLElement).textContent = `${Math.round(hh)}${hh > top ? '↑' : ''}`;
   root.setAttribute('aria-valuenow', String(Math.round(hh)));
-  root.setAttribute('aria-valuetext', `${Math.round(hh)} метров ${S.altMode === 'takeoff' ? 'над пультом' : 'над рельефом'}`);
+  root.setAttribute('aria-valuetext', `${Math.round(hh)} метров над точкой взлёта`);
 }
 
 function heightAt(clientY: number): number {
@@ -98,7 +97,7 @@ function commit(hh: number) {
 async function askExact() {
   const r = await dialog({
     title: 'Высота дрона',
-    text: `Метры ${S.altMode === 'takeoff' ? 'над пультом (точкой взлёта)' : 'над рельефом под дроном'}, от 0 до ${H_MAX}.`,
+    text: `Метры над точкой взлёта (как барометр в очках), от 0 до ${H_MAX}.`,
     input: { value: String(S.droneH), maxLength: 6, inputMode: 'decimal' },
     buttons: [{ text: 'Готово', value: true }],
   });

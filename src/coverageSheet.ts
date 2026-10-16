@@ -6,7 +6,7 @@ import { S, map, toast, openSheet, closeSheet, persist, emit } from './app';
 import { h, button, chips, details } from './ui';
 import { COVERAGE_RADII_KM } from './elevation';
 import { freeSpaceRange } from './radio';
-import { setStation, effRadio, effVideo, altModeText } from './station';
+import { setStation, effRadio, effVideo, ALT_TEXT } from './station';
 import { ICON } from './verdict';
 import { km as fmtKm } from './format';
 import { STATUS_RGB } from './theme';
@@ -131,7 +131,7 @@ function render() {
     x.appendChild(button('Убрать с карты', 'ghost', () => clearCoverage()));
     body.appendChild(x);
   } else if (!running && !lastError) {
-    body.appendChild(hint(`Считается для дрона на ${hm(S.droneH)} ${altModeText()} — высоту меняют в строке связи.`));
+    body.appendChild(hint(`Считается для дрона на ${hm(S.droneH)} ${ALT_TEXT} — высоту меняют на высотомере.`));
   }
 
   // ----- «Ещё»: сравнить высоты, закраска, линия, прозрачность, таблица -----
@@ -236,7 +236,7 @@ function renderSummary(body: HTMLElement, c: CoverageShown) {
   body.appendChild(res);
   if (c.resV) {
     const who = line === 'both' ? 'По худшей из двух линий' : line === 'video' ? 'Только по видео' : 'Только по управлению';
-    body.appendChild(hint(`${who}, высота ${altModeText()}.`, 'hint'));
+    body.appendChild(hint(`${who}, высота ${ALT_TEXT}.`, 'hint'));
   }
   if (S.coverage.show === 'minh' && c.heights.length >= 2) body.appendChild(hint('Цвет на карте — какая высота дрона нужна для связи:', 'cov-sec'));
   const legend = h('<div class="legend"></div>');

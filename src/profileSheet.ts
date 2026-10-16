@@ -8,7 +8,7 @@ import { drawProfile } from './profileChart';
 import { coverageHeights } from './coverageStats';
 import { CLUTTER, withClutter } from './clutter';
 import { ICON, LINE_NAME, stCls, pairVerdict, presetName, needLinesHtml } from './verdict';
-import { stationGround, stationGroundFailed, calcLink, LinkCalc, droneAbs, effRadio, effVideo, applyPreset, altModeText, lineNeeds } from './station';
+import { stationGround, stationGroundFailed, calcLink, LinkCalc, droneAbs, effRadio, effVideo, applyPreset, ALT_TEXT, lineNeeds } from './station';
 
 const CLUTTER_NAME = () => (CLUTTER.find((c) => c.id === S.clutter)?.name ?? '—').toLowerCase();
 
@@ -49,7 +49,7 @@ function explain(r: LinkCalc, need: number | null): string {
   const p = r.pair;
   if (p.rc.belowGround) {
     const n = need === null ? 'выше 1500 м' : `≥ ${need} м`;
-    return `На ${S.droneH} м ${altModeText()} дрон в этой точке ниже склона — нужно ${n}. Или считайте высоту «над рельефом» (меню → Расчёт).`;
+    return `На ${S.droneH} м ${ALT_TEXT} дрон в этой точке ниже склона — нужно ${n}.`;
   }
   const w = p.worst === 'video' && r.vres ? r.vres : r.res;
   const ob = obstacle(w);
@@ -119,7 +119,7 @@ function renderProfileSheet(r: LinkCalc) {
   const b = openSheet(`Профиль до прицела · ${km(r.dist)}`, `
     <div class="verdict verdict-big ${stCls(pair.status)}">${ICON[pair.status]} ${pairVerdict(pair)}</div>
     <p class="verdict-why">${explain(r, mins.pair)}</p>
-    <p class="prof-need">Нужная высота ${altModeText()}: ${needLinesHtml(lineNeeds(r, radioEff, videoEff, mins))}</p>
+    <p class="prof-need">Нужная высота ${ALT_TEXT}: ${needLinesHtml(lineNeeds(r, radioEff, videoEff, mins))}</p>
     <canvas id="profileCanvas"></canvas>
     <div class="legend"><span><i style="background:var(--accent)"></i>линия связи</span><span><i style="background:var(--fresnel60)"></i>зона Френеля</span><span><i style="background:var(--none)"></i>препятствие</span></div>
     <div class="kv kv-key">
@@ -141,7 +141,7 @@ function renderProfileSheet(r: LinkCalc) {
       <div><small>Дальность без рельефа${vres ? ', упр. / видео' : ''}</small><b class="num">${vres ? `${fsr(radioEff)} / ${fsr(videoEff!)}` : fsr(radioEff)}</b></div>
     </div>
     <p class="hint">Модель: свободное пространство + дифракция на рельефе (ITU-R P.526-15), k = ${fixed(S.radio.k, 2)}, местность у пульта: ${CLUTTER_NAME()}. Лес, здания, помехи и диаграммы антенн не учтены — это оценка, а не гарантия.</p>`)}
-    ${det('cmp', 'Сравнить высоты и аппаратуру', `<p class="hint">Высота дрона ${altModeText()}; список высот — в шторке «Зона». «Применить» — считать на этой высоте.</p>
+    ${det('cmp', 'Сравнить высоты и аппаратуру', `<p class="hint">Высота дрона ${ALT_TEXT}; список высот — в шторке «Зона». «Применить» — считать на этой высоте.</p>
     <table class="rt" id="tblH"><tr>${hHead}</tr>${hRows}</table>
     ${presetTables}`)}
   `);
