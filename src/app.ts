@@ -211,7 +211,6 @@ function overlayPaint(): Record<string, Record<string, unknown>> {
     'ov-ruler': { 'line-color': accent },
     'ov-ruler-live': { 'line-color': accent },
     'ov-ruler-pts': { 'circle-stroke-color': m.casing, 'circle-color': accent },
-    'cov-edge': { 'line-color': accent },
     ...reliefPaint(),
   };
 }

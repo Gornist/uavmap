@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, expect, it, vi } from 'vitest';
-import { COV_MAX_HEIGHTS, defaults, importText, Mark, Route, sanitize, save, State, toGeoJSON, toGPX, toKML } from './store';
+import { COV_MAX_HEIGHTS, defaults, importText, Mark, Route, restoreProject, sanitize, save, State, toGeoJSON, toGPX, toKML } from './store';
 import { DEFAULT_RADIO } from './radio';
 
 const mark = (name: string, lat: number, lon: number, note = ''): Mark =>
@@ -336,7 +336,7 @@ describe('зона: миграция старых проектов (heights/heig
   it('старый проект: список высот сохранён, сравнение включено, heightIdx убран; droneH не тронут', async () => {
     const { restoreProject } = await import('./store');
     const st = restoreProject(JSON.stringify({ droneH: 120, coverage: { radius: 5000, heights: [50, 150, 300], heightIdx: 2, show: 'minh', line: 'rc', opacity: 0.4 } }));
-    expect(st.coverage).toEqual({ radius: 5000, compare: true, heights: [50, 150, 300], show: 'minh', opacity: 0.4, line: 'rc' });
+    expect(st.coverage).toEqual({ radius: 5000, compare: true, heights: [50, 150, 300], show: 'minh', opacity: 0.4, line: 'rc', auto: true });
     expect(st.droneH).toBe(120);
   });
   it('старый проект с одной высотой — сравнение выключено; без поля coverage — значения по умолчанию', async () => {
@@ -396,10 +396,17 @@ describe('миграция v1 → v2: отмывка рельефа по умо�
 describe('антенны на земле в проекте', () => {
   it('по умолчанию всенаправленные; мусор из файла не проходит, направление — в 0..359', () => {
     expect(defaults().antenna.rc.kind).toBe('omni');
+    // прежний формат: одно направление на обе антенны (heading у antenna) — переносится в каждую
     const bad = { ...defaults(), antenna: { rc: { kind: 'laser', gainDbi: 999, beamDeg: 1 }, video: { kind: 'yagi', gainDbi: 13, beamDeg: 30 }, heading: -90 } } as unknown as State;
     const s = sanitize(bad);
-    expect(s.antenna.rc).toEqual({ kind: 'omni', gainDbi: 8, beamDeg: 60 });
-    expect(s.antenna.video).toEqual({ kind: 'yagi', gainDbi: 13, beamDeg: 30 });
-    expect(s.antenna.heading).toBe(270);
+    expect(s.antenna.rc).toEqual({ kind: 'omni', gainDbi: 8, beamDeg: 60, heading: 270 });
+    expect(s.antenna.video).toEqual({ kind: 'yagi', gainDbi: 13, beamDeg: 30, heading: 270 });
+    const own = sanitize({ ...defaults(), antenna: { rc: { kind: 'patch', gainDbi: 8, beamDeg: 60, heading: 10 }, video: { kind: 'yagi', gainDbi: 13, beamDeg: 30, heading: 725 } } } as unknown as State);
+    expect([own.antenna.rc.heading, own.antenna.video.heading]).toEqual([10, 5]);
+  });
+  it('прежний проект с общим направлением: при загрузке (migrate → слияние с умолчаниями → sanitize) направление не теряется', () => {
+    const old = JSON.stringify({ ...defaults(), antenna: { rc: { kind: 'patch', gainDbi: 8, beamDeg: 60 }, video: { kind: 'yagi', gainDbi: 13, beamDeg: 30 }, heading: 135 } });
+    const s = restoreProject(old);
+    expect([s.antenna.rc.heading, s.antenna.video.heading]).toEqual([135, 135]);
   });
 });

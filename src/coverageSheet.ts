@@ -14,7 +14,9 @@ import { COV_MAX_HEIGHTS } from './store';
 import { openOfflineSheet } from './offline';
 import { CoverageShown, CovLine, coverageHeights, heightIndex, lineOf, paletteIndex, sameHeights, stats } from './coverageStats';
 import { PALETTE, initCoverageView, redrawCoverage, setCoverageOpacity } from './coverageView';
-import { shown, stale, running, lastError, initCoverageRun, setCoverageListener, markInputsChanged, startCoverage, cancelCoverage, clearCoverage } from './coverageRun';
+import { shown, stale, running, lastError, initCoverageRun, setCoverageListener, markInputsChanged, startCoverage, cancelCoverage, clearCoverage, setAutoCoverage } from './coverageRun';
+import { coverageFill, setCoverageFill } from './coverageView';
+import { BEAM_COLOR } from './antennaUi';
 import { prefetchSoon } from './prefetch';
 
 /** Названия цветов PALETTE (режим «нужная высота») — легенда словами, не только цветом. */
@@ -114,7 +116,14 @@ function render() {
     collapseOnDone = running && matchMedia(PHONE_MQ).matches; // running ставится синхронно — расчёт действительно начат
     render();
   }));
+  // Радиогоризонт, посчитанный сам, — только границы; закрасить зону без пересчёта.
+  if (shown && !running && !coverageFill()) row.appendChild(button('Закрасить', 'ghost', () => { setCoverageFill(true); render(); }));
   body.appendChild(row);
+  const auto = h('<label class="chk"><input type="checkbox"><span><span class="chk-t">Радиогоризонт сам</span><small class="muted">границы связи управления и видео пересчитываются при смене пульта, аппаратуры, антенн и высоты</small></span></label>');
+  const ai = auto.querySelector('input') as HTMLInputElement;
+  ai.checked = S.coverage.auto;
+  ai.addEventListener('change', () => { setAutoCoverage(ai.checked); persist(); });
+  body.appendChild(auto);
 
   if (lastError && !running) {
     const err = h('<div class="cov-err" role="alert"></div>');
@@ -299,7 +308,11 @@ function createPill(): HTMLElement {
     <button type="button" class="cov-pill-x" title="Убрать зону с карты" aria-label="Убрать зону с карты">✕</button>
   </div>`);
   (el.querySelector('.cov-pill-main') as HTMLElement).onclick = () => openCoverageSheet();
-  (el.querySelector('.cov-pill-x') as HTMLElement).onclick = () => clearCoverage();
+  (el.querySelector('.cov-pill-x') as HTMLElement).onclick = () => {
+    // «✕» у радиогоризонта, посчитанного самим, — выключить его совсем (иначе вернулся бы при следующем сдвиге).
+    if (S.coverage.auto) { setAutoCoverage(false); persist(); toast('Радиогоризонт больше не считается сам — включить: «Зона»', 4500); }
+    clearCoverage();
+  };
   return el;
 }
 
@@ -326,7 +339,8 @@ function renderPill() {
   } else {
     const st = stats(c, lineOf(c, S.coverage.line))[i];
     t.textContent = `Дрон ${hm(c.heights[i])} · до ${fmtKm(st.median)}`;
-    for (const s of ['ok', 'weak', 'none'] as const) {
+    // ✓⚠✕ — легенда заливки; у радиогоризонта без заливки её нет.
+    if (coverageFill()) for (const s of ['ok', 'weak', 'none'] as const) {
       const b = document.createElement('b');
       b.className = `status-${s}`;
       b.textContent = ICON[s];
@@ -334,6 +348,13 @@ function renderPill() {
     }
   }
   main.append(t, sw);
+  // Две границы на карте — подписать, какая чья (цвета — как у лучей антенн).
+  if (c.resV && S.coverage.show !== 'minh') {
+    const lg = document.createElement('span');
+    lg.className = 'cov-pill-lines';
+    lg.innerHTML = `<i style="background:${BEAM_COLOR.rc}"></i>упр. <i style="background:${BEAM_COLOR.video}"></i>видео`;
+    main.appendChild(lg);
+  }
   const note = running || c.prelim ? 'считаю…' : staleNote(c) ? 'устарела' : '';
   if (note) {
     const n = document.createElement('span');

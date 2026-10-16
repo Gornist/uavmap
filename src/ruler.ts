@@ -6,6 +6,8 @@ import { distance, bearing } from './geo';
 import { km } from './format';
 import { uid } from './store';
 
+let rulerObserved = false; // за высотой панели линейки следим с первого включения
+
 let active = false;
 let pts: [number, number][] = []; // [lon, lat]
 let labels: maplibregl.Marker[] = [];
@@ -89,6 +91,16 @@ export function toggleRuler(): void {
   const strip = document.getElementById('linkStrip');
   if (strip) strip.hidden = active;
   document.body.classList.toggle('ruler-on', active);
+  // Высота панели линейки — в CSS-переменную: кнопки карты в правом нижнем углу встают над ней.
+  // Следим за размером (поворот экрана, перенос кнопок в два ряда); скрытая панель высоту не обнуляет.
+  if (active && !rulerObserved) {
+    rulerObserved = true;
+    const bar = $('rulerBar');
+    const setH = () => { if (bar.offsetHeight) document.documentElement.style.setProperty('--ruler-h', `${bar.offsetHeight}px`); };
+    if (typeof ResizeObserver === 'function') new ResizeObserver(setH).observe(bar);
+    else window.addEventListener('resize', setH);
+    requestAnimationFrame(setH);
+  }
   map.getCanvas().style.cursor = active ? 'crosshair' : '';
   if (!active) pts = [];
   drawRuler();

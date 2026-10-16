@@ -10,7 +10,7 @@ import { h } from './ui';
 import { initStation, stationGround } from './station';
 import { initAltimeter } from './altimeter';
 import { hereText } from './verdict';
-import { addLinkLayers, initLinkStrip, liveMove, liveSettle, liveRecalc, scheduler, locate, offerGpsStation } from './live';
+import { addLinkLayers, setLinkLine, initLinkStrip, liveMove, liveSettle, liveRecalc, scheduler, locate, offerGpsStation } from './live';
 import { openPointSheet } from './point';
 import { initMarks, addMarkAtCenter } from './marks';
 import { initRuler } from './ruler';
@@ -137,6 +137,9 @@ initMobile({ onPointPress: openPointSheet });
 $('zIn').addEventListener('click', () => map.zoomIn());
 $('zOut').addEventListener('click', () => map.zoomOut());
 $('btnGps').addEventListener('click', whereAmI);
+$('btnLink').classList.toggle('on', S.map.link);
+$('btnLink').setAttribute('aria-pressed', String(S.map.link));
+$('btnLink').addEventListener('click', () => setLinkLine(!S.map.link));
 $('btnHome').addEventListener('click', () => {
   if (!S.station) { toast('Пульт не поставлен'); return; }
   map.flyTo({ center: [S.station.lon, S.station.lat] });

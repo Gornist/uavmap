@@ -103,11 +103,12 @@ function nothingFound(radius: number) {
  * поэтому и направление антенн разворачиваем на цель — иначе строка связи сказала бы «вне луча».
  */
 function choose(t: Spot, i: number, target: LatLon) {
-  if (directional(S.antenna.rc) || directional(S.antenna.video)) S.antenna.heading = Math.round(bearing(t.p, target)) % 360;
+  const aim = Math.round(bearing(t.p, target)) % 360;
+  for (const a of [S.antenna.rc, S.antenna.video]) if (directional(a)) a.heading = aim;
   setStation(t.p);
   closeSheet(); // onClose шторки убирает ромбы
   map.flyTo({ center: [target.lon, target.lat] });
-  toast(`Пульт поставлен в вариант ${i + 1}${directional(S.antenna.rc) || directional(S.antenna.video) ? `, антенны — на цель (${S.antenna.heading}°)` : ''}`);
+  toast(`Пульт поставлен в вариант ${i + 1}${directional(S.antenna.rc) || directional(S.antenna.video) ? `, антенны — на цель (${aim}°)` : ''}`);
 }
 
 function showSpots(top: Spot[], target: LatLon, radius: number) {

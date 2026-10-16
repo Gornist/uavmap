@@ -7,7 +7,8 @@ import { LatLon, distance, bearing, destination } from './geo';
 import { elevationAt, profile, demPlan } from './elevation';
 import { analyzePair, minHeightForLink, LinkResult, PairResult, LineId, PRESETS, RadioParams } from './radio';
 import { withClutter } from './clutter';
-import { directional, patternLoss } from './antenna';
+import { directional, patternLoss, rumb } from './antenna';
+import { antennaPanel, BEAM_COLOR } from './antennaUi';
 import { formatCoords } from './coords';
 import { presetName, freqName, LineNeed } from './verdict';
 
@@ -18,7 +19,7 @@ import { presetName, freqName, LineNeed } from './verdict';
 export function aimAt(p: RadioParams, line: LineId, az?: number): RadioParams {
   const a = S.antenna[line];
   if (!directional(a)) return p;
-  const g = a.gainDbi + (az === undefined ? 0 : patternLoss(a, az, S.antenna.heading));
+  const g = a.gainDbi + (az === undefined ? 0 : patternLoss(a, az, a.heading));
   return line === 'rc' ? { ...p, txGainDbi: g } : { ...p, rxGainDbi: g };
 }
 
@@ -87,28 +88,38 @@ export function removeStation() {
   emit('station');
 }
 
-/** Луч направленной антенны у пульта: сектор шириной луча (по −3 дБ) на 2,5 км — видно, куда «смотрит» пульт. */
+/** Лучи направленных антенн у пульта: сектор шириной луча (по −3 дБ) на 2,5 км, у каждой линии свой цвет. */
 const AIM_R = 2500;
 function renderAim() {
   if (!map.getSource('aim')) {
     // Стиль ещё не готов (карта только создаётся) — дорисуем, когда успокоится.
     try { map.addSource('aim', { type: 'geojson', data: fc() }); } catch { map.once('idle', renderAim); return; }
     const before = map.getStyle().layers.find((l) => l.id.startsWith('ov-'))?.id;
-    map.addLayer({ id: 'aim-fill', type: 'fill', source: 'aim', paint: { 'fill-color': '#d9a446', 'fill-opacity': 0.14 } }, before);
-    map.addLayer({ id: 'aim-line', type: 'line', source: 'aim', paint: { 'line-color': '#d9a446', 'line-width': 1.5, 'line-dasharray': [3, 2], 'line-opacity': 0.9 } }, before);
+    map.addLayer({ id: 'aim-fill', type: 'fill', source: 'aim', paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.12 } }, before);
+    map.addLayer({ id: 'aim-line', type: 'line', source: 'aim', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'line-color': ['get', 'color'], 'line-width': 1.5, 'line-dasharray': [3, 2], 'line-opacity': 0.95 } }, before);
+    // Подпись у края луча: какая антенна и её азимут.
+    map.addLayer({
+      id: 'aim-label', type: 'symbol', source: 'aim', filter: ['==', ['geometry-type'], 'Point'],
+      layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Regular'], 'text-size': 12, 'text-allow-overlap': true },
+      paint: { 'text-color': ['get', 'color'], 'text-halo-color': 'rgba(0, 0, 0, 0.85)', 'text-halo-width': 1.8 },
+    }, before);
   }
   const st = S.station;
   const feats: GeoJSON.Feature[] = [];
   const lines = (['rc', 'video'] as const).filter((l) => directional(S.antenna[l]) && (l === 'rc' || S.video.enabled));
-  const beams = [...new Set(lines.map((l) => S.antenna[l].beamDeg))]; // одинаковые лучи — один сектор
-  if (st) for (const beam of beams) {
+  if (st) for (const l of lines) {
+    const { beamDeg: beam, heading } = S.antenna[l];
     const pts: [number, number][] = [[st.lon, st.lat]];
     for (let a = -beam / 2; a <= beam / 2 + 1e-9; a += Math.max(1, beam / 30)) {
-      const p = destination(st, S.antenna.heading + a, AIM_R);
+      const p = destination(st, heading + a, AIM_R);
       pts.push([p.lon, p.lat]);
     }
     pts.push([st.lon, st.lat]);
-    feats.push({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [pts] }, properties: {} });
+    feats.push({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [pts] }, properties: { color: BEAM_COLOR[l] } });
+    // У края луча, а не на оси: на оси (антенна на прицел) подпись легла бы на прицел и линию связи.
+    const tip = destination(st, heading + beam / 2, AIM_R * 1.06);
+    const label = `${l === 'rc' ? 'Упр.' : 'Видео'} ${Math.round(heading)}° ${rumb(heading)}`;
+    feats.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [tip.lon, tip.lat] }, properties: { color: BEAM_COLOR[l], label } });
   }
   setGeo('aim', fc(feats));
 }
@@ -117,7 +128,7 @@ function renderStation() {
   renderAim();
   if (!S.station) { stationMarker?.remove(); stationMarker = null; return; }
   if (!stationMarker) {
-    const el = h('<div class="station" title="Пульт">📡</div>');
+    const el = h('<div class="station" title="Пульт: высота антенны, антенны и их направление">📡</div>');
     el.addEventListener('click', (e) => { e.stopPropagation(); showStationSheet(); });
     stationMarker = new maplibregl.Marker({ element: el }).setLngLat([S.station.lon, S.station.lat]).addTo(map);
   } else stationMarker.setLngLat([S.station.lon, S.station.lat]);
@@ -133,6 +144,8 @@ function showStationSheet() {
       <div><small>${c.label}</small><b>${c.short}</b></div>
     </div>
     <label class="field st-ant"><span>Антенна над землёй, м</span><input id="stAnt" type="text" inputmode="decimal" value="${st.antH}"></label>
+    <h4 class="st-ant-h">Антенны</h4>
+    <div id="stAnts"></div>
     <div class="row">
       <button class="ghost" id="stGo">Показать</button>
       <button class="ghost" id="stMove">Пульт сюда</button>
@@ -143,6 +156,10 @@ function showStationSheet() {
   const parseAnt = () => { const v = parseFloat(ant.value.replace(',', '.')); return Number.isFinite(v) && v >= 0 && v <= 100 ? v : null; };
   ant.addEventListener('input', () => { const v = parseAnt(); if (v !== null && S.station && v !== S.station.antH) { S.station.antH = v; emit('station'); } });
   ant.addEventListener('change', () => { if (parseAnt() === null) { ant.value = String(S.station?.antH ?? 2); toast('Антенна: от 0 до 100 м'); } });
+  // Антенны: тип и направление по линиям — здесь их и ищут (нажатие на пульт); то же — в меню «Аппаратура».
+  const ants = b.querySelector('#stAnts') as HTMLElement;
+  const drawAnts = () => { ants.innerHTML = ''; antennaPanel(ants, drawAnts); };
+  drawAnts();
   b.querySelector('#stGo')!.addEventListener('click', () => map.flyTo({ center: [st.lon, st.lat] }));
   b.querySelector('#stMove')!.addEventListener('click', () => { setStation(center()); toast('Пульт перенесён в прицел'); });
   b.querySelector('#stDel')!.addEventListener('click', () => {

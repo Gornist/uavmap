@@ -2,9 +2,9 @@
  * кнопки «Применить» в таблицах. Высота панели — --bar-h: от неё отсчитываются линейка, высотомер и контролы карты. */
 :root { --bar-h: 60px; }
 
-/* Логотипа на карте нет (он в шапке меню). Атрибуция подложки и масштаб — в правом нижнем углу над панелью:
- * верх занят строкой связи, левый низ — высотомером, правый край по центру — кнопками карты. */
-.maplibregl-ctrl-bottom-right { top: auto; left: auto; right: calc(6px + var(--safe-r)); bottom: calc(var(--bar-h) + 6px + var(--safe-b)) !important; z-index: 3; } /* развёрнутая — поверх масштаба */
+/* Логотипа на карте нет (он в шапке меню). Атрибуция подложки и масштаб — в правом верхнем углу, правее строки
+ * связи; где строка доходит до края (узкое окно, телефон) — сразу под ней справа (её высоту --strip-h ставит live.ts). */
+.maplibregl-ctrl-bottom-right { top: calc(8px + var(--safe-t)); left: auto; right: calc(8px + var(--safe-r)); bottom: auto !important; z-index: 7; } /* развёрнутая — поверх масштаба и строки */
 .maplibregl-ctrl-bottom-right .maplibregl-ctrl { margin: 0; }
 /* Атрибуция свёрнута в значок ⓘ (main.ts держит её свёрнутой), развёрнутая — мелкий текст влево от значка. */
 .maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib { max-width: calc(100vw - 80px - var(--safe-l) - var(--safe-r)); }
@@ -14,7 +14,12 @@
 /* На сенсорном экране цель нажатия 44×44 — невидимой рамкой вокруг значка. */
 @media (pointer: coarse) { .maplibregl-ctrl-attrib-button::after { content: ""; position: absolute; top: -10px; right: -10px; bottom: -10px; left: -10px; } }
 /* Масштаб — левее значка ⓘ. */
-.maplibregl-ctrl-bottom-left { top: auto; left: auto; right: calc(40px + var(--safe-r)); bottom: calc(var(--bar-h) + 8px + var(--safe-b)) !important; }
+.maplibregl-ctrl-bottom-left { top: calc(10px + var(--safe-t)); left: auto; right: calc(42px + var(--safe-r)); bottom: auto !important; }
+/* строка 620 px по центру + масштаб до 140 px с отступами справа помещаются в ряд от ~1000 px */
+@media (max-width: 1000px), (max-height: 520px) and (orientation: landscape) {
+  .maplibregl-ctrl-bottom-right { top: calc(var(--strip-h, 0px) + 14px + var(--safe-t)); }
+  .maplibregl-ctrl-bottom-left { top: calc(var(--strip-h, 0px) + 16px + var(--safe-t)); }
+}
 .maplibregl-ctrl-bottom-left .maplibregl-ctrl-scale { margin: 0; }
 
 /* Линия пульт → прицел на время движения карты (live.ts, ghost) — поверх карты, под маркерами. */
@@ -122,6 +127,8 @@ table.rt td:last-child { width: 1%; }
   .no-flexgap #bottomBar button > * + * { margin-left: 0; margin-top: 2px; }
 
   #linkStrip { width: calc(100% - 12px - var(--safe-l) - var(--safe-r)); top: calc(6px + var(--safe-t)); padding: 8px; }
+  /* под строкой справа — ⓘ и масштаб, плашка зоны — ниже них (body — coverage.css подключается позже) */
+  body .cov-pill { top: calc(var(--strip-h, 0px) + 48px + var(--safe-t)); }
   .ls-offer .ls-x { order: 1; }
   .ls-offer .primary { order: 2; flex: 1 1 100%; }
   .ls-verdict { font-size: 19px; }
@@ -142,10 +149,10 @@ table.rt td:last-child { width: 1%; }
   #linkStrip { left: auto; right: calc(8px + var(--safe-r)); transform: none; width: min(380px, 44vw); padding: 6px 8px; }
   .ls-offer .ls-x { order: 1; }
   .ls-offer .primary { order: 2; flex: 1 1 100%; }
-  /* кнопки карты здесь — ряд внизу слева; высотомер — у самого края над ними; строка связи — вверху справа,
+  /* кнопки карты здесь — ряд внизу справа; высотомер — у левого края во всю высоту; строка связи — вверху справа,
      плашка зоны — вверху слева, правее высотомера (по центру под строкой она легла бы на прицел) */
   body .cov-pill { top: calc(8px + var(--safe-t)); left: calc(64px + var(--safe-l)); transform: none; max-width: calc(56vw - 80px); } /* body — coverage.css подключается позже */
-  .altimeter { left: calc(12px + var(--safe-l)); bottom: calc(var(--bar-h) + 62px + var(--safe-b)); height: auto; max-height: none; top: calc(8px + var(--safe-t)); }
+  .altimeter { left: calc(12px + var(--safe-l)); bottom: calc(var(--bar-h) + 12px + var(--safe-b)); height: auto; max-height: none; top: calc(8px + var(--safe-t)); }
   .alt-name { margin-bottom: 18px; }
   .alt-name + .alt-track + .alt-cap { margin-top: 18px; white-space: nowrap; align-self: flex-start; } /* у края экрана — растёт вправо */
   .alt-cap br { display: none; }
@@ -193,3 +200,18 @@ table.rt td:last-child { width: 1%; }
   .alt-lbl { height: 48px; font-size: 16px; }
   .ls-acts button { min-height: 52px; }
 }
+
+/* ---------- Антенны на земле (antennaUi.ts): шторка пульта и меню ---------- */
+.st-ant-h { margin: 14px 0 4px; font-size: 15px; }
+.ant-card { margin: 6px 0 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel-2); }
+.ant-label { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; font-weight: 600; }
+.ant-label i { flex: none; width: 14px; height: 14px; border-radius: 3px; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3); }
+.ant-card .hint { margin: 6px 0 0; }
+.ant-dir { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.ant-dir label { flex: 1 1 auto; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ant-dir label span { flex: 1 1 auto; }
+.ant-dir input { width: 68px; text-align: right; }
+.ant-rumb { flex: none; min-width: 44px; font-weight: 600; }
+.ant-ref { margin: 6px 0 0; font-size: 13px; }
+.ant-dir button { flex: none; min-height: 40px; padding: 6px 12px; }
+.no-flexgap .ant-label > * + *, .no-flexgap .ant-dir > * + *, .no-flexgap .ant-dir label > * + * { margin-left: 8px; }

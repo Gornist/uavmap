@@ -5,6 +5,7 @@ import { destination, lonLatToPixel, pixelToLonLat } from './geo';
 import { rasterIndex } from './coverageRaster';
 import { STATUS_RGB } from './theme';
 import { CoverageShown, firstLossAt, heightIndex, levelAt, lineOf, paletteIndex } from './coverageStats';
+import { BEAM_COLOR } from './antennaUi';
 
 const CANVAS = 768;
 const RZ = 20; // «виртуальный» зум для равномерных меркаторских пикселей растра
@@ -26,11 +27,24 @@ function beforeOv(): string | undefined {
 /** Слой границы связи (пустой до первого расчёта). */
 export function initCoverageView(): void {
   map.addSource('cov-edge', { type: 'geojson', data: fc() });
+  // Обводка (тёмная) и сами границы, цвета — как у лучей антенн, обе сплошные. Видео — шире, управление — уже,
+  // поверх: там, где границы совпадают (хребет режет обе линии), видны обе — золотая по центру голубой.
+  map.addLayer({ id: 'cov-edge-casing', type: 'line', source: 'cov-edge', paint: { 'line-color': '#000', 'line-width': 7, 'line-opacity': 0.45 } }, beforeOv());
+  map.addLayer({ id: 'cov-edge-video', type: 'line', source: 'cov-edge', filter: ['==', ['get', 'line'], 'video'], paint: { 'line-color': BEAM_COLOR.video, 'line-width': 5 } }, beforeOv());
   map.addLayer({
-    id: 'cov-edge', type: 'line', source: 'cov-edge',
-    paint: { 'line-color': accentColor(), 'line-width': 2, 'line-dasharray': [3, 2] },
+    id: 'cov-edge', type: 'line', source: 'cov-edge', filter: ['!=', ['get', 'line'], 'video'],
+    paint: { 'line-color': ['coalesce', ['get', 'color'], accentColor()], 'line-width': 2 },
   }, beforeOv());
 }
+
+/** Заливка зоны: при расчёте из шторки «Зона» — да; радиогоризонт, посчитанный сам (coverageRun), — только границы. */
+let fillOn = true;
+export function setCoverageFill(on: boolean): void {
+  if (fillOn === on) return;
+  fillOn = on;
+  redrawCoverage();
+}
+export const coverageFill = () => fillOn;
 
 /** Убрать растр и границу с карты, освободить картинку. */
 export function clearCoverageView(): void {
@@ -101,16 +115,25 @@ function paint(c: CoverageShown): HTMLCanvasElement {
   return cv;
 }
 
+/**
+ * Границы связи: при двух линиях — отдельно управление и видео (радиогоризонт каждой, свой цвет);
+ * при одной — одна граница.
+ */
 function drawEdge(c: CoverageShown) {
   const hi = heightIndex(c.heights, S.droneH).i;
-  const pts: [number, number][] = [];
-  const ln = lineOf(c, S.coverage.line);
-  for (let r = 0; r < c.rays; r++) {
-    const q = destination(c.center, (360 * r) / c.rays, firstLossAt(c, ln, hi, r));
-    pts.push([q.lon, q.lat]);
-  }
-  if (pts.length) pts.push(pts[0]);
-  setGeo('cov-edge', fc(pts.length ? [line(pts)] : []));
+  const ring = (ln: 'rc' | 'video' | 'both') => {
+    const pts: [number, number][] = [];
+    for (let r = 0; r < c.rays; r++) {
+      const q = destination(c.center, (360 * r) / c.rays, firstLossAt(c, ln, hi, r));
+      pts.push([q.lon, q.lat]);
+    }
+    if (pts.length) pts.push(pts[0]);
+    return pts;
+  };
+  const feats = c.resV
+    ? [line(ring('video'), { line: 'video' }), line(ring('rc'), { line: 'rc', color: BEAM_COLOR.rc })]
+    : [line(ring('rc'), { line: 'rc', color: BEAM_COLOR.rc })];
+  setGeo('cov-edge', fc(c.rays ? feats : []));
 }
 
 /** Показать результат на карте (предварительный или окончательный). */
@@ -134,12 +157,13 @@ export function redrawCoverage(): void {
   if (!current) return;
   const c = current;
   rasterBounds = layoutRaster(c);
-  const canvas = paint(c);
   removeRaster();
+  drawEdge(c);
+  if (!fillOn) return;
+  const canvas = paint(c);
   map.addSource('cov', { type: 'canvas', canvas, coordinates: rasterBounds.coords, animate: false });
   map.addLayer({
     id: 'cov-raster', type: 'raster', source: 'cov',
     paint: { 'raster-opacity': S.coverage.opacity, 'raster-fade-duration': 0, 'raster-resampling': 'nearest' },
-  }, map.getLayer('cov-edge') ? 'cov-edge' : beforeOv());
-  drawEdge(c);
+  }, map.getLayer('cov-edge-casing') ? 'cov-edge-casing' : beforeOv());
 }

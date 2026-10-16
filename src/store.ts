@@ -25,12 +25,12 @@ export interface State {
    * Зона покрытия. Высота показа — всегда S.droneH; heights — список «Сравнить высоты» (S.droneH в него
    * добавляется при расчёте, см. coverageHeights), compare — считать ли этот список.
    */
-  coverage: { radius: number; compare: boolean; heights: number[]; show: 'margin' | 'minh'; opacity: number; line: 'rc' | 'video' | 'both' };
-  map: { base: string; labels: boolean; hillshade: boolean; contours: boolean; dim: number; center: [number, number]; zoom: number };
+  coverage: { radius: number; compare: boolean; heights: number[]; show: 'margin' | 'minh'; opacity: number; line: 'rc' | 'video' | 'both'; auto: boolean };
+  map: { base: string; labels: boolean; hillshade: boolean; contours: boolean; dim: number; center: [number, number]; zoom: number; link: boolean };
   coordFormat: CoordFormat;
   clutter: ClutterClass;   // местность у пульта
-  /** Антенны на земле (управление — у пульта, видео — у приёмника) и куда они направлены, ° от севера. */
-  antenna: { rc: Antenna; video: Antenna; heading: number };
+  /** Антенны на земле: управление — у пульта, видео — у приёмника; у каждой тип и направление. */
+  antenna: { rc: Antenna; video: Antenna };
 }
 
 const KEY = 'radius.project.v1';
@@ -48,11 +48,11 @@ export const defaults = (): State => ({
   radio: { ...DEFAULT_RADIO },
   presetId: 'elrs24',
   video: { enabled: true, radio: { ...DEFAULT_VIDEO }, presetId: DEFAULT_VIDEO_PRESET },
-  coverage: { radius: 15000, compare: false, heights: [30, 60, 100, 150, 250, 400], show: 'margin', opacity: 0.6, line: 'both' },
-  map: { base: 'sat', labels: true, hillshade: true, contours: true, dim: 0.35, center: [40.2045, 43.6805], zoom: 12 },
+  coverage: { radius: 15000, compare: false, heights: [30, 60, 100, 150, 250, 400], show: 'margin', opacity: 0.6, line: 'both', auto: true },
+  map: { base: 'sat', labels: true, hillshade: true, contours: true, dim: 0.35, center: [40.2045, 43.6805], zoom: 12, link: false },
   coordFormat: 'sk42',
   clutter: 'open',
-  antenna: { rc: { ...DEFAULT_ANTENNA }, video: { ...DEFAULT_ANTENNA }, heading: 0 },
+  antenna: { rc: { ...DEFAULT_ANTENNA }, video: { ...DEFAULT_ANTENNA } },
 });
 
 function merge<T>(base: T, over: unknown): T {
@@ -82,6 +82,13 @@ export function migrate(raw: unknown): unknown {
     out = { ...out, coverage: c };
   }
   if (!(typeof raw.v === 'number' && raw.v >= 2) && isObj(raw.map)) out = { ...out, map: { ...raw.map, hillshade: true } };
+  // Антенны: прежде одно направление на обе (antenna.heading) — теперь у каждой своё. Переносим до слияния
+  // с умолчаниями, иначе умолчание (0°) затёрло бы сохранённое направление.
+  if (isObj(raw.antenna) && 'heading' in raw.antenna) {
+    const { heading, ...rest } = raw.antenna as Record<string, unknown>;
+    const withH = (a: unknown) => (isObj(a) && !('heading' in a) ? { ...a, heading } : a);
+    out = { ...out, antenna: { ...rest, rc: withH(rest.rc), video: withH(rest.video) } };
+  }
   return out;
 }
 
@@ -155,6 +162,7 @@ export function sanitize(s: State): State {
     show: oneOf(c.show, ['margin', 'minh'] as const, d.coverage.show),
     opacity: fin(c.opacity, 0, 1, d.coverage.opacity),
     line: oneOf(c.line, ['rc', 'video', 'both'] as const, d.coverage.line),
+    auto: typeof c.auto === 'boolean' ? c.auto : d.coverage.auto,
   };
   const m: Record<string, unknown> = isObj(s.map) ? s.map : {};
   const ctr = Array.isArray(m.center) && okLL(m.center[1], m.center[0]) ? [m.center[0], m.center[1]] as [number, number] : d.map.center;
@@ -164,15 +172,18 @@ export function sanitize(s: State): State {
     hillshade: typeof m.hillshade === 'boolean' ? m.hillshade : d.map.hillshade,
     contours: typeof m.contours === 'boolean' ? m.contours : d.map.contours,
     dim: fin(m.dim, 0, 0.9, d.map.dim), center: ctr, zoom: fin(m.zoom, 0, 22, d.map.zoom),
+    link: m.link === true, // линия пульт → прицел на карте: включают кнопкой у карты
   };
   out.coordFormat = oneOf(s.coordFormat, ['sk42', 'dd', 'dms'] as const, d.coordFormat);
   out.clutter = oneOf(s.clutter, ['open', 'sparse', 'village', 'forest'] as const, d.clutter);
   const an: Record<string, unknown> = isObj(s.antenna) ? s.antenna : {};
+  const deg = (v: unknown, def: number) => ((Math.round(fin(v, -1e4, 1e4, def)) % 360) + 360) % 360;
+  const common = deg(an.heading, 0); // прежний формат без migrate (прямой вызов sanitize): одно направление на обе
   const ant = (src: unknown, def: Antenna): Antenna => {
     const a: Record<string, unknown> = isObj(src) ? src : {};
-    return { kind: oneOf(a.kind, ['omni', 'patch', 'yagi', 'custom'] as const, def.kind), gainDbi: fin(a.gainDbi, 0, 40, def.gainDbi), beamDeg: fin(a.beamDeg, 5, 180, def.beamDeg) };
+    return { kind: oneOf(a.kind, ['omni', 'patch', 'yagi', 'custom'] as const, def.kind), gainDbi: fin(a.gainDbi, 0, 40, def.gainDbi), beamDeg: fin(a.beamDeg, 5, 180, def.beamDeg), heading: deg(a.heading, common) };
   };
-  out.antenna = { rc: ant(an.rc, d.antenna.rc), video: ant(an.video, d.antenna.video), heading: ((fin(an.heading, -1e4, 1e4, 0) % 360) + 360) % 360 };
+  out.antenna = { rc: ant(an.rc, d.antenna.rc), video: ant(an.video, d.antenna.video) };
   return out;
 }
 

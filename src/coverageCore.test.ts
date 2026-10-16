@@ -308,7 +308,7 @@ describe('общий рельеф лучей для нескольких лин�
 
 describe('computeCoverage: направленная антенна на земле', () => {
   const flat = grid(() => 100);
-  const patch = { kind: 'patch' as const, gainDbi: 8, beamDeg: 60 };
+  const patch = { kind: 'patch' as const, gainDbi: 8, beamDeg: 60, heading: 0 }; // heading здесь не используется — направление в aim
   it('на оси — как без поправки, сзади — слабее на отношение «вперёд/назад», на краю луча — на 3 дБ', () => {
     // 4 луча: 0°, 90°, 180°, 270°; антенна смотрит на восток (90°).
     const plain = computeCoverage(job(flat));

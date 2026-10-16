@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { patternLoss, angleOff, inBeam, ANTENNA_TYPES, Antenna } from './antenna';
+import { patternLoss, angleOff, inBeam, rumb, Antenna } from './antenna';
 
-const patch: Antenna = { kind: 'patch', ...ANTENNA_TYPES.patch };
-const omni: Antenna = { kind: 'omni', gainDbi: 0, beamDeg: 360 };
+const patch: Antenna = { kind: 'patch', gainDbi: 8, beamDeg: 60, heading: 0 };
+const omni: Antenna = { kind: 'omni', gainDbi: 0, beamDeg: 360, heading: 0 };
 
 describe('диаграмма направленности антенны на земле', () => {
   it('угол между направлениями — через север тоже', () => {
@@ -15,11 +15,14 @@ describe('диаграмма направленности антенны на з
     expect(patternLoss(patch, 45 + 30, 45)).toBeCloseTo(-3, 9);
   });
   it('сзади — не ниже отношения «вперёд/назад»', () => {
-    expect(patternLoss(patch, 225, 45)).toBe(-ANTENNA_TYPES.patch.fbrDb);
+    expect(patternLoss(patch, 225, 45)).toBe(-20); // FBR патча
   });
   it('всенаправленная — без ослабления в любую сторону', () => {
     expect(patternLoss(omni, 200, 0)).toBe(0);
     expect(inBeam(omni, 200, 0)).toBe(true);
+  });
+  it('румб азимута', () => {
+    expect([0, 45, 90, 180, 270, 349, 360, -90].map(rumb)).toEqual(['С', 'СВ', 'В', 'Ю', 'З', 'С', 'С', 'З']);
   });
   it('в луче — по половине ширины', () => {
     expect(inBeam(patch, 29, 0)).toBe(true);

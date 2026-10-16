@@ -1,5 +1,5 @@
 // Антенна на земле (у пульта): всенаправленная или направленная — патч, яги, своя. У линии управления это
-// антенна передатчика пульта, у видео — антенна видеоприёмника. Направление одно на пульт — «куда смотрят антенны».
+// антенна передатчика пульта, у видео — антенна видеоприёмника; у каждой своё направление (куда смотрит).
 // Диаграмма направленности — упрощённая модель главного лепестка (как в ITU-R F.1336): ослабление
 // 12·(θ/θ₃)² дБ, где θ₃ — ширина луча по уровню −3 дБ; не больше отношения «вперёд/назад» (боковые и задний лепестки).
 // Чистые функции — без DOM и состояния: используются и страницей, и воркером зоны.
@@ -9,6 +9,7 @@ export interface Antenna {
   kind: AntennaKind;
   gainDbi: number; // усиление в главном лепестке (у всенаправленной не используется — берётся из радиопараметров)
   beamDeg: number; // ширина луча по −3 дБ
+  heading: number; // куда направлена, ° от севера
 }
 
 export const ANTENNA_TYPES: Record<AntennaKind, { name: string; gainDbi: number; beamDeg: number; fbrDb: number }> = {
@@ -18,7 +19,7 @@ export const ANTENNA_TYPES: Record<AntennaKind, { name: string; gainDbi: number;
   custom: { name: 'Своя', gainDbi: 10, beamDeg: 45, fbrDb: 20 },
 };
 
-export const DEFAULT_ANTENNA: Antenna = { kind: 'omni', gainDbi: 8, beamDeg: 60 };
+export const DEFAULT_ANTENNA: Antenna = { kind: 'omni', gainDbi: 8, beamDeg: 60, heading: 0 };
 export const directional = (a: Antenna) => a.kind !== 'omni';
 
 /** Угол между направлениями, ° (0..180). */
@@ -34,6 +35,10 @@ export function patternLoss(a: Antenna, azDeg: number, headingDeg: number): numb
   const beam = Math.max(5, Math.min(180, a.beamDeg));
   return -Math.min(12 * (off / beam) ** 2, ANTENNA_TYPES[a.kind].fbrDb);
 }
+
+/** Румб азимута: С, ССВ, СВ … (16 направлений). */
+const RUMB = ['С', 'ССВ', 'СВ', 'ВСВ', 'В', 'ВЮВ', 'ЮВ', 'ЮЮВ', 'Ю', 'ЮЮЗ', 'ЮЗ', 'ЗЮЗ', 'З', 'ЗСЗ', 'СЗ', 'ССЗ'];
+export const rumb = (azDeg: number) => RUMB[Math.round((((azDeg % 360) + 360) % 360) / 22.5) % 16];
 
 /** Направление внутри луча (по −3 дБ). */
 export const inBeam = (a: Antenna, azDeg: number, headingDeg: number) => !directional(a) || angleOff(azDeg, headingDeg) <= a.beamDeg / 2;

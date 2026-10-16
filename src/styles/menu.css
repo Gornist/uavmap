@@ -69,4 +69,3 @@ body.ruler-on #linkStrip { display: none; }
   body #rulerBar { grid-template-columns: 1fr 1fr; }
   body #rulerBar #rulerText { font-size: 14px; }
 }
-.ant-label { margin: 10px 0 4px; font-weight: 600; }

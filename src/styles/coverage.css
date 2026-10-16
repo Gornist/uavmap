@@ -28,3 +28,5 @@
 .cov-pill-x { flex: none; width: 44px; border-left: 1px solid var(--line) !important; border-radius: 0 22px 22px 0; font-size: 16px; }
 .no-flexgap .cov-pill-main > * + *, .no-flexgap .cov-pill-lg > * + * { margin-left: 6px; }
 .no-flexgap .cov-err > * + *, .no-flexgap .cov-check > * + *, .no-flexgap .cov-add > * + * { margin-left: 8px; }
+.cov-pill-lines { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 400; color: var(--muted); }
+.cov-pill-lines i { display: inline-block; width: 12px; height: 3px; border-radius: 2px; margin-left: 4px; }

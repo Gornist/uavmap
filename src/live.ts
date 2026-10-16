@@ -1,8 +1,8 @@
 // Строка связи вверху карты: пока пульта нет — «Пульт здесь / По GPS»; с пультом — вердикт до прицела,
 // одна подсказка по высоте («Поднимите до 480 м — будет и видео»), мелко запасы и азимут; нажатие на строку — профиль трассы.
 // Данные для высотомера (связь на каждой высоте), линия пульт → прицел и планировщик пересчёта при движении карты.
-import { S, $, map, center, setGeo, fc, line, toast, on, emit } from './app';
-import { directional, inBeam, angleOff } from './antenna';
+import { S, $, map, center, setGeo, fc, line, toast, on, emit, persist } from './app';
+import { directional, inBeam, rumb } from './antenna';
 import { km, dB, escapeHtml } from './format';
 import { LatLon, distance, bearing, interpolate } from './geo';
 import { DemMissingError } from './elevation';
@@ -21,8 +21,11 @@ const PENDING_COL = '#8b949e';
 
 let linkDrawn = false; // в источнике 'link' есть линия
 let lossDrawn = false;  // в источнике 'link-loss' есть метки
+/** Линия пульт → прицел на карте включена (кнопка у карты; строка связи считает и без неё). */
+const linkOn = () => S.map.link;
 /** Метки «здесь пропадёт связь» на линии (только у посчитанного результата — при любом другом виде линии убираются). */
 function setLoss(features: GeoJSON.Feature[]) {
+  if (!linkOn()) features = [];
   if (!features.length && !lossDrawn) return;
   lossDrawn = features.length > 0;
   setGeo('link-loss', fc(features));
@@ -31,6 +34,7 @@ function setLoss(features: GeoJSON.Feature[]) {
 function setLink(a: LatLon | null, c?: LatLon, props: Record<string, unknown> = {}) {
   ghost.hide();
   setLoss([]);
+  if (!linkOn()) a = null; // выключена кнопкой у карты — источник пустой
   linkDrawn = !!(a && c);
   setGeo('link', a && c ? fc([line([[a.lon, a.lat], [c.lon, c.lat]], props)]) : fc());
 }
@@ -88,13 +92,15 @@ function subLine(pair: PairResult, az: number, loss: string): string {
   return `${lines} · аз. <span class="num">${Math.round(az) % 360}°</span>${loss}${offlineNote()}`;
 }
 
-/** Прицел вне луча направленной антенны на земле — сказать и предложить развернуть её на прицел. */
+/** Прицел вне луча направленной антенны на земле — какой именно (управление / видео) и кнопка развернуть их на прицел. */
 function aimNote(az: number): string {
   const ls = (['rc', 'video'] as const).filter((x) => directional(S.antenna[x]) && (x === 'rc' || S.video.enabled));
-  const out = ls.filter((x) => !inBeam(S.antenna[x], az, S.antenna.heading));
+  const out = ls.filter((x) => !inBeam(S.antenna[x], az, S.antenna[x].heading));
   if (!out.length) return '';
-  const off = Math.round(angleOff(az, S.antenna.heading));
-  return `<div class="ls-aim"><span class="status-weak">Прицел вне луча антенны (на ${off}°)</span><button class="ghost" data-act="aim">Антенну на прицел</button></div>`;
+  const name = { rc: 'управления', video: 'видео' };
+  const a = Math.round(az) % 360;
+  const what = out.map((x) => `${name[x]} — аз. ${Math.round(S.antenna[x].heading)}° ${rumb(S.antenna[x].heading)}`).join(', ');
+  return `<div class="ls-aim"><span class="status-weak">Прицел (аз. ${a}° ${rumb(a)}) вне луча антенны ${what}</span><button class="ghost" data-act="aim">${out.length > 1 ? 'Повернуть обе' : 'Повернуть'}</button></div>`;
 }
 
 /** Готовность к полёту без сети: трасса внутри скачанного района или нет (молчим, если районов нет вовсе). */
@@ -194,7 +200,7 @@ export function liveFollow() {
   if (moving) {
     if (linkDrawn) { linkDrawn = false; setGeo('link', fc()); }
     setLoss([]);
-    ghost.show(a);
+    if (linkOn()) ghost.show(a);
   } else linkLine(a, c, { color: PENDING_COL, dash: 0, op: 0.55 });
   const az = Math.round(bearing(a, c)) % 360;
   // Строки «нужная высота» и запасы не трогаем: высота строки не прыгает, а значения обновит расчёт.
@@ -280,6 +286,16 @@ export function liveSettle() {
   moving = false;
   liveFollow();
 }
+/** Кнопка у карты: показать/спрятать линию пульт → прицел (и метки потери связи на ней). */
+export function setLinkLine(on: boolean): void {
+  S.map.link = on;
+  persist();
+  $('btnLink').classList.toggle('on', on);
+  $('btnLink').setAttribute('aria-pressed', String(on));
+  if (last && S.station && distance(center(), last.r.target) <= 2) renderStrip(last, last.r.pair, S.droneH); else liveSettle();
+  if (!on) setLink(null);
+}
+
 /** Конец движения: посчитать связь немедленно. */
 export function liveRecalc() {
   if (S.station) liveCalc.now();
@@ -336,7 +352,7 @@ export function initLinkStrip() {
   $('btnStHere').addEventListener('click', () => {
     closeOffer();
     setStation(center());
-    toast('Пульт поставлен. Двигайте карту — прицел покажет связь');
+    toast('Пульт поставлен. Двигайте карту — прицел покажет связь. Антенны и их направление — нажмите на 📡', 5000);
   });
   $('btnStGps').addEventListener('click', async () => {
     const g = await locate();
@@ -351,7 +367,12 @@ export function initLinkStrip() {
     if (act === 'offline') openOfflineSheet();
     else if (act === 'gps-set' && offerAt) { setStation(offerAt); closeOffer(); toast('Пульт поставлен в вашу точку'); }
     else if (act === 'gps-close') closeOffer();
-    else if (act === 'aim' && last) { S.antenna.heading = Math.round(last.r.az) % 360; emit('radio'); emit('station'); toast(`Антенны направлены на ${S.antenna.heading}°`); }
+    else if (act === 'aim' && last) {
+      const az = Math.round(last.r.az) % 360;
+      // Поворачиваем только антенны, у которых прицел вне луча (вторая могла быть направлена в другое место нарочно).
+      for (const x of ['rc', 'video'] as const) if ((x === 'rc' || S.video.enabled) && directional(S.antenna[x]) && !inBeam(S.antenna[x], az, S.antenna[x].heading)) S.antenna[x].heading = az;
+      emit('radio'); emit('station'); toast(`Антенна направлена на прицел (${az}°)`);
+    }
   });
 
   // Высотомер: пока тянут метку дрона — строка показывает связь на этой высоте (без нового профиля).

@@ -54,6 +54,7 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); 
 
 .round { width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--line-strong); background: var(--panel); color: var(--text); font-size: 20px; display: grid; place-items: center; box-shadow: var(--shadow); }
 .round:active { transform: scale(0.96); }
+.round.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); } /* включённый режим (линия к прицелу) */
 .mini { position: relative; background: transparent; border: 1px solid var(--line-strong); border-radius: 8px; width: 30px; height: 30px; padding: 0; color: var(--text); }
 /* На десктопе кнопка компактная, а цель нажатия — 44×44 (невидимая рамка вокруг). */
 .mini::after { content: ""; position: absolute; top: -8px; right: -8px; bottom: -8px; left: -8px; }
@@ -67,9 +68,9 @@ em { font-style: normal; color: var(--digit); }
 
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow); }
 
-/* Кнопки карты — у правого края по центру, под ведущую правую руку (высотомер — у левого края).
- * Зум — одна «таблетка» +/−. */
-#mapBar { position: absolute; right: calc(10px + var(--safe-r)); top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; align-items: center; gap: 12px; z-index: 5; }
+/* Кнопки карты — в правом нижнем углу над панелью, под большой палец ведущей правой руки
+ * (высотомер — у левого края, ⓘ и масштаб — справа вверху). Зум — одна «таблетка» +/−. */
+#mapBar { position: absolute; right: calc(10px + var(--safe-r)); bottom: calc(var(--bar-h, 60px) + 12px + var(--safe-b)); display: flex; flex-direction: column; align-items: center; gap: 12px; z-index: 5; }
 .zoom-pill { display: flex; flex-direction: column; border: 1px solid var(--line-strong); border-radius: 22px; background: var(--panel); box-shadow: var(--shadow); overflow: hidden; }
 .zoom-pill button { width: 44px; height: 44px; padding: 0; border: 0; background: transparent; color: var(--text); font-size: 22px; line-height: 1; display: grid; place-items: center; }
 .zoom-pill button + button { border-top: 1px solid var(--line); }
@@ -83,6 +84,8 @@ em { font-style: normal; color: var(--digit); }
 #rulerBar { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(var(--bar-h) + 8px + var(--safe-b)); z-index: 6; width: min(620px, calc(100% - 16px)); background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow-lg); padding: 8px 10px; }
 #rulerBar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 #rulerBar[hidden] { display: none; }
+/* при линейке панель встаёт над кнопками карты (правый нижний угол) — кнопки поднимаются над ней */
+body.ruler-on #mapBar { bottom: calc(var(--bar-h, 60px) + var(--ruler-h, 60px) + 20px + var(--safe-b)); }
 #rulerText { flex: 1; font: 14px var(--font-mono); font-variant-numeric: tabular-nums; min-width: 160px; }
 #rulerBar button:not(.primary) { background: var(--panel-2); color: var(--text); border: 1px solid var(--line-strong); border-radius: 10px; padding: 8px 10px; }
 

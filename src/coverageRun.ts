@@ -12,7 +12,8 @@ import { emptyResult, mergeChunk, sectorCrop, splitRays } from './coverageCore';
 import type { CoverageChunk, CoverageLine, CoverageResult } from './coverageCore';
 import { coverageHeights } from './coverageStats';
 import type { CoverageShown } from './coverageStats';
-import { drawCoverage, clearCoverageView, redrawCoverage } from './coverageView';
+import { drawCoverage, clearCoverageView, redrawCoverage, setCoverageFill } from './coverageView';
+import { heightIndex } from './coverageStats';
 // ?worker: Vite выбирает формат сам — модуль в dev, классический воркер в сборке (Chrome 68 не умеет module workers).
 import CoverageWorker from './coverage.worker?worker';
 
@@ -49,23 +50,46 @@ export function markInputsChanged(): void {
 /** Радиопараметры расчёта без высоты дрона: событие 'radio' приходит и при смене одной только S.droneH. */
 const radioSig = () => JSON.stringify([effRadio(), effVideoOrNull(), S.antenna]);
 
+// ---------- Радиогоризонт сам ----------
+// Пульт поставлен или сменились аппаратура, антенны, высота — через паузу зона пересчитывается в фоне и рисуется
+// только границами связи (управление и видео; без заливки — карту не закрывает). «✕» на плашке выключает это.
+const AUTO_DELAY_MS = 1200;
+let autoT = 0;
+function autoSoon(): void {
+  clearTimeout(autoT);
+  if (!S.coverage.auto || !S.station) return;
+  autoT = window.setTimeout(() => {
+    if (!S.coverage.auto || !S.station) return;
+    if (running) cancelCoverage(); // расчёт для прежних входных данных больше не нужен
+    void startCoverage({ auto: true });
+  }, AUTO_DELAY_MS);
+}
+
+/** Включить/выключить радиогоризонт сам (настройка в шторке «Зона», «✕» на плашке выключает). */
+export function setAutoCoverage(on: boolean): void {
+  S.coverage.auto = on;
+  if (on) autoSoon(); else clearTimeout(autoT);
+}
+
 /** Подписка на смену пульта и радио. */
 export function initCoverageRun(): void {
   let sig = radioSig();
   const markStale = () => {
     inputsRev++;
-    if (!shown) return;
-    stale = true;
-    notify?.();
+    if (shown) { stale = true; notify?.(); }
+    autoSoon();
   };
-  on('station', markStale);
+  // Пульт убрали — зоны для него больше нет: отменить расчёт и убрать с карты.
+  on('station', () => { if (!S.station) { clearTimeout(autoT); inputsRev++; clearCoverage(); return; } markStale(); });
   on('radio', () => {
     const now = radioSig();
     if (now !== sig) { sig = now; markStale(); return; }
-    // Сменилась только высота дрона (или список сравнения): показываем её, если она посчитана.
+    // Сменилась только высота дрона (или список сравнения): показываем её, если она посчитана; нет — посчитать.
     if (shown) redrawCoverage();
+    if (!shown || !heightIndex(shown.heights, S.droneH).exact) autoSoon();
     notify?.();
   });
+  autoSoon(); // пульт уже стоит (проект восстановлен)
 }
 
 // Пул воркеров создаётся при расчёте и живёт между расчётами (запуск — десятки мс); после минуты простоя гасится.
@@ -92,6 +116,7 @@ export function cancelCoverage(): void {
 }
 
 export function clearCoverage(): void {
+  clearTimeout(autoT); // убрали с карты — отложенный автозапуск не должен вернуть зону сразу же
   cancelCoverage();
   shown = null;
   stale = false;
@@ -148,8 +173,11 @@ function show(c: CoverageShown, rev: number) {
   notify?.();
 }
 
-export async function startCoverage(): Promise<void> {
+/** auto — радиогоризонт, посчитанный сам: только границы; из шторки «Зона» — с заливкой. */
+export async function startCoverage(opts: { auto?: boolean } = {}): Promise<void> {
   if (running || !S.station) return;
+  clearTimeout(autoT);
+  setCoverageFill(!opts.auto);
   const st = { ...S.station };
   const center: LatLon = { lat: st.lat, lon: st.lon };
   const heights = coverageHeights(S.coverage.heights, S.droneH, S.coverage.compare);
@@ -170,7 +198,7 @@ export async function startCoverage(): Promise<void> {
   const vRadio = S.video.enabled ? { ...effVideo() } : null;
   // Частота влияет на дифракцию, поэтому у видео свой прогон; обе линии считаются в одной части на одной вырезке.
   // Направленная антенна на земле: бюджет — с пиковым усилением (effRadio без азимута), по лучам — диаграмма.
-  const aimOf = (line: 'rc' | 'video') => (directional(S.antenna[line]) ? { antenna: { ...S.antenna[line] }, heading: S.antenna.heading } : undefined);
+  const aimOf = (line: 'rc' | 'video') => (directional(S.antenna[line]) ? { antenna: { ...S.antenna[line] }, heading: S.antenna[line].heading } : undefined);
   const lines: CoverageLine[] = [radio, ...(vRadio ? [vRadio] : [])].map((rp, i) => ({ freqMHz: rp.freqMHz, budget: budget(rp), k: rp.k, fade: rp.fadeMarginDb, aim: aimOf(i === 0 ? 'rc' : 'video') }));
   const rays = heights.length <= 2 ? 720 : 360;
   const base = { lat: center.lat, lon: center.lon, antH: st.antH, heights, mode, radius, step, rays, exact: false, lines };
