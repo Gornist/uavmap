@@ -46,7 +46,7 @@ node scripts/smoke.mjs http://localhost:5174/   # дымовой тест в hea
 
 ## Данные
 
-- Рельеф: [Mapterhorn](https://mapterhorn.com/) — Terrarium WebP 512 px (HTTP/2), Copernicus GLO-30 и национальные модели рельефа; лицензии источников — [mapterhorn.com/attribution](https://mapterhorn.com/attribution) (в основном CC BY 4.0 и общественное достояние).
+- Рельеф: [Mapterhorn](https://mapterhorn.com/) — Terrarium WebP 512 px (HTTP/2), Copernicus GLO-30 и национальные модели рельефа; лицензии источников — [mapterhorn.com/attribution](https://mapterhorn.com/attribution) (в основном CC BY 4.0 и общественное достояние). Если Mapterhorn не отвечает — запасной источник [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) (Mapzen: SRTM, GMTED и др.). Вокруг поставленного пульта рельеф радиусом зоны подкачивается в кеш заранее.
 - Подложки: Esri World Imagery, OpenTopoMap (CC-BY-SA), OpenStreetMap. Подписи и дороги — векторные тайлы OpenFreeMap (схема OpenMapTiles, данные © участники OpenStreetMap, ODbL); если они не грузятся — растровые подписи Esri. Соблюдайте условия использования провайдеров тайлов.
 
 ## Стек

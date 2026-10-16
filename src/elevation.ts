@@ -3,6 +3,7 @@
 // Расчёты работают с виртуальными тайлами 256 px (см. demTiles.ts): каждый — четверть тайла источника 512 px.
 import { LatLon, lonLatToPixel, interpolate, destination, R_EARTH, D2R } from './geo';
 import { DEM_MAX_Z, SHARED_DEM_MAX_Z, SRC_TILE, TILE, demTileUrl, demTileSpan, demTileCount, srcOf } from './demTiles';
+import { PRIMARY_TIMEOUT_MS, HEDGE_MS, primaryDown, reportPrimary, awsStitched, cachedPrimary } from './demNet';
 
 // Кеш тайлов — LRU по порядку Map: при обращении тайл переставляется в конец, вытесняется самый давний.
 // 200 тайлов × 256 КБ (Float32 256×256) ≈ 50 МБ. Мозаику зоны (до 256 тайлов) держат свои ссылки — кеш её не ограничивает.
@@ -36,10 +37,10 @@ export function setLocalDemProvider(fn: LocalDemProvider | null) {
 const NET_TIMEOUT_MS = 10000;
 const NET_TRIES = 2;
 
-function fetchBlob(url: string): Promise<Blob> {
+function fetchBlob(url: string, timeoutMs = NET_TIMEOUT_MS): Promise<Blob> {
   const ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, rej) => { timer = setTimeout(() => { ac?.abort(); rej(new Error('timeout')); }, NET_TIMEOUT_MS); });
+  const timeout = new Promise<never>((_, rej) => { timer = setTimeout(() => { ac?.abort(); rej(new Error('timeout')); }, timeoutMs); });
   const req = fetch(url, ac ? { signal: ac.signal } : undefined)
     .then((r) => (r.ok ? r.blob() : Promise.reject(r.status)));
   return Promise.race([req, timeout]).then(
@@ -51,17 +52,54 @@ function fetchBlob(url: string): Promise<Blob> {
 /** Сколько ждать общий источник, прежде чем параллельно идти своим запросом. */
 const SHARED_WAIT_MS = 250;
 
-/** Свой запрос со страницы (видит Service Worker и офлайн-кеш); один повтор при зависании/обрыве. Координаты источника. */
+/** Загрузка картинки с одним повтором при зависании/обрыве; HTTP-статус не повторяем (бросается числом). */
+async function fetchBlobRetry(url: string): Promise<Blob> {
+  let last: unknown = new Error('нет попыток');
+  for (let i = 0; i < NET_TRIES; i++) {
+    try { return await fetchBlob(url); } catch (e) { last = e; if (typeof e === 'number') throw e; }
+  }
+  throw last;
+}
+
+/** Тайл из запасного источника (четыре тайла AWS, склеенные в 512 px). Не отклоняется: сбой — null. */
+async function awsTile(z: number, x: number, y: number): Promise<Float32Array | null> {
+  try {
+    const c = await awsStitched(z, x, y, fetchBlobRetry);
+    return c ? decode(c) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Разбор картинки основного источника; битая картинка — null, а не исключение. */
+async function decodeBlob(b: Blob): Promise<Float32Array | null> {
+  try { return decode(await createImageBitmap(b)); } catch { return null; }
+}
+
+/**
+ * Свой запрос со страницы (видит Service Worker и офлайн-кеш). Координаты источника.
+ * Основной источник — одна попытка с таймаутом PRIMARY_TIMEOUT_MS. Молчит дольше HEDGE_MS — параллельно
+ * запасной AWS (demNet.ts), берём первый ответ: зависание основного стоит ~1,5 с, а не таймаут. Завис или 5xx —
+ * сбой для предохранителя (после двух подряд основной какое-то время не спрашиваем). 4xx — «тайла нет».
+ */
 async function ownFetch(z: number, x: number, y: number): Promise<Float32Array | null> {
   const url = demTileUrl(z, x, y);
-  for (let i = 0; i < NET_TRIES; i++) {
-    try {
-      return decode(await createImageBitmap(await fetchBlob(url)));
-    } catch (e) {
-      if (typeof e === 'number') return null; // HTTP-статус: тайла нет, повтор не поможет
-    }
+  if (primaryDown()) {
+    // Основной «лежит», но его тайлы в кеше (офлайн-район, подкачка) — берём их, в запасной только за недостающими.
+    const hit = await cachedPrimary(url);
+    const t = hit ? await decodeBlob(hit) : null;
+    return t ?? awsTile(z, x, y);
   }
-  return null;
+  // Обе ветки гонки не отклоняются: иначе firstOf (только fulfilled) мог бы ждать вечно, а кеш — хранить ошибку.
+  const primary: Promise<Float32Array | null | 'missing'> = fetchBlob(url, PRIMARY_TIMEOUT_MS).then(
+    async (b) => { reportPrimary(true); return decodeBlob(b); },
+    (e) => { if (typeof e === 'number' && e < 500) return 'missing' as const; reportPrimary(false); return null; },
+  );
+  const quick = await Promise.race([primary, new Promise<undefined>((r) => setTimeout(r, HEDGE_MS))]);
+  if (quick === 'missing') return null;
+  if (quick) return quick;
+  if (quick === null) return awsTile(z, x, y); // основной ответил сбоем быстро
+  return firstOf(primary.then((v) => (v === 'missing' ? null : v)), awsTile(z, x, y));
 }
 
 /** Первый непустой результат из двух; null — если оба пустые. */
@@ -75,7 +113,8 @@ function firstOf(a: Promise<Float32Array | null>, b: Promise<Float32Array | null
 
 /** Тайл источника (SRC_TILE × SRC_TILE). */
 async function srcFromNetwork(z: number, x: number, y: number): Promise<Float32Array | null> {
-  if (!sharedDem || z > SHARED_DEM_MAX_Z) return ownFetch(z, x, y);
+  // Основной источник недоступен — воркер горизонталей качает с него же и повиснет: сразу свой запрос (запасной).
+  if (!sharedDem || z > SHARED_DEM_MAX_Z || primaryDown()) return ownFetch(z, x, y);
   // Общий источник: тайл уже мог скачать и разобрать воркер горизонталей/отмывки, разбор не в главном потоке.
   // Не отдал (сбой или старый Chrome: воркер из blob не видит Service Worker и офлайн-кеш) — свой запрос.
   // Ответ общего источника ограничен по времени: воркер мог его потерять — тогда «нет» вместо вечного ожидания.
@@ -118,8 +157,8 @@ async function fromNetwork(z: number, x: number, y: number): Promise<Float32Arra
   return out;
 }
 
-/** Разбор тайла Terrarium; не того размера, что у источника, — null (за тайл не принимаем). */
-function decode(img: ImageBitmap): Float32Array | null {
+/** Разбор тайла Terrarium (картинка или склеенный холст); не того размера, что у источника, — null (за тайл не принимаем). */
+function decode(img: ImageBitmap | HTMLCanvasElement | OffscreenCanvas): Float32Array | null {
   const w = img.width, h = img.height;
   if (w !== SRC_TILE || h !== SRC_TILE) return null;
   const c = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(w, h) : Object.assign(document.createElement('canvas'), { width: w, height: h });

@@ -17,6 +17,7 @@ import { initRuler } from './ruler';
 import { initCoverage, openCoverageSheet } from './coverageSheet';
 import { findBestSpot } from './bestSpot';
 import { initMenu, preloadUi } from './menu/index';
+import { initPrefetch } from './prefetch';
 import { initContours } from './contours';
 import { initPwa } from './pwa';
 import { initMyMaps } from './mymaps';
@@ -70,6 +71,7 @@ function start() {
   initRuler();
   initCoverage();
   initStation();
+  initPrefetch(); // рельеф района вокруг пульта — в кеш, пока сеть отвечает
   initContours();
   initMyMaps();
   applyMapStyle();

@@ -123,7 +123,7 @@ function lossInfo(l: NonNullable<typeof last>, hh: number): { features: GeoJSON.
   }
   const features = pts.map((p): GeoJSON.Feature => {
     const q = interpolate(st, l.r.target, p.d / l.r.dist);
-    return { type: 'Feature', geometry: { type: 'Point', coordinates: [q.lon, q.lat] }, properties: { label: `${p.label} · ${km(p.d)}` } };
+    return { type: 'Feature', geometry: { type: 'Point', coordinates: [q.lon, q.lat] }, properties: { label: `${p.label} · ${km(p.d)}`, d: p.d } };
   });
   const first = pts.reduce<typeof pts[0] | null>((a, p) => (!a || p.d < a.d ? p : a), null);
   const text = first ? ` · <span class="status-none">${first.text} <span class="num">${km(first.d)}</span></span>` : '';
@@ -282,11 +282,12 @@ export function addLinkLayers() {
   map.addLayer({ id: 'ov-link', type: 'line', source: 'link', filter: ['==', ['get', 'dash'], 0], paint: { 'line-color': ['get', 'color'], 'line-width': 3, 'line-opacity': ['coalesce', ['get', 'op'], 1] } });
   map.addLayer({ id: 'ov-link-dash', type: 'line', source: 'link', filter: ['==', ['get', 'dash'], 1], paint: { 'line-color': ['get', 'color'], 'line-width': 3, 'line-opacity': ['coalesce', ['get', 'op'], 1], 'line-dasharray': [2, 2] } });
   // Где по пути пропадёт связь: точка на линии и подпись на тёмной обводке (читается и на снимке, и на топо).
+  // Близкие события (склон и потеря связи рядом): точки — все, подпись при наложении — у ближнего к пульту.
   map.addSource('link-loss', { type: 'geojson', data: fc() });
   map.addLayer({ id: 'ov-loss', type: 'circle', source: 'link-loss', paint: { 'circle-radius': 6, 'circle-color': statusCss('none'), 'circle-stroke-color': '#fff', 'circle-stroke-width': 2 } });
   map.addLayer({
     id: 'ov-loss-label', type: 'symbol', source: 'link-loss',
-    layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Regular'], 'text-size': 13, 'text-anchor': 'top', 'text-offset': [0, 0.8], 'text-max-width': 30, 'text-allow-overlap': true },
+    layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Regular'], 'text-size': 13, 'text-anchor': 'top', 'text-offset': [0, 0.8], 'text-max-width': 30, 'symbol-sort-key': ['get', 'd'], 'text-ignore-placement': false },
     paint: { 'text-color': '#fff', 'text-halo-color': 'rgba(0, 0, 0, 0.85)', 'text-halo-width': 2 },
   });
 }

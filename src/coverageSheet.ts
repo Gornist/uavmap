@@ -15,6 +15,7 @@ import { openOfflineSheet } from './offline';
 import { CoverageShown, CovLine, coverageHeights, heightIndex, lineOf, paletteIndex, sameHeights, stats } from './coverageStats';
 import { PALETTE, initCoverageView, redrawCoverage, setCoverageOpacity } from './coverageView';
 import { shown, stale, running, lastError, initCoverageRun, setCoverageListener, markInputsChanged, startCoverage, cancelCoverage, clearCoverage } from './coverageRun';
+import { prefetchSoon } from './prefetch';
 
 /** Названия цветов PALETTE (режим «нужная высота») — легенда словами, не только цветом. */
 const PALETTE_NAME = ['салатовый', 'зелёный', 'бирюзовый', 'голубой', 'синий', 'сине-фиолетовый', 'фиолетовый', 'пурпурный'];
@@ -103,7 +104,7 @@ function render() {
   // ----- главное: радиус, «Рассчитать», результат -----
   body.appendChild(sec('Радиус'));
   body.appendChild(chips(COVERAGE_RADII_KM.map((km) => ({
-    text: `${km} км`, on: cov.radius === km * 1000, click: () => { cov.radius = km * 1000; saveInput(); },
+    text: `${km} км`, on: cov.radius === km * 1000, click: () => { cov.radius = km * 1000; saveInput(); prefetchSoon(); },
   }))));
 
   const row = h('<div class="row"></div>');

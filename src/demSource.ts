@@ -4,7 +4,8 @@
 import maplibregl from 'maplibre-gl';
 import mlcontour from 'maplibre-contour';
 import { DEM_URL, SHARED_DEM_MAX_Z, demTileUrl } from './demTiles';
-import { fetchBuffer } from './netTiles';
+import { fetchBuffer, HttpStatusError } from './netTiles';
+import { PRIMARY_TIMEOUT_MS, primaryDown, reportPrimary, awsStitched, canvasPng, cachedPrimary } from './demNet';
 import { setSharedDem } from './elevation';
 
 /**
@@ -72,10 +73,30 @@ maplibregl.addProtocol(HILLSHADE_PROTO, async (params, ac) => {
   const m = /^uavdem:\/\/(\d+)\/(\d+)\/(\d+)/.exec(params.url);
   if (!m) throw new Error(`Неверный адрес тайла рельефа: ${params.url}`);
   const [z, x, y] = [+m[1], +m[2], +m[3]];
-  try {
-    return await bounded((inner) => demSource.sharedDemProtocolV4({ ...params, url: `${demSource.sharedDemProtocolId}://${z}/${x}/${y}` }, inner), ac, HILLSHADE_SHARED_MS);
-  } catch (e) {
-    if (ac.signal.aborted) throw e; // тайл больше не нужен (карту сдвинули)
-    return { data: await fetchBuffer(demTileUrl(z, x, y), ac.signal) }; // с таймаутом и повтором
+  // Основной источник недоступен (предохранитель в demNet.ts) — общий источник тоже качает с него: сразу запасной.
+  if (!primaryDown()) {
+    try {
+      return await bounded((inner) => demSource.sharedDemProtocolV4({ ...params, url: `${demSource.sharedDemProtocolId}://${z}/${x}/${y}` }, inner), ac, HILLSHADE_SHARED_MS);
+    } catch (e) {
+      if (ac.signal.aborted) throw e; // тайл больше не нужен (карту сдвинули)
+    }
+    try {
+      const data = await fetchBuffer(demTileUrl(z, x, y), ac.signal, PRIMARY_TIMEOUT_MS, 1);
+      reportPrimary(true);
+      return { data };
+    } catch (e) {
+      if (ac.signal.aborted) throw e;
+      if (e instanceof HttpStatusError && e.status < 500) throw e; // тайла нет — нет и в запасном
+      reportPrimary(false);
+    }
   }
+  else {
+    // Основной «лежит», но тайл может быть в кеше (офлайн-район, подкачка) — он лучше запасного.
+    const hit = await cachedPrimary(demTileUrl(z, x, y));
+    if (hit) return { data: await hit.arrayBuffer() };
+  }
+  // Запасной: четыре тайла AWS, склеенные в 512 px и закодированные в PNG (раз уж MapLibre ждёт картинку).
+  const c = await awsStitched(z, x, y, (url) => fetchBuffer(url, ac.signal).then((b) => new Blob([b])));
+  if (!c) throw new Error('Нет рельефа ни в основном, ни в запасном источнике');
+  return { data: await canvasPng(c) };
 });

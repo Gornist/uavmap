@@ -1,9 +1,11 @@
 // Service Worker (injectManifest). Без библиотек: чистый Cache API.
 // Кеши: uavmap-shell-<hash> (оболочка), uavmap-dem-v1 (районы, пишет offline.ts — не вытесняется),
-// uavmap-dem-runtime (просмотренные тайлы рельефа, лимит). Глифы карты (public/fonts) — в оболочке.
+// uavmap-dem-runtime (просмотренные тайлы рельефа, в т. ч. запасного источника AWS — demNet.ts, лимит).
+// Глифы карты (public/fonts) — в оболочке.
 // Подложки Esri/OSM/OpenTopoMap намеренно НЕ кешируются (условия провайдеров).
 
 import { DEM_PREFIX } from './demTiles';
+import { AWS_PREFIX } from './demNet';
 
 const sw = self as unknown as ServiceWorkerGlobalScope;
 
@@ -120,7 +122,7 @@ sw.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
   const url = req.url;
-  if (url.startsWith(DEM_PREFIX)) event.respondWith(demTile(req));
+  if (url.startsWith(DEM_PREFIX) || url.startsWith(AWS_PREFIX)) event.respondWith(demTile(req));
   else if (req.mode === 'navigate' && url.startsWith(sw.registration.scope)) event.respondWith(shell(req));
   else if (shellUrls.includes(url.split('?')[0].split('#')[0])) event.respondWith(shell(req));
 });

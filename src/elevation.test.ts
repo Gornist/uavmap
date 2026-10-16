@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DemGrid, DemMissingError, sampleGrid, sampleRay, demPlan, demPixelM, fetchGrid, setSharedDem, elevationAt } from './elevation';
+import { resetPrimary, reportPrimary, AWS_PREFIX } from './demNet';
 import { lonLatToPixel, R_EARTH } from './geo';
 
 /** Сетка 4×3 с линейным полем f(x, y) = 10·x + 100·y (x,y — индексы ячеек): билинейная интерполяция точна. */
@@ -121,28 +122,70 @@ describe('demPlan', () => {
 
 
 describe('загрузка тайлов: зависший запрос', () => {
-  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); resetPrimary(); });
 
   // Terrarium: R*256 + G + B/256 − 32768 → пиксель (128, 100, 0) = 100 м.
-  function stubCanvas() {
-    vi.stubGlobal('createImageBitmap', async () => ({ width: 512, height: 512 }));
+  function stubCanvas(size = 512) {
+    vi.stubGlobal('createImageBitmap', async () => ({ width: size, height: size }));
     vi.stubGlobal('OffscreenCanvas', class {
+      constructor(public width: number, public height: number) {}
       getContext() {
         return { drawImage() {}, getImageData: () => ({ data: new Uint8ClampedArray(512 * 512 * 4).map((_, i) => [128, 100, 0, 255][i % 4]) }) };
       }
     });
   }
 
-  it('повторяет запрос, зависший дольше таймаута, и не ждёт вечно', async () => {
+  it('основной источник завис — тайл склеивается из четырёх тайлов запасного (AWS)', async () => {
     vi.useFakeTimers();
-    stubCanvas();
-    let calls = 0;
-    vi.stubGlobal('fetch', () => (++calls === 1 ? new Promise(() => {}) : Promise.resolve({ ok: true, blob: async () => new Blob() })));
+    stubCanvas(256); // тайлы AWS — 256 px
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', (u: string) => { urls.push(u); return u.startsWith(AWS_PREFIX) ? Promise.resolve({ ok: true, blob: async () => new Blob() }) : new Promise(() => {}); });
     const g = fetchGrid([{ lat: 10.123, lon: 20.456 }], 10, 0);
-    await vi.advanceTimersByTimeAsync(21000);
+    await vi.advanceTimersByTimeAsync(7000);
     const r = await g;
-    expect(calls).toBe(2);
+    expect(urls.filter((u) => u.startsWith(AWS_PREFIX))).toHaveLength(4);
+    expect(urls.filter((u) => u.startsWith(AWS_PREFIX)).every((u) => u.includes('/terrarium/10/'))).toBe(true); // источник z9 → AWS z10
     expect(r.data[0]).toBe(100);
+  });
+
+  it('основной молчит — запасной запрашивается через 1,5 с, тайл есть задолго до таймаута', async () => {
+    vi.useFakeTimers();
+    stubCanvas(256);
+    vi.stubGlobal('fetch', (u: string) => (u.startsWith(AWS_PREFIX) ? Promise.resolve({ ok: true, blob: async () => new Blob() }) : new Promise(() => {})));
+    let done = false;
+    const g = fetchGrid([{ lat: 50.5, lon: 50.5 }], 10, 0).then((r) => { done = true; return r; });
+    await vi.advanceTimersByTimeAsync(1400);
+    expect(done).toBe(false);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(done).toBe(true);
+    expect((await g).data[0]).toBe(100);
+    await vi.advanceTimersByTimeAsync(6000); // основной дождался таймаута — без висящих промисов
+  });
+
+  it('предохранитель открыт, но тайл основного в кеше (офлайн-район) — из кеша, без запасного', async () => {
+    stubCanvas();
+    reportPrimary(false); reportPrimary(false); // основной «лежит»
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', (u: string) => { urls.push(u); return new Promise(() => {}); });
+    vi.stubGlobal('caches', { match: async () => ({ ok: true, blob: async () => new Blob() }) });
+    const r = await fetchGrid([{ lat: 55.5, lon: 55.5 }], 10, 0);
+    expect(r.data[0]).toBe(100);
+    expect(urls).toHaveLength(0);
+  });
+
+  it('после двух сбоев основного — сразу запасной, без ожидания таймаута', async () => {
+    vi.useFakeTimers();
+    stubCanvas(256);
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', (u: string) => { urls.push(u); return u.startsWith(AWS_PREFIX) ? Promise.resolve({ ok: true, blob: async () => new Blob() }) : new Promise(() => {}); });
+    const g1 = fetchGrid([{ lat: 40.5, lon: 40.5 }, { lat: 40.5, lon: 41.5 }], 10, 0); // два тайла источника
+    await vi.advanceTimersByTimeAsync(7000);
+    await g1;
+    const before = urls.filter((u) => !u.startsWith(AWS_PREFIX)).length;
+    const g2 = fetchGrid([{ lat: 45.5, lon: 45.5 }], 10, 0);
+    await vi.advanceTimersByTimeAsync(10);
+    await g2;
+    expect(urls.filter((u) => !u.startsWith(AWS_PREFIX)).length).toBe(before); // к основному больше не ходили
   });
 
   it('ответ сервера с ошибкой не повторяет — сразу «нет данных»', async () => {
@@ -153,7 +196,7 @@ describe('загрузка тайлов: зависший запрос', () => {
     expect(calls).toBe(1);
   });
 
-  it('два зависания подряд — ошибка «нет данных», а не вечная загрузка', async () => {
+  it('висят оба источника — ошибка «нет данных», а не вечная загрузка', async () => {
     vi.useFakeTimers();
     stubCanvas();
     vi.stubGlobal('fetch', () => new Promise(() => {}));
@@ -165,7 +208,7 @@ describe('загрузка тайлов: зависший запрос', () => {
 });
 
 describe('общий источник тайлов (demSource) и запасной запрос', () => {
-  afterEach(() => { setSharedDem(null); vi.unstubAllGlobals(); });
+  afterEach(() => { setSharedDem(null); vi.unstubAllGlobals(); resetPrimary(); });
   const tile = (v: number) => ({ width: 512, height: 512, data: new Float32Array(512 * 512).fill(v) });
 
   it('тайл из общего источника — свой запрос не нужен', async () => {
