@@ -13,7 +13,7 @@
 .maplibregl-ctrl-attrib-button { background-repeat: no-repeat; background-position: center; background-color: rgba(255, 255, 255, 0.85) !important; }
 /* На сенсорном экране цель нажатия 44×44 — невидимой рамкой вокруг значка. */
 @media (pointer: coarse) { .maplibregl-ctrl-attrib-button::after { content: ""; position: absolute; top: -10px; right: -10px; bottom: -10px; left: -10px; } }
-/* Масштаб — сверху слева, правее значка ⓘ: у левого края по центру стоят кнопки карты. */
+/* Масштаб — сверху слева, правее значка ⓘ (внизу его закрывали бы строка связи и панели). */
 .maplibregl-ctrl-bottom-left { top: calc(4px + var(--safe-t)); bottom: auto !important; left: calc(40px + var(--safe-l)); }
 .maplibregl-ctrl-bottom-left .maplibregl-ctrl-scale { margin: 8px 0 0 6px; }
 @media (max-width: 640px), (max-height: 520px) and (orientation: landscape) {
@@ -72,9 +72,9 @@
 body.ruler-on .cross-chip { display: none; }
 @media (pointer: coarse) { .cross-chip { min-height: 44px; border-radius: 22px; } }
 
-/* ---------- Высотомер (altimeter.ts): у правого края, низом к строке связи — под большой палец ----------
+/* ---------- Высотомер (altimeter.ts): у левого края (кнопки карты — у правого, под ведущую руку) ----------
  * Высота шкалы ограничена (360 px, на телефоне 300): во весь экран она закрывала карту справа целиком. */
-.altimeter { position: absolute; z-index: 5; right: calc(10px + var(--safe-r)); bottom: calc(var(--bar-h) + 20px + var(--safe-b)); height: 360px; max-height: calc(100% - var(--bar-h) - 84px - var(--safe-t) - var(--safe-b)); width: 40px; display: flex; flex-direction: column; align-items: center; touch-action: none; -webkit-user-select: none; user-select: none; cursor: ns-resize; outline: none; }
+.altimeter { position: absolute; z-index: 5; left: calc(10px + var(--safe-l)); bottom: calc(var(--bar-h) + 20px + var(--safe-b)); height: 360px; max-height: calc(100% - var(--bar-h) - 84px - var(--safe-t) - var(--safe-b)); width: 40px; display: flex; flex-direction: column; align-items: center; touch-action: none; -webkit-user-select: none; user-select: none; cursor: ns-resize; outline: none; }
 .altimeter[hidden], body.sheet-open .altimeter, body.ruler-on .altimeter { display: none; }
 .alt-cap { flex: none; margin-top: 4px; font-size: 11px; text-align: center; line-height: 1.2; font-weight: 600; color: #fff; white-space: nowrap; text-shadow: 0 0 3px #000, 0 0 2px #000, 0 0 1px #000; }
 .alt-track { position: relative; flex: 1 1 auto; width: 100%; background: rgba(20, 18, 15, 0.35); border: 2px solid rgba(20, 18, 15, 0.85); border-radius: 10px; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.55); }
@@ -130,7 +130,7 @@ table.rt td:last-child { width: 1%; }
   .ls-need { font-size: 14px; }
   .ls-prof { padding: 0 12px; }
   /* строка связи на всю ширину — высотомер над ней */
-  .altimeter { right: calc(8px + var(--safe-r)); height: 300px; }
+  .altimeter { left: calc(8px + var(--safe-l)); height: 300px; }
   .cross-chip { font-size: 13px; padding: 4px 10px; max-width: calc(100vw - 216px - var(--safe-l) - var(--safe-r)); }
   .cc-more { display: none; } /* узко: стрелка не влезает, чип и так кнопка */
   #crossChipText { overflow: hidden; text-overflow: ellipsis; }
@@ -141,16 +141,15 @@ table.rt td:last-child { width: 1%; }
   #bottomBar { padding-top: 8px; padding-bottom: calc(8px + var(--safe-b)); }
   #bottomBar button { flex: 1 1 0; padding: 0 8px; }
   #bottomBar #btnMenu { margin-left: 0; }
-  #linkStrip { left: calc(8px + var(--safe-l)); transform: none; width: min(380px, 44vw); padding: 6px 8px; }
+  #linkStrip { left: auto; right: calc(8px + var(--safe-r)); transform: none; width: min(380px, 44vw); padding: 6px 8px; }
   .ls-offer .ls-x { order: 1; }
   .ls-offer .primary { order: 2; flex: 1 1 100%; }
-  .cross-chip { top: auto; bottom: calc(50% + 30px); } /* чип — над прицелом: снизу слева стоит строка связи */
-  /* кнопки карты здесь — ряд внизу справа; высотомер — у самого края над ними */
-  .altimeter { right: calc(12px + var(--safe-r)); bottom: calc(var(--bar-h) + 62px + var(--safe-b)); height: auto; max-height: none; top: calc(6px + var(--safe-t)); }
+  .cross-chip { top: auto; bottom: calc(50% + 30px); } /* чип — над прицелом: снизу справа стоит строка связи */
+  /* кнопки карты здесь — ряд внизу слева; высотомер — у самого края над ними (сверху — ⓘ и масштаб) */
+  .altimeter { left: calc(12px + var(--safe-l)); bottom: calc(var(--bar-h) + 62px + var(--safe-b)); height: auto; max-height: none; top: calc(44px + var(--safe-t)); }
   .alt-name { margin-bottom: 18px; }
-  .alt-name + .alt-track + .alt-cap { margin-top: 18px; white-space: nowrap; align-self: flex-end; } /* у края экрана — растёт влево */
+  .alt-name + .alt-track + .alt-cap { margin-top: 18px; white-space: nowrap; align-self: flex-start; } /* у края экрана — растёт вправо */
   .alt-cap br { display: none; }
-  body:not(.sheet-open) .cov-pill { right: calc(70px + var(--safe-r)); } /* справа сверху — высотомер */
   .ls-status { padding: 0 2px 6px; }
   .ls-verdict { font-size: 17px; }
   .ls-need { font-size: 13px; margin-top: 1px; }
