@@ -7,21 +7,18 @@ import { LatLon, distance, bearing, destination } from './geo';
 import { elevationAt, profile, demPlan } from './elevation';
 import { analyzePair, minHeightForLink, LinkResult, PairResult, LineId, PRESETS, RadioParams } from './radio';
 import { withClutter } from './clutter';
-import { directional, patternLoss, rumb } from './antenna';
+import { aimRadio, directionalLines, rumb } from './antenna';
 import { antennaPanel, BEAM_COLOR } from './antennaUi';
 import { formatCoords } from './coords';
 import { presetName, freqName, LineNeed } from './verdict';
+import { prepareOffline, prepNote, offlineJobText, cancelOfflineJob, onOfflineJob } from './offline';
 
 /**
- * Антенна на земле в радиопараметрах линии: у направленной усиление наземной стороны (у управления — передатчик
- * пульта, у видео — приёмник) — по диаграмме в направлении az; без az — пиковое (антенна смотрит на цель).
+ * Антенна на земле в радиопараметрах линии (см. aimRadio): направленная — по диаграмме в направлении az.
+ * С наклоном / вертикальной диаграммой параметры несут aim, и поправку по углу места на дрон досчитывает analyzeLink
+ * для каждой высоты и дальности — поэтому их можно передавать в minHeight*, lossAlong, analyzePair как есть.
  */
-export function aimAt(p: RadioParams, line: LineId, az?: number): RadioParams {
-  const a = S.antenna[line];
-  if (!directional(a)) return p;
-  const g = a.gainDbi + (az === undefined ? 0 : patternLoss(a, az, a.heading));
-  return line === 'rc' ? { ...p, txGainDbi: g } : { ...p, rxGainDbi: g };
-}
+export const aimAt = (p: RadioParams, line: LineId, az?: number): RadioParams => aimRadio(p, line, S.antenna[line], az);
 
 /** Радиопараметры с учётом местности и антенны у пульта (az — направление на цель) — их и нужно передавать в расчёт. */
 export const effRadio = (az?: number) => aimAt(withClutter(S.radio, S.clutter), 'rc', az);
@@ -29,6 +26,8 @@ export const effRadio = (az?: number) => aimAt(withClutter(S.radio, S.clutter), 
 export const effVideo = (az?: number) => aimAt(withClutter(S.video.radio, S.clutter), 'video', az);
 /** Видео для расчёта: null, если линия выключена. */
 export const effVideoOrNull = (az?: number): RadioParams | null => (S.video.enabled ? effVideo(az) : null);
+/** Линии, у которых направленная антенна на земле учитывается (видео — только включённое). */
+export const activeAntennaLines = (): LineId[] => directionalLines(S.antenna, S.video.enabled);
 
 export let stationGround: number | null = null;
 let stationMarker: maplibregl.Marker | null = null;
@@ -106,8 +105,7 @@ function renderAim() {
   }
   const st = S.station;
   const feats: GeoJSON.Feature[] = [];
-  const lines = (['rc', 'video'] as const).filter((l) => directional(S.antenna[l]) && (l === 'rc' || S.video.enabled));
-  if (st) for (const l of lines) {
+  if (st) for (const l of activeAntennaLines()) {
     const { beamDeg: beam, heading } = S.antenna[l];
     const pts: [number, number][] = [[st.lon, st.lat]];
     for (let a = -beam / 2; a <= beam / 2 + 1e-9; a += Math.max(1, beam / 30)) {
@@ -118,7 +116,10 @@ function renderAim() {
     feats.push({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [pts] }, properties: { color: BEAM_COLOR[l] } });
     // У края луча, а не на оси: на оси (антенна на прицел) подпись легла бы на прицел и линию связи.
     const tip = destination(st, heading + beam / 2, AIM_R * 1.06);
-    const label = `${l === 'rc' ? 'Упр.' : 'Видео'} ${Math.round(heading)}° ${rumb(heading)}`;
+    // Наклон — рядом с азимутом (без наклона подпись прежняя). Только символы из своих глифов карты
+    // (латиница и кириллица, public/fonts): без стрелок и типографского минуса.
+    const tilt = Math.round(S.antenna[l].tiltDeg ?? 0);
+    const label = `${l === 'rc' ? 'Упр.' : 'Видео'} ${Math.round(heading)}° ${rumb(heading)}${tilt ? ` · наклон ${tilt}°` : ''}`;
     feats.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [tip.lon, tip.lat] }, properties: { color: BEAM_COLOR[l], label } });
   }
   setGeo('aim', fc(feats));
@@ -138,19 +139,23 @@ function showStationSheet() {
   if (!S.station) return;
   const st = S.station;
   const c = formatCoords(st.lat, st.lon, S.coordFormat);
+  let unwatch: (() => void) | null = null;
   const b = openSheet('📡 Пульт', `
     <div class="kv">
       <div><small>Рельеф</small><b>${stationGround !== null ? Math.round(stationGround) + ' м' : '…'}</b></div>
       <div><small>${c.label}</small><b>${c.short}</b></div>
     </div>
     <label class="field st-ant"><span>Антенна над землёй, м</span><input id="stAnt" type="text" inputmode="decimal" value="${st.antH}"></label>
+    <h4 class="st-ant-h">Без сети</h4>
+    <p class="hint st-off" id="stOffNote"></p>
+    <div class="row"><button class="primary" id="stPrep" type="button"></button></div>
     <h4 class="st-ant-h">Антенны</h4>
     <div id="stAnts"></div>
     <div class="row">
       <button class="ghost" id="stGo">Показать</button>
       <button class="ghost" id="stMove">Пульт сюда</button>
       <button class="danger" id="stDel">Убрать пульт</button>
-    </div>`);
+    </div>`, () => unwatch?.());
   // Антенна пульта: 0–100 м; неверное значение откатывается с подсказкой.
   const ant = b.querySelector('#stAnt') as HTMLInputElement;
   const parseAnt = () => { const v = parseFloat(ant.value.replace(',', '.')); return Number.isFinite(v) && v >= 0 && v <= 100 ? v : null; };
@@ -160,6 +165,17 @@ function showStationSheet() {
   const ants = b.querySelector('#stAnts') as HTMLElement;
   const drawAnts = () => { ants.innerHTML = ''; antennaPanel(ants, drawAnts); };
   drawAnts();
+  // «Подготовить без сети»: район вокруг пульта для расчёта и карты (offline.ts); пока качается — «Отменить (N%)».
+  const prep = b.querySelector('#stPrep') as HTMLButtonElement, note = b.querySelector('#stOffNote') as HTMLElement;
+  const drawPrep = () => {
+    const t = offlineJobText();
+    prep.textContent = t ? `Отменить (${t})` : 'Подготовить без сети';
+    prep.className = t ? 'ghost' : 'primary';
+    note.textContent = t ? 'Скачиваю рельеф вокруг пульта…' : prepNote();
+  };
+  drawPrep();
+  unwatch = onOfflineJob(drawPrep);
+  prep.addEventListener('click', () => { if (offlineJobText()) cancelOfflineJob(); else void prepareOffline(); });
   b.querySelector('#stGo')!.addEventListener('click', () => map.flyTo({ center: [st.lon, st.lat] }));
   b.querySelector('#stMove')!.addEventListener('click', () => { setStation(center()); toast('Пульт перенесён в прицел'); });
   b.querySelector('#stDel')!.addEventListener('click', () => {
@@ -233,5 +249,6 @@ export function applyPreset(id: string, line?: LineId) {
 
 // Маркер пульта — до живой строки (live.ts подписывается на 'station' следом).
 on('station', () => renderStation());
-// Луч антенны зависит и от радио (видео включили/выключили).
+// Луч у пульта: антенны сменились или видео включили/выключили (сам пульт перерисовывает его через 'station').
+on('antenna', () => renderAim());
 on('radio', () => renderAim());

@@ -1,6 +1,12 @@
 // Дымовой тест в headless Chrome через DevTools Protocol (без зависимостей).
-// Запуск: node scripts/smoke.mjs [url] [outDir] [--desktop|--mobile]. Нужен запущенный dev-сервер.
+// Запуск: node scripts/smoke.mjs [url] [outDir] [--desktop|--mobile] [--landscape] [--fallback|--offline]. Нужен запущенный dev-сервер.
 // По умолчанию два прогона подряд: десктоп и телефон (390×844, касания).
+// --fallback — только короткий сценарий «основной источник рельефа завис → запасной AWS» (десктоп).
+// --offline — только сценарий «Подготовить без сети → сеть пропала → перезагрузка» (десктоп). Нужен Service Worker,
+//   а в dev он выключен — запускать на сборке с window.__map (VITE_SMOKE=1), например:
+//   VITE_SMOKE=1 npx vite build --base /uavmap/ --outDir "$TMPDIR/uavmap-smoke" --emptyOutDir
+//   npx vite preview --base /uavmap/ --outDir "$TMPDIR/uavmap-smoke" --port 4174
+//   node scripts/smoke.mjs http://localhost:4174/uavmap/ "$TMPDIR" --offline
 import { spawn } from 'node:child_process';
 import { writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -13,6 +19,8 @@ const OUT = args[1] || process.env.TMPDIR || '/tmp';
 const MODES = flags.includes('--mobile') ? ['mobile'] : flags.includes('--desktop') ? ['desktop'] : ['desktop', 'mobile'];
 let mode = 'desktop';
 const LAND = flags.includes('--landscape'); // мобильный прогон 844×390
+const FALLBACK = flags.includes('--fallback');
+const OFFLINE = flags.includes('--offline');
 const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const port = 9300 + Math.floor(Math.random() * 500);
 const profile = mkdtempSync(join(tmpdir(), 'uavmap-chrome-'));
@@ -25,10 +33,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let ws, id = 0;
 const pending = new Map();
 const errors = [];
-const send = (method, params = {}) => new Promise((res, rej) => {
+/** Команда CDP; sessionId — сессия другой цели (Service Worker), подключённой с flatten. */
+const send = (method, params = {}, sessionId) => new Promise((res, rej) => {
   const i = ++id;
   pending.set(i, { res, rej });
-  ws.send(JSON.stringify({ id: i, method, params }));
+  ws.send(JSON.stringify({ id: i, method, params, ...(sessionId ? { sessionId } : {}) }));
 });
 const ev = async (expr) => {
   const r = await send('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true });
@@ -73,6 +82,55 @@ const setDrone = async (v) => {
   await waitFor(`!!document.querySelector('.dlg input')`, 3000).catch(() => { throw new Error(`нет диалога высоты; под пальцем ${hit} (${x},${y})`); });
   await ev(`(() => { const i = document.querySelector('.dlg input'); i.value = '${v}'; document.querySelector('.dlg .primary').click(); return true; })()`);
 };
+/** Данные GeoJSON-источника карты (то, что сейчас нарисовано); null — источника нет. */
+const geo = (id) => ev(`(() => { const s = window.__map.getSource(${JSON.stringify(id)}); return s ? s.serialize().data : null; })()`);
+const feats = async (id) => (await geo(id))?.features || [];
+/**
+ * Нажатие на элемент: настоящий жест, если элемент не закрыт другим; иначе — click(). Возвращает '' при настоящем
+ * нажатии, иначе — чем закрыт (для пометки в результате шага).
+ */
+const press = async (sel) => {
+  const [x, y] = await centerOf(sel);
+  const over = await ev(`(() => { const e = document.elementFromPoint(${x}, ${y}); return !e ? 'за экраном' : e.closest(${JSON.stringify(sel)}) ? '' : (e.closest('[id]')?.id || e.className || e.tagName).toString().slice(0, 30); })()`);
+  if (!over) await gesture(x, y);
+  else await ev(`document.querySelector(${JSON.stringify(sel)}).click(); true`);
+  return over;
+};
+const key = async (k, code = k, vk = 0) => {
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: k, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: k, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk });
+};
+/** Высота дрона с клавиатуры: фокус на высотомере, Enter → диалог точной высоты. */
+const setDroneKey = async (v) => {
+  await ev(`document.getElementById('altimeter').focus(); document.activeElement === document.getElementById('altimeter')`);
+  await key('Enter', 'Enter', 13);
+  await waitFor(`!!document.querySelector('.dlg input')`, 3000).catch(() => { throw new Error('Enter на высотомере не открыл диалог'); });
+  await ev(`(() => { const i = document.querySelector('.dlg input'); i.value = '${v}'; document.querySelector('.dlg .primary').click(); return true; })()`);
+};
+/** Текст плашки зоны (без «✕»); пусто — плашки нет. */
+const pillText = `(() => { const p = document.getElementById('covPill'); return p && !p.hidden ? p.querySelector('.cov-pill-main').textContent.trim() : ''; })()`;
+/** Плашка зоны не за экраном и не на панелях. */
+const pillOverlap = `(() => {
+  const pe = document.getElementById('covPill'); if (!pe || pe.hidden) return [];
+  const p = pe.getBoundingClientRect(), out = [];
+  if (p.left < 0 || p.top < 0 || p.right > innerWidth || p.bottom > innerHeight) out.push('за экраном');
+  for (const id of ['topLeft', 'crossChip', 'altimeter', 'mapBar', 'linkStrip', 'bottomBar', 'cross']) {
+    const e = document.getElementById(id); if (!e || e.hidden) continue;
+    const r = e.getBoundingClientRect(); if (!r.width) continue;
+    if (p.left < r.right - 1 && r.left < p.right - 1 && p.top < r.bottom - 1 && r.top < p.bottom - 1) out.push('covPill×' + id);
+  }
+  return out;
+})()`;
+/** Блок антенн в шторке пульта: открыть нажатием на маркер 📡. */
+const openStationSheet = async () => {
+  const over = await press('.station');
+  await waitFor(`!document.getElementById('sheet').hidden && /Пульт/.test(document.getElementById('shTitle').textContent) && document.querySelectorAll('#stAnts .ant-card').length === 2`, 3000)
+    .catch(() => { throw new Error('шторка пульта с двумя антеннами не открылась'); });
+  return over;
+};
+/** Тип антенны в карточке линии (0 — управление, 1 — видео) по началу подписи кнопки. */
+const pickAntenna = (card, name) => ev(`(() => { const b = [...document.querySelectorAll('#stAnts .ant-card')[${card}].querySelectorAll('.seg button')].find(x => x.textContent.trim().startsWith(${JSON.stringify(name)})); if (!b) return false; b.click(); return true; })()`);
+
 const rectsCheck = `(() => {
   const vw = innerWidth, vh = innerHeight, bad = [];
   for (const b of document.querySelectorAll('button')) {
@@ -107,8 +165,13 @@ const checkLayout = async (where) => {
 
 const results = [];
 const step = async (name, fn) => {
-  try { const v = await fn(); results.push(`✓ [${mode}] ${name}${v ? ` — ${v}` : ''}`); }
-  catch (e) { results.push(`✗ [${mode}] ${name} — ${e.message}`); }
+  const e0 = errors.length;
+  try {
+    const v = await fn();
+    // Ошибка в консоли за время шага — шаг не прошёл, даже если состояние верное.
+    if (errors.length > e0) throw new Error(`ошибки консоли: ${errors.slice(e0, e0 + 3).join(' | ')}`);
+    results.push(`✓ [${mode}] ${name}${v ? ` — ${v}` : ''}`);
+  } catch (e) { results.push(`✗ [${mode}] ${name} — ${e.message}`); }
 };
 
 async function scenario() {
@@ -131,12 +194,61 @@ async function scenario() {
     await waitFor(`!document.getElementById('altimeter').hidden`, 3000);
     await waitFor(`/Связь|грани|Нет |ниже склона|Считаю|рельеф|Прицел на пульте/.test(document.getElementById('lsStatus').textContent)`);
   });
+  // Пульт поставлен, «Зону» не нажимали: радиогоризонт считается сам и рисуется только границами (без заливки).
+  const edgeLines = `(window.__map.getSource('cov-edge')?.serialize().data.features || []).map(f => f.properties.line).sort().join(',')`;
+  const covIdle = `!${pillText}.includes('считаю')`;
+  await step('радиогоризонт сам: границы управления и видео без «Зоны», без заливки', async () => {
+    await waitFor(`${edgeLines} === 'rc,video' && ${covIdle}`, 90000);
+    const t = await ev(pillText);
+    if (!/Дрон 100 м · до /.test(t) || !/упр\./.test(t) || !/видео/.test(t)) throw new Error('плашка: ' + t);
+    if (/[✓⚠✕]/.test(t)) throw new Error('у плашки без заливки легенда ✓⚠✕: ' + t);
+    if (await ev(`!!window.__map.getLayer('cov-raster')`)) throw new Error('появилась заливка зоны');
+    const pts = (await feats('cov-edge')).map((f) => f.geometry.coordinates.length);
+    if (pts.some((n) => n < 10)) throw new Error('граница из ' + pts.join('/') + ' точек');
+    return t;
+  });
+  await step('радиогоризонт сам: высота с высотомера (Enter → диалог) — плашка с новой высотой', async () => {
+    await setDroneKey(250);
+    await waitFor(`+document.getElementById('altimeter').getAttribute('aria-valuenow') === 250`, 3000);
+    await waitFor(`/Дрон 250 м · до /.test(${pillText}) && ${covIdle}`, 90000);
+    if (await ev(edgeLines) !== 'rc,video') throw new Error('границы после смены высоты: ' + await ev(edgeLines));
+    if (await ev(`!!window.__map.getLayer('cov-raster')`)) throw new Error('появилась заливка зоны');
+    return ev(pillText);
+  });
   await step('связь до креста после сдвига 3 км на северо-восток', async () => {
     await ev(`(() => { const m = window.__map, c = m.getCenter(); m.jumpTo({ center: [c.lng + 0.03, c.lat + 0.02] }); return true; })()`);
     await waitFor(`/Упр\\.|Запас/.test(document.getElementById('lsStatus').textContent)`);
     const t = await ev(`document.getElementById('lsStatus').textContent`);
     if (!/[✓⚠✕]/.test(t) || !/км/.test(t)) throw new Error('нет вердикта со значком и дальности: ' + t);
     return t;
+  });
+  await step('подсказка высотомера при первом расчёте: рядом со шкалой, «Понятно» закрывает и запоминает', async () => {
+    await waitFor(`!!document.getElementById('altHint')`, 15000).catch(() => { throw new Error('подсказки нет'); });
+    await shot('2b-alt-hint');
+    const t = await ev(`document.getElementById('altHint').textContent`);
+    if (!/над точкой взлёта/.test(t) || !/на грани/.test(t) || !/Понятно/.test(t)) throw new Error('текст подсказки: ' + t);
+    const lay = await checkLayout('подсказка высотомера');
+    const off = await ev(`(() => { const r = document.getElementById('altHint').getBoundingClientRect(); return r.left < 0 || r.top < 0 || r.right > innerWidth || r.bottom > innerHeight; })()`);
+    if (off) throw new Error('подсказка за краем экрана');
+    const over = await press('#altHint button');
+    await waitFor(`!document.getElementById('altHint')`, 3000);
+    if (await ev(`localStorage.getItem('uavmap.ui.altHint')`) !== '1') throw new Error('флаг подсказки не записан');
+    return `${lay}${over ? `; кнопка закрыта ${over} — click()` : ''}`;
+  });
+  await step('кнопка линии к прицелу: по умолчанию пусто, нажатие — линия, повторное — пусто', async () => {
+    const pressed = `document.getElementById('btnLink').getAttribute('aria-pressed')`;
+    const nLink = `(window.__map.getSource('link')?.serialize().data.features.length ?? -1)`;
+    if (await ev(pressed) !== 'false') throw new Error('кнопка включена по умолчанию');
+    if (await ev(nLink) !== 0) throw new Error('линия нарисована без кнопки: ' + await ev(nLink));
+    const over = await press('#btnLink');
+    await waitFor(`${pressed} === 'true'`, 3000);
+    await waitFor(`${nLink} === 1`, 15000);
+    const g = (await feats('link'))[0].geometry;
+    if (g.type !== 'LineString' || g.coordinates.length !== 2) throw new Error('не отрезок пульт → прицел: ' + g.type);
+    await press('#btnLink');
+    await waitFor(`${pressed} === 'false'`, 3000);
+    await waitFor(`${nLink} === 0`, 3000);
+    return over ? `click() — кнопку закрывает ${over}` : 'нажатием';
   });
   await step('строка связи показывает обе линии', async () => {
     // На этой трассе дрон на 100 м оказывается ниже рельефа (прочерки) — поднимаем его, чтобы увидеть запасы.
@@ -159,11 +271,21 @@ async function scenario() {
   await step('высотомер: полосы, неверная высота не принимается', async () => {
     const lv = await ev(`[...document.querySelectorAll('#altimeter .alt-band')].map(b => b.className.replace('alt-band alt-', '')).join(',')`);
     if (!/ok|weak|none/.test(lv)) throw new Error('нет цветных полос: ' + lv);
+    // Подпись у шкалы — то же число, что в подсказке строки связи (дрон на 1500 м: «можно снизиться до N м»).
+    const need = await ev(`document.querySelector('#lsStatus .ls-need')?.textContent || ''`);
+    const lbl = await ev(`document.querySelector('#altimeter .alt-need')?.textContent || ''`);
+    const n = (need.match(/снизиться до (\d+) м/) || [])[1];
+    if (n && lbl !== `связь от ${n} м`) throw new Error(`подпись «${lbl}», в строке «${need}»`);
+    if (lbl) {
+      const bad = await ev(`(() => { const a = document.querySelector('#altimeter .alt-need').getBoundingClientRect(), b = document.querySelector('#altimeter .alt-lbl').getBoundingClientRect();
+        return a.left < 0 || a.right > innerWidth || (a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom); })()`);
+      if (bad) throw new Error('подпись за экраном или на плашке высоты');
+    }
     await setDrone(9000);
     await sleep(200);
     const v = await ev(`+document.getElementById('altimeter').getAttribute('aria-valuenow')`);
     if (v !== 1500) throw new Error('высота после 9000: ' + v);
-    return `полосы ${lv}; дрон 9000 → ${v}`;
+    return `полосы ${lv}; ${lbl ? `«${lbl}»` : 'без подписи'}; дрон 9000 → ${v}`;
   });
   await step('высотомер: перетаскивание меняет высоту и строку связи', async () => {
     const [x, y] = await centerOf('#altimeter .alt-lbl');
@@ -179,6 +301,67 @@ async function scenario() {
     await setDrone(1500);
     await waitFor(`/1500/.test(document.querySelector('#altimeter .alt-lbl').textContent)`, 3000);
     return `дрон → ${v} м`;
+  });
+  await step('антенны: яги у видео на 180° — луч с подписью, «вне луча» и «Повернуть»', async () => {
+    const over = await openStationSheet();
+    if (!(await pickAntenna(1, 'Яги'))) throw new Error('нет кнопки «Яги» у видео');
+    const inp = `document.querySelectorAll('#stAnts .ant-card')[1].querySelector('.ant-dir input')`;
+    await waitFor(`!!${inp}`, 3000);
+    await ev(`(() => { const i = ${inp}; i.value = '180'; i.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+    if (await ev(`${inp}.value`) !== '180') throw new Error('азимут не принят: ' + await ev(`${inp}.value`));
+    await ev(`document.getElementById('shClose').click(); true`);
+    await waitFor(`document.getElementById('sheet').hidden`, 3000);
+    const aim = await feats('aim');
+    const sectors = aim.filter((f) => f.geometry.type === 'Polygon').length;
+    const labels = aim.filter((f) => f.geometry.type === 'Point').map((f) => f.properties.label);
+    if (sectors !== 1 || labels.length !== 1 || !/^Видео 180° Ю$/.test(labels[0])) throw new Error(`луч: секторов ${sectors}, подписи «${labels.join('|')}»`);
+    // Прицел к северо-востоку от пульта (аз. ≈ 47°), луч яги 30° смотрит на юг — прицел вне луча.
+    await waitFor(`/вне луча/.test(document.getElementById('lsStatus').textContent)`, 15000);
+    const btn = await ev(`document.querySelector('#lsStatus [data-act="aim"]')?.textContent || ''`);
+    if (btn !== 'Повернуть') throw new Error('кнопка поворота: «' + btn + '»');
+    const az = +(await ev(`(document.getElementById('lsStatus').textContent.match(/аз\\. (\\d+)°/) || [])[1]`));
+    await press('#lsStatus [data-act="aim"]');
+    await waitFor(`!/вне луча/.test(document.getElementById('lsStatus').textContent)`, 15000);
+    const l2 = (await feats('aim')).filter((f) => f.geometry.type === 'Point').map((f) => f.properties.label).join('|');
+    if (!new RegExp(`^Видео ${az}° `).test(l2)) throw new Error(`после «Повернуть» подпись «${l2}», прицел аз. ${az}°`);
+    return `луч «${labels[0]}» → «${l2}»${over ? ` (маркер закрыт ${over} — нажат через click())` : ''}`;
+  });
+  await step('антенны: видео снова всенаправленная — луча нет', async () => {
+    await openStationSheet();
+    if (!(await pickAntenna(1, 'Всенаправленная'))) throw new Error('нет кнопки «Всенаправленная»');
+    await waitFor(`!document.querySelectorAll('#stAnts .ant-card')[1].querySelector('.ant-dir')`, 3000);
+    await ev(`document.getElementById('shClose').click(); true`);
+    await waitFor(`document.getElementById('sheet').hidden && (window.__map.getSource('aim')?.serialize().data.features.length ?? -1) === 0`, 3000);
+    if (await ev(`/вне луча/.test(document.getElementById('lsStatus').textContent)`)) throw new Error('«вне луча» осталось');
+  });
+  await step('наклон антенны: поле есть, «На прицел» ставит и азимут, и наклон', async () => {
+    await openStationSheet();
+    if (!(await pickAntenna(0, 'Патч'))) throw new Error('нет кнопки «Патч» у управления');
+    const card = `document.querySelectorAll('#stAnts .ant-card')[0]`;
+    await waitFor(`!!${card}.querySelector('.ant-tilt input')`, 3000).catch(() => { throw new Error('нет поля наклона'); });
+    // Сбить азимут и наклон, затем «На прицел».
+    await ev(`(() => { const [a, t] = ${card}.querySelectorAll('.ant-dir input'); a.value = '200'; a.dispatchEvent(new Event('change', { bubbles: true })); t.value = '-5'; t.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+    const before = await ev(`[...${card}.querySelectorAll('.ant-dir input')].map((i) => i.value).join('/')`);
+    if (before !== '200/-5') throw new Error('азимут/наклон не приняты: ' + before);
+    if (!(await ev(`(() => { const b = [...${card}.querySelectorAll('.ant-dir button')].find((x) => x.textContent.trim() === 'На прицел'); if (!b) return false; b.click(); return true; })()`))) throw new Error('нет кнопки «На прицел»');
+    const ref = await ev(`${card}.querySelector('.ant-ref').textContent`);
+    const m = ref.match(/азимут (\d+)°.*угол места (-?\d+)°/);
+    if (!m) throw new Error('подсказка без азимута и угла места: «' + ref + '»');
+    const [az, tilt] = await ev(`[...${card}.querySelectorAll('.ant-dir input')].map((i) => i.value)`);
+    const want = String(Math.min(60, Math.max(-10, +m[2])));
+    if (az !== m[1] || tilt !== want) throw new Error(`после «На прицел» азимут ${az}, наклон ${tilt}; подсказка «${ref}»`);
+    await ev(`${card}.scrollIntoView(); true`);
+    await shot('2-tilt');
+    await ev(`document.getElementById('shClose').click(); true`);
+    await waitFor(`document.getElementById('sheet').hidden`, 3000);
+    const label = (await feats('aim')).filter((f) => f.geometry.type === 'Point').map((f) => f.properties.label).join('|');
+    if (!new RegExp(`^Упр\\. ${az}° \\S+${tilt !== '0' ? ` · наклон ${tilt}°` : ''}$`).test(label)) throw new Error('подпись луча: «' + label + '»');
+    // Обратно: всенаправленная.
+    await openStationSheet();
+    if (!(await pickAntenna(0, 'Всенаправленная'))) throw new Error('нет кнопки «Всенаправленная»');
+    await ev(`document.getElementById('shClose').click(); true`);
+    await waitFor(`document.getElementById('sheet').hidden && (window.__map.getSource('aim')?.serialize().data.features.length ?? -1) === 0`, 3000);
+    return `«${ref}» → азимут ${az}°, наклон ${tilt}°; луч «${label}»`;
   });
   await shot('2-link');
 
@@ -332,6 +515,29 @@ async function scenario() {
     return 'night → day → авто';
   });
 
+  await step('читаемость: «Яркое солнце» и «Крупный текст» — классы, без прокрутки и перекрытий', async () => {
+    const chk = (label, on) => ev(`(() => { const c = [...document.querySelectorAll('#drBody label.chk')].find(x => x.querySelector('.chk-t')?.textContent === ${JSON.stringify(label)}); if (!c) return false; const i = c.querySelector('input'); if (i.checked !== ${on}) i.click(); return i.checked === ${on}; })()`);
+    const cls = `['sun', 'big-text'].filter(c => document.documentElement.classList.contains(c)).join(',')`;
+    if (await ev(cls)) throw new Error('классы до включения: ' + await ev(cls));
+    if (!(await chk('Яркое солнце', true)) || !(await chk('Крупный текст', true))) throw new Error('нет переключателей читаемости');
+    if (await ev(cls) !== 'sun,big-text') throw new Error('классы <html>: ' + await ev(cls));
+    const menu = await checkLayout('меню, крупный текст');
+    await ev(`document.getElementById('drClose').click(); true`);
+    await waitFor(`!document.body.classList.contains('drawer-open')`, 3000);
+    await sleep(300); // перестроение раскладки под крупный текст
+    await shot('5c-sun-big');
+    const map_ = await checkLayout('карта, крупный текст');
+    const ov = [...await ev(overlapCheck), ...await ev(pillOverlap)];
+    if (ov.length) throw new Error('перекрытия с крупным текстом: ' + ov.join(', '));
+    const clip = await ev(`(() => { const e = document.getElementById('linkStrip'); return !e.hidden && e.scrollHeight > e.clientHeight + 1; })()`);
+    if (clip) throw new Error('строка связи обрезана с крупным текстом');
+    await ev(`document.getElementById('btnMenu').click(); true`);
+    await waitFor(`document.body.classList.contains('drawer-open')`, 3000);
+    await ev(`document.querySelector('.dr-back')?.click(); [...document.querySelectorAll('.dr-item')].find(b => /Настройки/.test(b.textContent)).click(); true`);
+    if (!(await chk('Яркое солнце', false)) || !(await chk('Крупный текст', false))) throw new Error('не выключились');
+    if (await ev(cls)) throw new Error('классы после выключения: ' + await ev(cls));
+    return `${menu}; ${map_}, без перекрытий`;
+  });
   if (mode === 'mobile') {
     await ev(`document.getElementById('drClose').click(); true`);
     await sleep(400);
@@ -368,7 +574,176 @@ async function scenario() {
     await send('Page.reload');
     await waitFor(`!!window.__map && window.__map.isStyleLoaded()`);
     await waitFor(`document.querySelectorAll('.mk').length > 0 && !!document.querySelector('.station')`);
+    // Подсказку высотомера уже закрыли — после перезагрузки и расчёта трассы её нет.
+    await waitFor(`!!document.querySelector('#altimeter .alt-band:not(.alt-pending)')`, 30000).catch(() => undefined);
+    await sleep(1500);
+    if (await ev(`!!document.getElementById('altHint')`)) throw new Error('подсказка высотомера показана повторно');
   });
+}
+
+// ---------- Запасной рельеф: основной источник (Mapterhorn) «висит» ----------
+const netLog = [];
+let paused = 0;
+async function scenarioFallback() {
+  const origin = new URL(URL_).origin;
+  await send('Page.navigate', { url: 'about:blank' });
+  // Чистый сайт: без кеша Service Worker и HTTP-кеша рельеф придётся брать из сети, а основной не ответит.
+  await send('Storage.clearDataForOrigin', { origin, storageTypes: 'all' });
+  await send('Network.enable');
+  await send('Network.clearBrowserCache');
+  await send('Network.setCacheDisabled', { cacheDisabled: true });
+  // Запросы к основному источнику перехватываются и никогда не продолжаются — как замершее соединение.
+  await send('Fetch.enable', { patterns: [{ urlPattern: '*tiles.mapterhorn.com*', requestStage: 'Request' }] });
+  netLog.length = 0; paused = 0;
+  await send('Page.navigate', { url: URL_ });
+  try {
+    await step('запасной рельеф: карта загрузилась при зависшем основном источнике', () => waitFor(`!!window.__map && window.__map.isStyleLoaded()`, 30000));
+    await step('запасной рельеф: высота под прицелом', async () => {
+      await waitFor(`/Рельеф \\d+ м/.test(document.getElementById('crossChipText').textContent)`, 45000);
+      return ev(`document.getElementById('crossChipText').textContent`);
+    });
+    await step('запасной рельеф: пульт и зона 10 км по AWS', async () => {
+      await waitFor(`!document.getElementById('linkStrip').hidden && !document.getElementById('lsEmpty').hidden`, 10000);
+      await ev(`document.getElementById('btnStHere').click(); true`);
+      await waitFor(`!!document.querySelector('.station')`, 5000);
+      await ev(`document.getElementById('btnZone').click(); true`);
+      await waitFor(`!document.getElementById('sheet').hidden && [...document.querySelectorAll('#shBody button')].some(x => x.textContent.trim() === '10 км')`, 5000);
+      await ev(`[...document.querySelectorAll('#shBody button')].find(x => x.textContent.trim() === '10 км').click(); true`);
+      // Радиогоризонт сам мог уже начать расчёт (15 км, только границы) — отменяем: нужна зона с заливкой.
+      await ev(`[...document.querySelectorAll('#shBody button')].find(x => x.textContent.trim() === 'Отмена')?.click(); true`);
+      await waitFor(`[...document.querySelectorAll('#shBody button')].some(x => /Рассчитать/.test(x.textContent))`, 3000);
+      const t0 = Date.now();
+      await ev(`[...document.querySelectorAll('#shBody button')].find(x => /Рассчитать/.test(x.textContent)).click(); true`);
+      await waitFor(`!!window.__map.getLayer('cov-raster') && !!document.querySelector('#shBody .cov-result') && !document.querySelector('#shBody .cov-prelim') && ![...document.querySelectorAll('#shBody button')].some(x => x.textContent.trim() === 'Отмена')`, 120000)
+        .catch(async () => { throw new Error('зона не посчиталась: ' + (await ev(`document.getElementById('shBody').textContent`)).slice(0, 160)); });
+      const sum = await ev(`document.querySelector('#shBody .cov-result').textContent`);
+      if (!/Связь держится до/.test(sum)) throw new Error('итог зоны: ' + sum);
+      await shot('fallback-zone');
+      return `${((Date.now() - t0) / 1000).toFixed(1)} с, «${sum}»`;
+    });
+    await step('запасной рельеф: «Подготовить без сети» — понятный отказ, район не создан', async () => {
+      await ev(`document.getElementById('shClose').click(); true`);
+      await openStationSheet();
+      await ev(`document.getElementById('stPrep').click(); true`);
+      // Предохранитель уже открыт — отказ сразу; иначе скачивание само заметит, что источник не отвечает.
+      await waitFor(`/Mapterhorn\\) (сейчас )?не отвечает/.test(document.getElementById('toast').textContent)`, 150000)
+        .catch(async () => { throw new Error('сообщение: ' + await ev(`document.getElementById('toast').textContent`)); });
+      if (await ev(`!!localStorage.getItem('uavmap.offline.v1') && JSON.parse(localStorage.getItem('uavmap.offline.v1')).areas.length > 0`)) throw new Error('появился пустой район');
+      const t = await ev(`document.getElementById('toast').textContent`);
+      await ev(`document.getElementById('shClose').click(); true`);
+      return t.slice(0, 90) + '…';
+    });
+    await step('запасной рельеф: запросы ушли к AWS, основной перехвачен', async () => {
+      const aws = netLog.filter((u) => u.includes('s3.amazonaws.com/elevation-tiles-prod')).length;
+      if (!aws) throw new Error('ни одного запроса к s3.amazonaws.com/elevation-tiles-prod');
+      if (!paused) throw new Error('к основному источнику не было запросов — перехват не сработал');
+      return `AWS: ${aws} запросов, основной: ${paused} подвешено`;
+    });
+  } finally {
+    await send('Fetch.disable');
+    await send('Network.setCacheDisabled', { cacheDisabled: false });
+  }
+}
+
+// ---------- Без сети: «Подготовить без сети», затем сеть пропадает и страница перезагружается ----------
+/** Сеть страницы и Service Worker (у него свои запросы — эмуляция страницы на них не действует). */
+const setOffline = async (offline, swSession) => {
+  const cond = { offline, latency: 0, downloadThroughput: -1, uploadThroughput: -1 };
+  await send('Network.emulateNetworkConditions', cond);
+  if (swSession) await send('Network.emulateNetworkConditions', cond, swSession);
+};
+async function scenarioOffline() {
+  const origin = new URL(URL_).origin;
+  await send('Page.navigate', { url: 'about:blank' });
+  await send('Storage.clearDataForOrigin', { origin, storageTypes: 'all' });
+  await send('Network.enable');
+  await send('Network.clearBrowserCache');
+  await send('Page.navigate', { url: URL_ });
+  let swSession = '';
+  const status = `document.getElementById('lsStatus').textContent`;
+  try {
+    await step('без сети: карта и Service Worker', async () => {
+      await waitFor(`!!window.__map && window.__map.isStyleLoaded()`, 30000);
+      await waitFor(`!!navigator.serviceWorker && !!navigator.serviceWorker.controller`, 30000)
+        .catch(() => { throw new Error('страницей не управляет Service Worker — в dev он выключен, запустите на сборке (vite preview)'); });
+      const { targetInfos } = await send('Target.getTargets');
+      const swt = targetInfos.find((t) => t.type === 'service_worker' && t.url.startsWith(origin));
+      if (!swt) throw new Error('нет цели service_worker');
+      swSession = (await send('Target.attachToTarget', { targetId: swt.targetId, flatten: true })).sessionId;
+      await send('Network.enable', {}, swSession);
+      return swt.url.replace(origin, '');
+    });
+    await step('без сети: пульт и трасса 3 км', async () => {
+      await waitFor(`/Рельеф \\d+ м/.test(document.getElementById('crossChipText').textContent)`, 30000);
+      await waitFor(`!document.getElementById('linkStrip').hidden && !document.getElementById('lsEmpty').hidden`, 10000);
+      await ev(`document.getElementById('btnStHere').click(); true`);
+      await waitFor(`!!document.querySelector('.station')`, 5000);
+      await ev(`(() => { const m = window.__map, c = m.getCenter(); m.jumpTo({ center: [c.lng + 0.03, c.lat + 0.02] }); return true; })()`);
+      await waitFor(`/Упр\\.|Запас/.test(${status})`, 30000);
+      return ev(status);
+    });
+    await step('без сети: «Подготовить без сети» в шторке пульта — готово, размер', async () => {
+      await openStationSheet();
+      const btn = await ev(`document.getElementById('stPrep').textContent`);
+      if (btn !== 'Подготовить без сети') throw new Error('кнопка: ' + btn);
+      await ev(`document.getElementById('stPrep').click(); true`);
+      await waitFor(`!document.getElementById('progress').hidden || /^Готово/.test(document.getElementById('stOffNote').textContent)`, 10000);
+      const t0 = Date.now();
+      await waitFor(`/^Готово/.test(document.getElementById('stOffNote').textContent) && document.getElementById('progress').hidden`, 180000)
+        .catch(async () => { throw new Error('не готово: ' + await ev(`document.getElementById('stOffNote').textContent + ' | ' + document.getElementById('toast').textContent`)); });
+      const toastT = await ev(`document.getElementById('toast').textContent`);
+      if (!/^Готово: ~.+ — расчёт здесь работает без сети$/.test(toastT)) throw new Error('итог: ' + toastT);
+      const areas = await ev(`JSON.parse(localStorage.getItem('uavmap.offline.v1')).areas.map(a => a.km + ' км, ' + a.tiles + ' тайлов, ' + (a.calc && a.view ? 'расчёт + карта' : '?') + (a.complete === false ? ', не полный' : '')).join('; ')`);
+      return `${((Date.now() - t0) / 1000).toFixed(1)} с, «${toastT}», ${areas}`;
+    });
+    await step('без сети: строка связи «офлайн ✓» после подготовки', async () => {
+      await ev(`document.getElementById('shClose').click(); true`);
+      await waitFor(`/офлайн ✓/.test(${status})`, 5000).catch(async () => { throw new Error('строка: ' + await ev(status)); });
+    });
+    const c0 = await ev(`(() => { const c = window.__map.getCenter(); return [c.lng, c.lat]; })()`);
+    await step('без сети: сеть выключена (страница и Service Worker)', async () => {
+      // Без кеша просмотренных и подкачанных тайлов: рельеф дальше — только из скачанного района.
+      await ev(`caches.keys().then(ks => Promise.all(ks.filter(k => k.startsWith('uavmap-dem-runtime')).map(k => caches.delete(k)))).then(() => true)`);
+      await setOffline(true, swSession);
+      const page = await ev(`navigator.onLine`);
+      const r = await send('Runtime.evaluate', { expression: `fetch(${JSON.stringify(URL_)} + '?probe=' + Date.now(), { cache: 'no-store' }).then(() => 'есть', () => 'нет')`, awaitPromise: true, returnByValue: true }, swSession);
+      if (page !== false || r.result?.value !== 'нет') throw new Error(`navigator.onLine ${page}, сеть у Service Worker: ${r.result?.value}`);
+      return 'navigator.onLine = false, fetch из Service Worker не проходит';
+    });
+    await step('без сети: перезагрузка — оболочка из Service Worker, высота под прицелом', async () => {
+      await send('Page.reload');
+      await waitFor(`!!window.__map && window.__map.isStyleLoaded()`, 30000);
+      await ev(`window.__map.jumpTo({ center: ${JSON.stringify(c0)} }); true`);
+      // Пульт стоит — высота относительно него («На 120 м выше пульта»); «Нет данных рельефа» — провал.
+      await waitFor(`/Рельеф \\d+ м|\\d+ м (выше|ниже) пульта|Вровень/.test(document.getElementById('crossChipText').textContent)`, 30000)
+        .catch(async () => { throw new Error('чип: ' + await ev(`document.getElementById('crossChipText').textContent`)); });
+      return ev(`document.getElementById('crossChipText').textContent`);
+    });
+    await step('без сети: строка связи считается, «офлайн ✓»', async () => {
+      await waitFor(`!!document.querySelector('.station')`, 5000);
+      await waitFor(`/Упр\\.|Запас/.test(${status}) && /офлайн ✓/.test(${status})`, 30000)
+        .catch(async () => { throw new Error('строка: ' + await ev(status)); });
+      return ev(status);
+    });
+    await step('без сети: зона 10 км', async () => {
+      await ev(`document.getElementById('btnZone').click(); true`);
+      await waitFor(`!document.getElementById('sheet').hidden && [...document.querySelectorAll('#shBody button')].some(x => x.textContent.trim() === '10 км')`, 5000);
+      await ev(`[...document.querySelectorAll('#shBody button')].find(x => x.textContent.trim() === '10 км').click(); true`);
+      await ev(`[...document.querySelectorAll('#shBody button')].find(x => x.textContent.trim() === 'Отмена')?.click(); true`);
+      await waitFor(`[...document.querySelectorAll('#shBody button')].some(x => /Рассчитать/.test(x.textContent))`, 3000);
+      const t0 = Date.now();
+      await ev(`[...document.querySelectorAll('#shBody button')].find(x => /Рассчитать/.test(x.textContent)).click(); true`);
+      await waitFor(`!!window.__map.getLayer('cov-raster') && !!document.querySelector('#shBody .cov-result') && !document.querySelector('#shBody .cov-prelim') && ![...document.querySelectorAll('#shBody button')].some(x => x.textContent.trim() === 'Отмена')`, 120000)
+        .catch(async () => { throw new Error('зона не посчиталась: ' + (await ev(`document.getElementById('shBody').textContent`)).slice(0, 160)); });
+      const sum = await ev(`document.querySelector('#shBody .cov-result').textContent`);
+      if (!/Связь держится до/.test(sum)) throw new Error('итог зоны: ' + sum);
+      await shot('offline-zone');
+      return `${((Date.now() - t0) / 1000).toFixed(1)} с, «${sum}»`;
+    });
+  } finally {
+    await setOffline(false, swSession).catch(() => undefined);
+    if (swSession) await send('Target.detachFromTarget', { sessionId: swSession }).catch(() => undefined);
+  }
 }
 
 try {
@@ -384,10 +759,12 @@ try {
     if (d.id && pending.has(d.id)) { pending.get(d.id).res(d.result || {}); pending.delete(d.id); }
     if (d.method === 'Runtime.exceptionThrown') errors.push(d.params.exceptionDetails.exception?.description?.split('\n')[0]);
     if (d.method === 'Runtime.consoleAPICalled' && d.params.type === 'error') errors.push(d.params.args.map((a) => a.value ?? a.description).join(' '));
+    if (d.method === 'Network.requestWillBeSent') netLog.push(d.params.request.url);
+    if (d.method === 'Fetch.requestPaused') paused++; // не продолжаем — запрос «висит»
   };
   await send('Runtime.enable');
   await send('Page.enable');
-  for (const m of MODES) {
+  for (const m of FALLBACK || OFFLINE ? ['desktop'] : MODES) {
     mode = m;
     if (m === 'mobile') {
       await send('Emulation.setDeviceMetricsOverride', { width: LAND ? 844 : 390, height: LAND ? 390 : 844, deviceScaleFactor: 2, mobile: true });
@@ -396,7 +773,7 @@ try {
       await send('Emulation.setDeviceMetricsOverride', { width: 1200, height: 800, deviceScaleFactor: 1, mobile: false });
       await send('Emulation.setTouchEmulationEnabled', { enabled: false });
     }
-    await scenario();
+    if (OFFLINE) await scenarioOffline(); else if (FALLBACK) await scenarioFallback(); else await scenario();
   }
 } catch (e) {
   results.push(`✗ сбой сценария — ${e.message}`);

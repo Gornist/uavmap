@@ -33,6 +33,13 @@ describe('heightHint: одна подсказка-действие по высо
     expect(heightHint(2000, { rc: null, pair: null }, 'Видео', { rc: 'ok' })).toBe('Связь держится');
     expect(heightHint(2000, { rc: 900, video: null, pair: null }, 'Видео', { rc: 'ok', video: 'ok' })).toBe('Управление и видео держатся');
   });
+  it('выше нужной, а связи нет (дрон ушёл из луча наклонённой антенны вверх) — снизиться', () => {
+    expect(heightHint(1200, { rc: 0, pair: 0 }, 'Видео', { rc: 'none' })).toBe('Снизьтесь до 0 м — будет связь');
+    expect(heightHint(1200, { rc: 150, pair: 150 }, 'Видео', { rc: 'weak' })).toBe('Снизьтесь до 150 м — будет связь');
+    expect(heightHint(1200, { rc: 150, video: 300, pair: 300 }, 'Видео', { rc: 'none', video: 'none' })).toBe('Снизьтесь до 150 м — будет управление');
+    expect(heightHint(1200, { rc: 150, video: 300, pair: 300 }, 'Видео', { rc: 'ok', video: 'weak' })).toBe('Снизьтесь до 300 м — будут и управление, и видео');
+    expect(heightHint(1200, { rc: 150, video: 300, pair: 300 }, 'Видео', { rc: 'ok', video: 'ok' })).toBe('Управление и видео держатся; можно снизиться до 300 м');
+  });
 });
 
 describe('hereText: высота под прицелом словами', () => {

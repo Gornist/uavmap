@@ -1,20 +1,33 @@
-// Меню → «Аппаратура и высота»: аппаратура по линиям, местность у пульта, режим высоты, «Для опытных»
+// Меню → «Аппаратура и высота»: аппаратура по линиям, местность у пульта, «Для опытных»
 // (итог и числовые параметры линий). Сама высота дрона — в строке связи, высоты для сравнения — в зоне покрытия.
 import { S, toast, emit } from '../app';
 import { h, field, button, details } from '../ui';
-import { presetsFor, RadioParams, LineId, budget, freeSpaceRange, radioHorizon } from '../radio';
+import { presetsFor, RadioNumKey, LineId, budget, freeSpaceRange, radioHorizon } from '../radio';
 import { applyPreset, effRadio, effVideoOrNull } from '../station';
 import { presetName } from '../verdict';
 import { km } from '../format';
 import { CLUTTER, clutterLoss } from '../clutter';
 import { fire, render, section, num } from './common';
 import { antennaPanel } from '../antennaUi';
+import { ANTENNA_TYPES, directional } from '../antenna';
 
-const RADIO_FIELDS: { key: keyof RadioParams; label: string; min: number; max: number; step: string; hint?: (v: number) => string }[] = [
+/**
+ * Антенна на дроне — отдельного выбора типа нет: ориентация дрона в полёте неизвестна, и тип свёлся бы к одному числу
+ * усиления. Вместо этого — понятная подпись поля и типовые значения в подсказке (пэтч — с усреднением по развороту).
+ */
+const DRONE_ANT_HINT = 'Диполь, «клевер» — около 2 дБи. Пэтч на дроне: 8 дБи, только когда смотрит на пульт, — в полёте берите около 3.';
+/** Подсказка к антенне на земле: направленная антенна линии заменяет это значение (antenna.ts aimRadio). */
+const groundAntHint = (line: LineId) => {
+  const a = S.antenna[line];
+  return directional(a) ? `Сейчас вместо него — направленная антенна (${ANTENNA_TYPES[a.kind].name.toLowerCase()}, ${a.gainDbi} дБи), см. «Антенны на земле».`
+    : 'Диполь, «клевер» — около 2 дБи. Патч или яги — в «Антенны на земле» выше.';
+};
+
+const RADIO_FIELDS: { key: RadioNumKey; label: string; min: number; max: number; step: string; hint?: (v: number, line: LineId) => string }[] = [
   { key: 'freqMHz', label: 'Частота, МГц', min: 1, max: 100000, step: '1' },
   { key: 'txPowerDbm', label: 'Мощность передатчика, дБм', min: -30, max: 60, step: '1', hint: (v) => `≈ ${+(10 ** (v / 10)).toPrecision(3)} мВт` },
-  { key: 'txGainDbi', label: 'Усиление антенны пульта, дБи', min: -10, max: 50, step: '0.5' },
-  { key: 'rxGainDbi', label: 'Усиление антенны дрона, дБи', min: -10, max: 50, step: '0.5' },
+  { key: 'txGainDbi', label: 'Антенна пульта, дБи', min: -10, max: 50, step: '0.5', hint: (_v, line) => (line === 'rc' ? groundAntHint('rc') : DRONE_ANT_HINT) },
+  { key: 'rxGainDbi', label: 'Антенна на дроне (приёмник), дБи', min: -10, max: 50, step: '0.5', hint: (_v, line) => (line === 'rc' ? DRONE_ANT_HINT : groundAntHint('video')) },
   { key: 'sensDbm', label: 'Чувствительность приёмника, дБм', min: -170, max: -30, step: '1' },
   { key: 'lossDb', label: 'Потери в тракте, дБ', min: 0, max: 60, step: '0.5' },
   { key: 'clutterDb', label: 'Потери на местности (лес, застройка), дБ', min: 0, max: 60, step: '1' },
@@ -27,10 +40,10 @@ let advOpen = false; // «Для опытных» остаётся раскры�
 const lineRadio = (line: LineId) => (line === 'rc' ? S.radio : S.video.radio);
 const linePreset = (line: LineId) => (line === 'rc' ? S.presetId : S.video.presetId);
 /** Подписи полей для видео: передатчик — на дроне, приёмник — на земле. */
-const VIDEO_LABELS: Partial<Record<keyof RadioParams, string>> = {
+const VIDEO_LABELS: Partial<Record<RadioNumKey, string>> = {
   txPowerDbm: 'Мощность видеопередатчика, дБм',
-  txGainDbi: 'Усиление антенны дрона (VTX), дБи',
-  rxGainDbi: 'Усиление антенны приёма на земле, дБи',
+  txGainDbi: 'Антенна на дроне (видеопередатчик), дБи',
+  rxGainDbi: 'Антенна видеоприёмника на земле, дБи',
 };
 
 function lineParams(el: HTMLElement, line: LineId, upd: () => void) {
@@ -40,8 +53,9 @@ function lineParams(el: HTMLElement, line: LineId, upd: () => void) {
     const row = field(label, `<input type="number" inputmode="decimal" step="${f.step}">`);
     const inp = row.querySelector('input') as HTMLInputElement;
     inp.value = String(R[f.key]);
-    const hint = h('<p class="hint" style="margin:-4px 0 4px;text-align:right"></p>');
-    const showHint = () => { hint.textContent = f.hint ? f.hint(R[f.key]) : ''; hint.hidden = !f.hint; };
+    // Короткая подсказка (мВт) — под числом справа, длинная (антенны) — обычным абзацем.
+    const hint = h(`<p class="hint" style="margin:-4px 0 4px${f.key === 'txPowerDbm' ? ';text-align:right' : ''}"></p>`);
+    const showHint = () => { hint.textContent = f.hint ? f.hint(R[f.key], line) : ''; hint.hidden = !f.hint; };
     showHint();
     inp.addEventListener('change', () => {
       const v = num(inp.value);

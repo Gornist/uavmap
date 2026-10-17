@@ -257,7 +257,7 @@ export function openSheet(title: string, body: HTMLElement | string, onClose?: (
   b.innerHTML = '';
   if (typeof body === 'string') b.innerHTML = body; else b.appendChild(body);
   $('sheet').hidden = false;
-  document.body.classList.add('sheet-open'); // строка связи под шторкой прячется (styles/live.css)
+  document.body.classList.add('sheet-open'); // строка связи и высотомер под шторкой прячутся (styles/layout.css)
   return b;
 }
 export function closeSheet() {
@@ -276,8 +276,13 @@ export function progress(frac: number | null, text = '') {
   p.querySelector('span')!.textContent = text;
 }
 
-/** Простая шина событий между модулями. */
-type Ev = 'station' | 'radio' | 'marks' | 'routes' | 'coords';
+/**
+ * Простая шина событий между модулями. station — пульт (место, высота антенны, рельеф под ним);
+ * radio — радиопараметры линий (аппаратура, пресеты, местность у пульта, видео вкл/выкл);
+ * height — высота дрона S.droneH; antenna — антенны на земле (тип, усиление, ширина луча, азимут);
+ * offline — список офлайн-районов изменился (скачан, удалён).
+ */
+type Ev = 'station' | 'radio' | 'height' | 'antenna' | 'marks' | 'routes' | 'coords' | 'offline';
 const subs = new Map<Ev, Set<() => void>>();
 export const on = (e: Ev, f: () => void) => { if (!subs.has(e)) subs.set(e, new Set()); subs.get(e)!.add(f); };
 export const emit = (e: Ev) => { persist(); subs.get(e)?.forEach((f) => f()); };

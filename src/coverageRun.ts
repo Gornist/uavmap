@@ -1,19 +1,18 @@
 // Зона покрытия: запуск расчёта в пуле воркеров (coverage.worker.ts), предварительный и точный проходы,
-// отмена, устаревание результата при смене пульта/радио. Владеет показанным результатом (shown).
-// Смена одной лишь высоты дрона (S.droneH) результат не портит: если она посчитана — показываем её без пересчёта.
+// отмена, устаревание результата при смене пульта/радио/антенн. Владеет показанным результатом (shown).
+// Смена высоты дрона (событие 'height') результат не портит: если она посчитана — показываем её без пересчёта.
 import { S, toast, progress, on } from './app';
 import { LatLon } from './geo';
 import { fetchGrid, coverageBox, coverageZoom, demPixelM, DemMissingError, DemGrid } from './elevation';
 import { demTileCount } from './demTiles';
 import { budget } from './radio';
-import { directional } from './antenna';
-import { effRadio, effVideo, effVideoOrNull } from './station';
+import { effRadio, effVideo, effVideoOrNull, activeAntennaLines } from './station';
 import { emptyResult, mergeChunk, sectorCrop, splitRays } from './coverageCore';
 import type { CoverageChunk, CoverageLine, CoverageResult } from './coverageCore';
 import { coverageHeights } from './coverageStats';
 import type { CoverageShown } from './coverageStats';
 import { drawCoverage, clearCoverageView, redrawCoverage, setCoverageFill } from './coverageView';
-import { heightIndex } from './coverageStats';
+import { autoCoverageDue } from './coverageStats';
 // ?worker: Vite выбирает формат сам — модуль в dev, классический воркер в сборке (Chrome 68 не умеет module workers).
 import CoverageWorker from './coverage.worker?worker';
 
@@ -47,7 +46,10 @@ export function markInputsChanged(): void {
   if (shown) stale = true;
 }
 
-/** Радиопараметры расчёта без высоты дрона: событие 'radio' приходит и при смене одной только S.droneH. */
+/**
+ * Отпечаток радиопараметров и антенн: отсекает пустые события 'radio'/'antenna' — тот же тип антенны нажат ещё раз,
+ * «Свои параметры» выбраны без правки, число введено в другой записи. Без него зона пересчитывалась бы зря.
+ */
 const radioSig = () => JSON.stringify([effRadio(), effVideoOrNull(), S.antenna]);
 
 // ---------- Радиогоризонт сам ----------
@@ -55,11 +57,15 @@ const radioSig = () => JSON.stringify([effRadio(), effVideoOrNull(), S.antenna])
 // только границами связи (управление и видео; без заливки — карту не закрывает). «✕» на плашке выключает это.
 const AUTO_DELAY_MS = 1200;
 let autoT = 0;
+/** Нужен ли автопересчёт сейчас (inputsChanged — сменились пульт, аппаратура или антенны). */
+const autoDue = (inputsChanged: boolean) => autoCoverageDue({
+  auto: S.coverage.auto, hasStation: !!S.station, inputsChanged, shownHeights: shown?.heights ?? null, droneH: S.droneH,
+});
 function autoSoon(): void {
   clearTimeout(autoT);
-  if (!S.coverage.auto || !S.station) return;
+  if (!autoDue(true)) return;
   autoT = window.setTimeout(() => {
-    if (!S.coverage.auto || !S.station) return;
+    if (!autoDue(true)) return;
     if (running) cancelCoverage(); // расчёт для прежних входных данных больше не нужен
     void startCoverage({ auto: true });
   }, AUTO_DELAY_MS);
@@ -71,22 +77,24 @@ export function setAutoCoverage(on: boolean): void {
   if (on) autoSoon(); else clearTimeout(autoT);
 }
 
-/** Подписка на смену пульта и радио. */
+/** Подписка на смену пульта, радио, антенн и высоты дрона. */
 export function initCoverageRun(): void {
   let sig = radioSig();
   const markStale = () => {
+    sig = radioSig(); // антенны могли смениться вместе с пультом (bestSpot) — сравнивать дальше с текущими
     inputsRev++;
     if (shown) { stale = true; notify?.(); }
     autoSoon();
   };
   // Пульт убрали — зоны для него больше нет: отменить расчёт и убрать с карты.
   on('station', () => { if (!S.station) { clearTimeout(autoT); inputsRev++; clearCoverage(); return; } markStale(); });
-  on('radio', () => {
-    const now = radioSig();
-    if (now !== sig) { sig = now; markStale(); return; }
-    // Сменилась только высота дрона (или список сравнения): показываем её, если она посчитана; нет — посчитать.
+  const radioChanged = () => { if (radioSig() !== sig) markStale(); };
+  on('radio', radioChanged);
+  on('antenna', radioChanged);
+  // Сменилась только высота дрона: показываем её, если она посчитана; нет — посчитать.
+  on('height', () => {
     if (shown) redrawCoverage();
-    if (!shown || !heightIndex(shown.heights, S.droneH).exact) autoSoon();
+    if (autoDue(false)) autoSoon();
     notify?.();
   });
   autoSoon(); // пульт уже стоит (проект восстановлен)
@@ -198,7 +206,8 @@ export async function startCoverage(opts: { auto?: boolean } = {}): Promise<void
   const vRadio = S.video.enabled ? { ...effVideo() } : null;
   // Частота влияет на дифракцию, поэтому у видео свой прогон; обе линии считаются в одной части на одной вырезке.
   // Направленная антенна на земле: бюджет — с пиковым усилением (effRadio без азимута), по лучам — диаграмма.
-  const aimOf = (line: 'rc' | 'video') => (directional(S.antenna[line]) ? { antenna: { ...S.antenna[line] }, heading: S.antenna[line].heading } : undefined);
+  const act = activeAntennaLines();
+  const aimOf = (line: 'rc' | 'video') => (act.includes(line) ? { antenna: { ...S.antenna[line] }, heading: S.antenna[line].heading } : undefined);
   const lines: CoverageLine[] = [radio, ...(vRadio ? [vRadio] : [])].map((rp, i) => ({ freqMHz: rp.freqMHz, budget: budget(rp), k: rp.k, fade: rp.fadeMarginDb, aim: aimOf(i === 0 ? 'rc' : 'video') }));
   const rays = heights.length <= 2 ? 720 : 360;
   const base = { lat: center.lat, lon: center.lon, antH: st.antH, heights, mode, radius, step, rays, exact: false, lines };

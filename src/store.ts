@@ -1,8 +1,8 @@
 // Состояние проекта в localStorage + экспорт/импорт. Всё хранится только на устройстве.
-import { DEFAULT_RADIO, DEFAULT_VIDEO, DEFAULT_VIDEO_PRESET, RadioParams } from './radio';
+import { DEFAULT_RADIO, DEFAULT_VIDEO, DEFAULT_VIDEO_PRESET, RadioParams, RadioNumKey } from './radio';
 import type { CoordFormat } from './coords';
 import type { ClutterClass } from './clutter';
-import { Antenna, DEFAULT_ANTENNA } from './antenna';
+import { Antenna, DEFAULT_ANTENNA, TILT_MIN, TILT_MAX } from './antenna';
 import { escapeHtml as esc } from './format';
 import { isObj, num, fin, oneOf } from './validate';
 
@@ -71,6 +71,7 @@ function merge<T>(base: T, over: unknown): T {
  * список остаётся «Сравнить высоты»: у старого проекта сравнение включено, если высот было больше одной.
  * v1 → v2: отмывка рельефа стала основой карты (горизонтали — редкие) — у старых проектов включаем её один раз:
  * там она была выключена по прежнему умолчанию, а не выбором пользователя.
+ * Антенны без вертикальной ширины луча (до наклона) — она равна горизонтальной.
  */
 export function migrate(raw: unknown): unknown {
   if (!isObj(raw)) return raw;
@@ -88,6 +89,13 @@ export function migrate(raw: unknown): unknown {
     const { heading, ...rest } = raw.antenna as Record<string, unknown>;
     const withH = (a: unknown) => (isObj(a) && !('heading' in a) ? { ...a, heading } : a);
     out = { ...out, antenna: { ...rest, rc: withH(rest.rc), video: withH(rest.video) } };
+  }
+  // Наклон и вертикальная ширина луча (этап 7): у прежних антенн вертикальная ширина — их же горизонтальная.
+  // До слияния: иначе умолчание (60°) досталось бы и яги с лучом 30°. Наклон 0 — как и умолчание.
+  if (isObj(out.antenna)) {
+    const an = out.antenna;
+    const withV = (a: unknown) => (isObj(a) && !('beamVDeg' in a) && typeof a.beamDeg === 'number' ? { ...a, beamVDeg: a.beamDeg } : a);
+    out = { ...out, antenna: { ...an, rc: withV(an.rc), video: withV(an.video) } };
   }
   return out;
 }
@@ -111,7 +119,7 @@ const okLL = (lat: unknown, lon: unknown) => typeof lat === 'number' && typeof l
 function sanitizeRadio(src: unknown, def: RadioParams): RadioParams {
   const r: Record<string, unknown> = isObj(src) ? src : {};
   const out = { ...def };
-  for (const k of Object.keys(def) as (keyof RadioParams)[]) out[k] = fin(r[k], -1e4, 1e6, def[k]);
+  for (const k of Object.keys(def) as RadioNumKey[]) out[k] = fin(r[k], -1e4, 1e6, def[k]);
   if (out.freqMHz <= 0) out.freqMHz = def.freqMHz;
   if (out.k <= 0) out.k = def.k;
   return out;
@@ -181,7 +189,13 @@ export function sanitize(s: State): State {
   const common = deg(an.heading, 0); // прежний формат без migrate (прямой вызов sanitize): одно направление на обе
   const ant = (src: unknown, def: Antenna): Antenna => {
     const a: Record<string, unknown> = isObj(src) ? src : {};
-    return { kind: oneOf(a.kind, ['omni', 'patch', 'yagi', 'custom'] as const, def.kind), gainDbi: fin(a.gainDbi, 0, 40, def.gainDbi), beamDeg: fin(a.beamDeg, 5, 180, def.beamDeg), heading: deg(a.heading, common) };
+    const beamDeg = fin(a.beamDeg, 5, 180, def.beamDeg);
+    // Наклон и вертикальная ширина луча (этап 7): у прежних проектов их нет — наклон 0, вертикальная ширина
+    // равна горизонтальной (у патча и яги так и есть), а вне пределов — то же умолчание.
+    return {
+      kind: oneOf(a.kind, ['omni', 'patch', 'yagi', 'custom'] as const, def.kind), gainDbi: fin(a.gainDbi, 0, 40, def.gainDbi), beamDeg, heading: deg(a.heading, common),
+      tiltDeg: fin(a.tiltDeg, TILT_MIN, TILT_MAX, 0), beamVDeg: fin(a.beamVDeg, 5, 180, beamDeg),
+    };
   };
   out.antenna = { rc: ant(an.rc, d.antenna.rc), video: ant(an.video, d.antenna.video) };
   return out;

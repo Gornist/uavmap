@@ -9,7 +9,7 @@ import { demPlan, demPixelM, fetchGrid, sampleGrid, sampleRay, DemMissingError, 
 import { analyzePair, RANK, PairResult } from './radio';
 import { demTileCount } from './demTiles';
 import { ICON, stCls, pairVerdict, statusCss } from './verdict';
-import { setStation, effRadio, effVideoOrNull, droneAbs } from './station';
+import { setStation, effRadio, effVideoOrNull, droneAbs, activeAntennaLines } from './station';
 import { openOfflineSheet } from './offline';
 import { directional } from './antenna';
 
@@ -108,7 +108,7 @@ function choose(t: Spot, i: number, target: LatLon) {
   setStation(t.p);
   closeSheet(); // onClose шторки убирает ромбы
   map.flyTo({ center: [target.lon, target.lat] });
-  toast(`Пульт поставлен в вариант ${i + 1}${directional(S.antenna.rc) || directional(S.antenna.video) ? `, антенны — на цель (${aim}°)` : ''}`);
+  toast(`Пульт поставлен в вариант ${i + 1}${activeAntennaLines().length ? `, антенны — на цель (${aim}°)` : ''}`);
 }
 
 function showSpots(top: Spot[], target: LatLon, radius: number) {

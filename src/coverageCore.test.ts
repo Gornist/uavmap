@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { computeChunk, computeCoverage, CoverageJob, emptyResult, lossThreshold, mergeChunk, sectorCrop, splitRays } from './coverageCore';
 import { DemGrid, sampleGrid, sampleRay, sampleRayPoints } from './elevation';
-import { destination, lonLatToPixel } from './geo';
-import { analyzeLink, budget, DEFAULT_RADIO, DEFAULT_VIDEO, freeSpaceRange, fspl } from './radio';
+import { destination, lonLatToPixel, R_EARTH } from './geo';
+import { analyzeLink, budget, clampK, DEFAULT_RADIO, DEFAULT_VIDEO, freeSpaceRange, fspl } from './radio';
+import { aimRadio, Antenna } from './antenna';
 
 const LAT = 55.75, LON = 37.62, Z = 12;
 const SIZE = 1024;                    // ≈ ±11 км при 21.9 м/px на этой широте
@@ -318,5 +319,52 @@ describe('computeCoverage: направленная антенна на земл
     expect(M(plain, 0, 3, 4, s) - M(aimed, 0, 3, 4, s)).toBeCloseTo(20, 4);  // 270° — сзади, FBR патча 20 дБ
     const edge = computeCoverage(job(flat, { aim: { antenna: patch, heading: 30 } })); // луч 0° — край луча (30°)
     expect(M(plain, 0, 0, 4, s) - M(edge, 0, 0, 4, s)).toBeCloseTo(3, 4); // запасы — Float32
+  });
+});
+
+describe('computeCoverage: наклон и вертикальная диаграмма антенны на земле', () => {
+  const flat = grid(() => 100);
+  const base: Antenna = { kind: 'patch', gainDbi: 8, beamDeg: 60, heading: 90 };
+  const run = (antenna: Antenna, over: Partial<CoverageJob> = {}) =>
+    computeCoverage(job(flat, { heights: [2, 30, 300], aim: { antenna, heading: 90 }, ...over }));
+
+  it('наклон 0 и вертикальная ширина ≥ 180 — бит в бит как без вертикальной поправки', () => {
+    for (const exact of [true, false]) {
+      const plain = run(base, { exact });
+      const v180 = run({ ...base, tiltDeg: 0, beamVDeg: 180 }, { exact });
+      expect(v180.margins).toEqual(plain.margins);
+      expect(v180.firstLoss).toEqual(plain.firstLoss);
+    }
+  });
+  it('наклон вверх на 30° при дроне на горизонте: слабее на 12·((el − 30)/60)² ≈ 3 дБ', () => {
+    // Дрон на высоте антенны (2 м над ровной землёй): угол места — чуть ниже нуля из-за кривизны.
+    const plain = run(base), up = run({ ...base, tiltDeg: 30, beamVDeg: 60 });
+    const ae = clampK(P.k) * R_EARTH;
+    for (const s of [10, 40, 100]) {
+      const D = s * 50, el = (Math.atan2(-(D * D) / (2 * ae), D) * 180) / Math.PI;
+      const exp = 12 * ((el - 30) / 60) ** 2;
+      expect(exp).toBeGreaterThan(3);
+      expect(M(plain, 0, 1, 4, s) - M(up, 0, 1, 4, s)).toBeCloseTo(exp, 3); // луч 90° — на оси по азимуту
+    }
+  });
+  it('вертикальная поправка складывается с азимутальной и не превышает «вперёд/назад»', () => {
+    const plain = run(base), up = { ...base, tiltDeg: 30, beamVDeg: 60 };
+    // Ось на 30°: луч 0° — край луча по азимуту (3 дБ) + ≈3 дБ по углу места; луч 210° не считается — берём 180°
+    // при оси на 0°: сзади, FBR патча 20 дБ, не больше (без предела было бы 12·(180/60)² + 3 ≈ 111 дБ).
+    const edge = computeCoverage(job(flat, { heights: [2, 30, 300], aim: { antenna: up, heading: 30 } }));
+    expect(M(plain, 0, 1, 4, 40) - M(edge, 0, 0, 4, 40)).toBeCloseTo(6, 1);
+    const back = computeCoverage(job(flat, { heights: [2, 30, 300], aim: { antenna: up, heading: 0 } }));
+    expect(M(plain, 0, 1, 4, 40) - M(back, 0, 2, 4, 40)).toBeCloseTo(20, 4);
+  });
+  it('совпадает с analyzeLink с той же антенной (поправка по углу места — на каждой высоте)', () => {
+    const ant: Antenna = { ...base, tiltDeg: 20, beamVDeg: 30 };
+    const res = run(ant);
+    const prof = rayProfile(flat, 90, 5000, 50);
+    const p = aimRadio(P, 'rc', { ...ant, gainDbi: P.txGainDbi }, 90); // усиление на оси — то же, что в BUDGET
+    expect(p.aim).toBeDefined();
+    for (const [hi, hh] of [[1, 30], [2, 300]] as const) for (const s of [4, 20, 100]) {
+      const a = analyzeLink(prof.subarray(0, s + 1), s * 50, prof[0] + 2, prof[0] + hh, p);
+      expect(M(res, hi, 1, 4, s)).toBeCloseTo(a.margin, 1);
+    }
   });
 });

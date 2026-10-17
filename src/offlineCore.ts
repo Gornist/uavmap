@@ -89,8 +89,56 @@ export function planLayers(lat: number, lon: number, km: number, calc: boolean, 
     }
   }
   if (view) for (let z = VIEW_Z0; z <= VIEW_Z1; z++) out.push({ z, km });
-  // Слой (z, km) с тем же z и меньшим радиусом входит в больший — убираем дубли.
+  return dedupLayers(out);
+}
+
+/** Слой (z, km) с тем же z и меньшим радиусом входит в больший — убираем дубли (порядок сохраняется). */
+export function dedupLayers(out: Layer[]): Layer[] {
   return out.filter((a, i) => !out.some((b, j) => j !== i && b.z === a.z && (b.km > a.km || (b.km === a.km && j < i))));
+}
+
+// ---------- «Подготовить без сети» ----------
+
+/** Радиус района «Подготовить без сети», км: радиус зоны (м), округлённый вверх до ближайшего из RADII_KM; больше наибольшего — наибольший. */
+export function prepRadiusKm(radiusM: number): number {
+  const km = radiusM / 1000;
+  return RADII_KM.find((r) => r >= km - 1e-6) ?? RADII_KM[RADII_KM.length - 1];
+}
+
+/**
+ * Район «Подготовить без сети» вокруг пульта: данные для расчёта и для карты радиусом prepRadiusKm и уровень рельефа
+ * зоны ровно текущего радиуса (радиус зоны может быть не из COVERAGE_RADII_KM — тогда его уровня в planLayers нет).
+ */
+export function prepLayers(lat: number, lon: number, radiusM: number): { km: number; layers: Layer[] } {
+  const km = prepRadiusKm(radiusM);
+  const zoneKm = Math.min(radiusM / 1000, km);
+  const zone = { z: coverageZoom({ lat, lon }, zoneKm * 1000).z, km: zoneKm };
+  return { km, layers: dedupLayers([...planLayers(lat, lon, km, true, true), zone]) };
+}
+
+/**
+ * Готовность к работе без сети у пульта: 'ready' — в одном полностью скачанном районе есть уровни рельефа зоны
+ * (coverageZoom) и профиля (demPlan) радиуса radiusM вокруг пульта целиком; 'edge' — пульт в районе с данными расчёта,
+ * но зона (или её уровень) выходит за скачанное; 'none' — пульт вне районов. Проверяются слои, а не внешний радиус:
+ * уровень зоны в районе скачан на свой, меньший радиус вокруг центра района (planLayers).
+ */
+export function prepState(areas: Area[], st: LatLon, radiusM: number): 'ready' | 'edge' | 'none' {
+  const usable = areas.filter((a) => a.calc && a.src === DEM_SRC_ID && a.complete !== false);
+  const need = [coverageZoom(st, radiusM).z, demPlan(st.lat, radiusM).z];
+  const has = (a: Area, z: number) => a.layers.some((l) => l.z === z && distance(a, st) + radiusM <= l.km * 1000 + 1);
+  if (usable.some((a) => need.every((z) => has(a, z)))) return 'ready';
+  return usable.some((a) => distance(a, st) <= a.km * 1000) ? 'edge' : 'none';
+}
+
+/** Итог скачивания района: done — скачано, skipped — уже было, errors — не загрузилось, sourceDown — источник не отвечает вовсе. */
+export interface DownloadSummary { done: number; skipped: number; errors: number; aborted: boolean; sourceDown?: boolean }
+
+/** Текст итога скачивания для пользователя; again — кнопка, которой докачать остальное. */
+export function downloadVerdict(r: DownloadSummary, size: string, again: string): string {
+  if (r.sourceDown) return `Скачано не всё — источник рельефа (Mapterhorn) не отвечает. Без сети расчёт здесь пока не работает. Попробуйте другую сеть (Wi‑Fi) и нажмите «${again}» ещё раз`;
+  if (r.aborted) return `Скачивание отменено. Уже скачанное (${size}) сохранено — «${again}» докачает остальное`;
+  if (r.errors) return `Скачано не всё (${size}): часть рельефа не загрузилась — без сети здесь местами будет «Нет данных рельефа». Когда будет сеть, нажмите «${again}» — докачается остальное`;
+  return `Готово: ${size} — расчёт здесь работает без сети`;
 }
 
 /** Разбор метаданных из localStorage: повреждённое отбрасывается. */

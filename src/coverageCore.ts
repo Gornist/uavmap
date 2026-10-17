@@ -18,7 +18,7 @@ import { destination, lonLatToPixel, R_EARTH } from './geo';
 import { DemGrid, sampleGrid, sampleRay, sampleRayPoints } from './elevation';
 import { C, clampK } from './radio';
 import { bullingtonPointNu, bullingtonTaper, deltaBullingtonTail, knifeEdgeJ, smoothSurfaceHeights } from './diffraction';
-import { Antenna, patternLoss } from './antenna';
+import { Antenna, azTerm, elTerm, fbrOf, hasVertical, patternLoss } from './antenna';
 
 export interface CoverageJob {
   grid: DemGrid;
@@ -28,7 +28,10 @@ export interface CoverageJob {
   mode: 'takeoff' | 'terrain';
   radius: number; step: number; rays: number;
   freqMHz: number; budget: number; k: number; fade: number;
-  /** Направленная антенна на земле: budget — с её пиковым усилением, к лучу добавляется ослабление по диаграмме. */
+  /**
+   * Направленная антенна на земле: budget — с её пиковым усилением, к лучу добавляется ослабление по диаграмме.
+   * С наклоном / вертикальной шириной луча (hasVertical) — ещё и по углу места на дрон, для каждого отсчёта и высоты.
+   */
   aim?: { antenna: Antenna; heading: number };
   r0?: number; r1?: number;  // считать лучи r0..r1−1 (по умолчанию все)
   exact?: boolean;           // false — заведомо «нет связи» без точного запаса (см. выше); по умолчанию true
@@ -95,13 +98,22 @@ export function computeCoverage(j: CoverageJob, onProgress?: (frac: number) => v
   const [px0, py0] = lonLatToPixel(j.lon, j.lat, j.grid.z);
   const ground0 = sampleGrid(j.grid, px0, py0);
   const tx = ground0 + j.antH;
+  // Вертикальная диаграмма антенны на земле (antenna.ts): только если есть — иначе быстрый путь без изменений.
+  const vAnt = j.aim && hasVertical(j.aim.antenna) ? j.aim.antenna : null;
+  const vFbr = vAnt ? fbrOf(vAnt) : 0;
+  const RAD = 180 / Math.PI;
 
   for (let r = r0; r < r1; r++) {
     const ro = r - r0;
     const az = (360 * r) / j.rays;
     // Бюджет луча: направленная антенна на земле слабее вне своей оси (antenna.ts).
     const bud = j.aim ? j.budget + patternLoss(j.aim.antenna, az, j.aim.heading) : j.budget;
+    // Слагаемое диаграммы по азимуту — для полной (с углом места) поправки ниже.
+    const vAz = vAnt ? azTerm(vAnt, az, j.aim!.heading) : 0;
     // Дальше sFree запас < thr уже в свободном пространстве (дифракция только добавляет потери).
+    // С вертикальной диаграммой bud — без поправки по углу места: −min(A + E, FBR) ≤ −min(A, FBR), то есть
+    // bud не меньше настоящего бюджета на любой высоте, и отсечение по нему остаётся верхней оценкой.
+    // Так же и запись bud − fsl[q] после sFree — верхняя оценка запаса, как и требует режим карты.
     let sFree = nS;
     if (!exact) for (let s = 1; s < nS; s++) if (bud - fsl[s] < thr) { sFree = s; break; }
     if (cache?.filled) {
@@ -127,6 +139,7 @@ export function computeCoverage(j: CoverageJob, onProgress?: (frac: number) => v
     for (let s = 1; s < nS; s++) {
       const D = dd[s];
       const fsm = bud - fsl[s];                // запас в свободном пространстве
+      const curv = vAnt ? D * D * k2 : 0;      // понижение точки дрона за кривизной Земли — для угла места
       if (s >= sFree) {
         // Заведомо «нет связи» до конца луча: верхняя оценка запаса.
         for (let h = 0; h < nH; h++) {
@@ -164,6 +177,9 @@ export function computeCoverage(j: CoverageJob, onProgress?: (frac: number) => v
         // Дрон ниже рельефа в своей точке (режим над взлётом, склон выше взлёта) — связи нет.
         if (rxh < gp[s] - 0.05) { margins[o] = -99; markLost(h, s, ro); continue; }
         const dh = rxh - tx;
+        // Запас в свободном пространстве на этой высоте: с вертикальной диаграммой — по углу места на дрон
+        // (как elevationDeg в analyzeLink: atan((hB − hA − D²/(2ae)) / D)).
+        const fsh = vAnt ? j.budget - Math.min(vAz + elTerm(vAnt, Math.atan2(dh - curv, D) * RAD), vFbr) - fsl[s] : fsm;
         const los = stim < dh / D;                                      // (50): Stim < Str → случай 1
         let best = -Infinity;                                           // νmax (51) или Srim (53)
         if (los) {
@@ -202,7 +218,7 @@ export function computeCoverage(j: CoverageJob, onProgress?: (frac: number) => v
           luc = knifeEdgeJ(vb ?? losNu(s, D, tx, rxh));                                  // (56)
         }
         const lba = bullingtonTaper(luc, D);                                             // (57)
-        let m = fsm - lba;                                                               // верхняя оценка
+        let m = fsh - lba;                                                               // верхняя оценка
         if (exact || m >= thr) {
           // (61a), (61c): максимумы hob и hob/d2 — тоже в вершинах верхней оболочки точек (i, G_i).
           let hobs = -Infinity, aobr = -Infinity;
@@ -214,7 +230,7 @@ export function computeCoverage(j: CoverageJob, onProgress?: (frac: number) => v
             if (ar > aobr) aobr = ar;
           }
           const [hst, hsr] = smoothSurfaceHeights(v1, v2, D, hobs, aobtB - dh / D, aobr, ground0, gp[s]);
-          m = fsm - deltaBullingtonTail(lba, tx, rxh, hst, hsr, s, D, ae, j.freqMHz, lambda).loss; // (64)–(66)
+          m = fsh - deltaBullingtonTail(lba, tx, rxh, hst, hsr, s, D, ae, j.freqMHz, lambda).loss; // (64)–(66)
         }
         margins[o] = m;
         if (m < j.fade) markLost(h, s, ro);

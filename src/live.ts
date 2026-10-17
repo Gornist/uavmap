@@ -1,14 +1,17 @@
 // Строка связи вверху карты: пока пульта нет — «Пульт здесь / По GPS»; с пультом — вердикт до прицела,
 // одна подсказка по высоте («Поднимите до 480 м — будет и видео»), мелко запасы и азимут; нажатие на строку — профиль трассы.
-// Данные для высотомера (связь на каждой высоте), линия пульт → прицел и планировщик пересчёта при движении карты.
-import { S, $, map, center, setGeo, fc, line, toast, on, emit, persist } from './app';
-import { directional, inBeam, rumb } from './antenna';
+// Данные для высотомера (связь на каждой высоте) и планировщик пересчёта при движении карты.
+// Линия пульт → прицел на карте — linkLayer.ts, точки потери связи по пути — lossPoints.ts.
+import { S, $, map, center, toast, on, emit } from './app';
+import { inBeam, rumb } from './antenna';
 import { km, dB, escapeHtml } from './format';
 import { LatLon, distance, bearing, interpolate } from './geo';
 import { DemMissingError } from './elevation';
-import { LinkResult, PairResult, RadioParams, analyzePair, minHeightsForPair, lossAlong } from './radio';
+import { LinkResult, PairResult, RadioParams, analyzePair, minHeightsForPair } from './radio';
+import { LossKind, lossPoints } from './lossPoints';
+import { PENDING_COL, setLink, linkLine, setLoss, linkGhost, hideGhost, onLinkToggle } from './linkLayer';
 import { ICON, stCls, pairVerdict, statusCss, heightHint, HeightNeeds, freqName } from './verdict';
-import { setStation, stationGround, stationGroundFailed, calcLink, heightFnFor, LinkCalc } from './station';
+import { setStation, stationGround, stationGroundFailed, calcLink, heightFnFor, LinkCalc, activeAntennaLines } from './station';
 import { setAltData, setAltPreview } from './altimeter';
 import { AltLevel } from './altScale';
 import { showProfile } from './lazy';
@@ -17,72 +20,7 @@ import { openOfflineSheet, offlineCover } from './offline';
 let liveBusy = false, livePending = false;
 /** Для живой строки хватает 200 отсчётов: запас расходится с полным профилем (до 600) не более чем на 0,2 дБ. */
 const LIVE_N = 200;
-const PENDING_COL = '#8b949e';
 
-let linkDrawn = false; // в источнике 'link' есть линия
-let lossDrawn = false;  // в источнике 'link-loss' есть метки
-/** Линия пульт → прицел на карте включена (кнопка у карты; строка связи считает и без неё). */
-const linkOn = () => S.map.link;
-/** Метки «здесь пропадёт связь» на линии (только у посчитанного результата — при любом другом виде линии убираются). */
-function setLoss(features: GeoJSON.Feature[]) {
-  if (!linkOn()) features = [];
-  if (!features.length && !lossDrawn) return;
-  lossDrawn = features.length > 0;
-  setGeo('link-loss', fc(features));
-}
-/** Линия связи в слое карты (GeoJSON → воркер MapLibre); null — убрать. Призрак движения при этом прячется. */
-function setLink(a: LatLon | null, c?: LatLon, props: Record<string, unknown> = {}) {
-  ghost.hide();
-  setLoss([]);
-  if (!linkOn()) a = null; // выключена кнопкой у карты — источник пустой
-  linkDrawn = !!(a && c);
-  setGeo('link', a && c ? fc([line([[a.lon, a.lat], [c.lon, c.lat]], props)]) : fc());
-}
-const linkLine = (a: LatLon, c: LatLon, props: Record<string, unknown>) => setLink(a, c, props);
-
-/**
- * «Призрак» линии на время движения карты: SVG в экранных координатах поверх карты. setData на каждый кадр
- * заставлял воркер MapLibre заново нарезать источник и перерисовывать слой; отрезок между двумя точками
- * в проекции карты прямой — SVG рисует ту же линию без воркера. По окончании движения линия снова в слое.
- */
-const ghost = (() => {
-  const NS = 'http://www.w3.org/2000/svg';
-  let svg: SVGSVGElement | null = null, casing: SVGLineElement, ln: SVGLineElement;
-  const mk = () => {
-    svg = document.createElementNS(NS, 'svg');
-    svg.setAttribute('class', 'link-ghost');
-    svg.setAttribute('aria-hidden', 'true');
-    casing = document.createElementNS(NS, 'line');
-    ln = document.createElementNS(NS, 'line');
-    casing.setAttribute('stroke-width', '7');
-    ln.setAttribute('stroke-width', '4');
-    ln.setAttribute('stroke', PENDING_COL);
-    ln.setAttribute('stroke-opacity', '0.55');
-    for (const l of [casing, ln]) { l.setAttribute('stroke-linecap', 'round'); svg.appendChild(l); }
-    // Сразу за canvas: маркеры (пульт, метки) MapLibre добавляет в тот же контейнер позже — они остаются сверху.
-    const cv = map.getCanvas();
-    cv.parentNode!.insertBefore(svg, cv.nextSibling);
-  };
-  return {
-    show(a: LatLon) {
-      if (!svg) mk();
-      // Обводка — как у слоя (её цвет и прозрачность зависят от темы, см. overlayPaint в app.ts).
-      const col = map.getLayer('ov-link-casing') ? map.getPaintProperty('ov-link-casing', 'line-color') : '#000';
-      const op = map.getLayer('ov-link-casing') ? map.getPaintProperty('ov-link-casing', 'line-opacity') : 0.45;
-      casing.setAttribute('stroke', typeof col === 'string' ? col : '#000');
-      casing.setAttribute('stroke-opacity', String(typeof op === 'number' ? op : 0.45));
-      const p = map.project([a.lon, a.lat]);
-      const c = center(); // та же цель, что у расчёта (с padding карты она не в середине контейнера)
-      const q = map.project([c.lon, c.lat]);
-      for (const l of [casing, ln]) {
-        l.setAttribute('x1', p.x.toFixed(1)); l.setAttribute('y1', p.y.toFixed(1));
-        l.setAttribute('x2', q.x.toFixed(1)); l.setAttribute('y2', q.y.toFixed(1));
-      }
-      svg!.style.display = '';
-    },
-    hide() { if (svg) svg.style.display = 'none'; },
-  };
-})();
 let moving = false; // карта движется (между первым move и moveend)
 
 /** Третья строка (мелко): запасы линий и азимут. Прочерк вместо служебного запаса «дрон ниже склона». */
@@ -94,8 +32,7 @@ function subLine(pair: PairResult, az: number, loss: string): string {
 
 /** Прицел вне луча направленной антенны на земле — какой именно (управление / видео) и кнопка развернуть их на прицел. */
 function aimNote(az: number): string {
-  const ls = (['rc', 'video'] as const).filter((x) => directional(S.antenna[x]) && (x === 'rc' || S.video.enabled));
-  const out = ls.filter((x) => !inBeam(S.antenna[x], az, S.antenna[x].heading));
+  const out = activeAntennaLines().filter((x) => !inBeam(S.antenna[x], az, S.antenna[x].heading));
   if (!out.length) return '';
   const name = { rc: 'управления', video: 'видео' };
   const a = Math.round(az) % 360;
@@ -111,6 +48,10 @@ function offlineNote(): string {
   return c === 'yes' ? ' · <span class="status-ok">офлайн ✓</span>' : c === 'no' ? ' · вне скачанных районов' : '';
 }
 
+/** Подпись метки на линии и начало фразы в строке связи для события по пути. */
+const LOSS_LABEL: Record<LossKind, string> = { wall: 'склон выше дрона', both: 'нет связи', rc: 'нет управления', video: 'нет видео' };
+const LOSS_TEXT: Record<LossKind, string> = { wall: 'склон выше дрона на', both: 'связь пропадёт на', rc: 'управление пропадёт на', video: 'видео пропадёт на' };
+
 /**
  * Где по пути к прицелу пропадёт связь (дрон летит к нему на высоте hh): метки на линии и строка для строки связи.
  * Только если это случится раньше прицела — у самого прицела об этом и так говорит вердикт.
@@ -118,31 +59,12 @@ function offlineNote(): string {
 function lossInfo(l: NonNullable<typeof last>, hh: number): { features: GeoJSON.Feature[]; text: string } {
   const st = S.station;
   if (!st) return { features: [], text: '' };
-  const hB = heightFnFor(l.r)(hh);
-  const early = (d: number | null) => (d !== null && d < l.r.dist * 0.97 ? d : null);
-  const rc = early(lossAlong(l.r.elev, l.r.dist, l.r.hA, hB, l.radio));
-  const v = l.video ? early(lossAlong(l.r.elev, l.r.dist, l.r.hA, hB, l.video)) : null;
-  // Склон по пути выше дрона — это уже столкновение, а не только связь: говорим об этом отдельно.
-  const n = l.r.elev.length - 1;
-  let wall: number | null = null;
-  for (let k = 1; k < n && wall === null; k++) if (l.r.elev[k] > hB) wall = (l.r.dist * k) / n;
-  const pts: { d: number; label: string; text: string }[] = [];
-  const wallD = wall !== null && wall < l.r.dist * 0.97 ? wall : null;
-  if (wallD !== null) pts.push({ d: wallD, label: 'склон выше дрона', text: 'склон выше дрона на' });
-  // Потеря связи — если она раньше склона (после склона дальше лететь некуда).
-  const rcE = rc !== null && (wallD === null || rc < wallD) ? rc : null;
-  const vE = v !== null && (wallD === null || v < wallD) ? v : null;
-  if (rcE !== null && vE !== null && Math.abs(rcE - vE) < l.r.dist * 0.03) pts.push({ d: Math.min(rcE, vE), label: 'нет связи', text: 'связь пропадёт на' });
-  else {
-    if (rcE !== null) pts.push({ d: rcE, label: 'нет управления', text: 'управление пропадёт на' });
-    if (vE !== null) pts.push({ d: vE, label: 'нет видео', text: 'видео пропадёт на' });
-  }
-  const features = pts.map((p): GeoJSON.Feature => {
+  const { events, first } = lossPoints(l.r.elev, l.r.dist, l.r.hA, heightFnFor(l.r)(hh), l.radio, l.video);
+  const features = events.map((p): GeoJSON.Feature => {
     const q = interpolate(st, l.r.target, p.d / l.r.dist);
-    return { type: 'Feature', geometry: { type: 'Point', coordinates: [q.lon, q.lat] }, properties: { label: `${p.label} · ${km(p.d)}`, d: p.d } };
+    return { type: 'Feature', geometry: { type: 'Point', coordinates: [q.lon, q.lat] }, properties: { label: `${LOSS_LABEL[p.kind]} · ${km(p.d)}`, d: p.d } };
   });
-  const first = pts.reduce<typeof pts[0] | null>((a, p) => (!a || p.d < a.d ? p : a), null);
-  const text = first ? ` · <span class="status-none">${first.text} <span class="num">${km(first.d)}</span></span>` : '';
+  const text = first ? ` · <span class="status-none">${LOSS_TEXT[first.kind]} <span class="num">${km(first.d)}</span></span>` : '';
   return { features, text };
 }
 
@@ -163,13 +85,16 @@ function renderStrip(l: NonNullable<typeof last>, pair: PairResult, hh: number) 
   setLoss(loss.features);
 }
 
-/** Данные высотомера: какая связь на каждой высоте; склон — если дрон оказался бы ниже рельефа у прицела. */
+/**
+ * Данные высотомера: какая связь на каждой высоте; склон — если дрон оказался бы ниже рельефа у прицела;
+ * needs — те же нужные высоты, что в подсказке строки связи (подпись «связь от N м» у шкалы совпадает с ней).
+ */
 function altData(l: NonNullable<typeof last>) {
   const fn = heightFnFor(l.r);
   const level = (hh: number): AltLevel => (fn(hh) < l.r.groundB - 0.05 ? 'ground' : pairAt(l, hh).status);
   const slope = Math.max(0, l.r.groundB - fn(0)); // высота склона над точкой отсчёта
   const marks = [l.needs.rc, l.needs.video, l.needs.pair, slope].filter((v): v is number => typeof v === 'number');
-  return { level, marks };
+  return { level, marks, needs: l.needs };
 }
 
 /** Сообщение вместо вердикта; offline — добавить кнопку «Скачать район». */
@@ -191,17 +116,14 @@ function syncMode() {
  */
 export function liveFollow() {
   const st = S.station;
-  if (!st || stationGround === null) { ghost.hide(); return; }
+  if (!st || stationGround === null) { hideGhost(); return; }
   const a = { lat: st.lat, lon: st.lon }, c = center();
   const dist = distance(a, c);
   // Прицел ушёл от посчитанной точки: полосы высотомера и предпросмотр — от старой цели, до нового расчёта шкала серая.
   if (last && distance(last.r.target, c) > 2) { last = null; setAltData(null); }
   if (dist < 5) { setLink(null); return; }
-  if (moving) {
-    if (linkDrawn) { linkDrawn = false; setGeo('link', fc()); }
-    setLoss([]);
-    if (linkOn()) ghost.show(a);
-  } else linkLine(a, c, { color: PENDING_COL, dash: 0, op: 0.55 });
+  if (moving) linkGhost(a);
+  else linkLine(a, c, { color: PENDING_COL, dash: 0, op: 0.55 });
   const az = Math.round(bearing(a, c)) % 360;
   // Строки «нужная высота» и запасы не трогаем: высота строки не прыгает, а значения обновит расчёт.
   const v = $('lsStatus').querySelector('.ls-verdict');
@@ -286,38 +208,23 @@ export function liveSettle() {
   moving = false;
   liveFollow();
 }
-/** Кнопка у карты: показать/спрятать линию пульт → прицел (и метки потери связи на ней). */
-export function setLinkLine(on: boolean): void {
-  S.map.link = on;
-  persist();
-  $('btnLink').classList.toggle('on', on);
-  $('btnLink').setAttribute('aria-pressed', String(on));
-  if (last && S.station && distance(center(), last.r.target) <= 2) renderStrip(last, last.r.pair, S.droneH); else liveSettle();
-  if (!on) setLink(null);
-}
+/** Перерисовать строку посчитанного прицела без пересчёта трассы; false — прицел не посчитан. */
+const redrawStrip = (): boolean => {
+  if (!last || !S.station || distance(center(), last.r.target) > 2) return false;
+  renderStrip(last, last.r.pair, S.droneH);
+  return true;
+};
+// Кнопка линии у карты (linkLayer.ts): у посчитанного прицела — линия цветом статуса и метки, иначе — приглушённая.
+onLinkToggle(() => { if (!redrawStrip()) liveSettle(); });
+// Район скачан или удалён — «офлайн ✓» / «вне скачанных районов» в строке связи сразу, без пересчёта трассы.
+on('offline', () => { redrawStrip(); });
 
 /** Конец движения: посчитать связь немедленно. */
 export function liveRecalc() {
   if (S.station) liveCalc.now();
 }
 
-// ---------- Слой линии связи и строка связи ----------
-
-export function addLinkLayers() {
-  map.addSource('link', { type: 'geojson', data: fc() });
-  map.addLayer({ id: 'ov-link-casing', type: 'line', source: 'link', paint: { 'line-color': '#000', 'line-width': 6, 'line-opacity': 0.45 } });
-  map.addLayer({ id: 'ov-link', type: 'line', source: 'link', filter: ['==', ['get', 'dash'], 0], paint: { 'line-color': ['get', 'color'], 'line-width': 3, 'line-opacity': ['coalesce', ['get', 'op'], 1] } });
-  map.addLayer({ id: 'ov-link-dash', type: 'line', source: 'link', filter: ['==', ['get', 'dash'], 1], paint: { 'line-color': ['get', 'color'], 'line-width': 3, 'line-opacity': ['coalesce', ['get', 'op'], 1], 'line-dasharray': [2, 2] } });
-  // Где по пути пропадёт связь: точка на линии и подпись на тёмной обводке (читается и на снимке, и на топо).
-  // Близкие события (склон и потеря связи рядом): точки — все, подпись при наложении — у ближнего к пульту.
-  map.addSource('link-loss', { type: 'geojson', data: fc() });
-  map.addLayer({ id: 'ov-loss', type: 'circle', source: 'link-loss', paint: { 'circle-radius': 6, 'circle-color': statusCss('none'), 'circle-stroke-color': '#fff', 'circle-stroke-width': 2 } });
-  map.addLayer({
-    id: 'ov-loss-label', type: 'symbol', source: 'link-loss',
-    layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Regular'], 'text-size': 13, 'text-anchor': 'top', 'text-offset': [0, 0.8], 'text-max-width': 30, 'symbol-sort-key': ['get', 'd'], 'text-ignore-placement': false },
-    paint: { 'text-color': '#fff', 'text-halo-color': 'rgba(0, 0, 0, 0.85)', 'text-halo-width': 2 },
-  });
-}
+// ---------- Строка связи ----------
 
 let offerAt: LatLon | null = null;
 const closeOffer = () => { $('lsOffer').hidden = true; $('linkStrip').classList.remove('offering'); offerAt = null; };
@@ -370,8 +277,8 @@ export function initLinkStrip() {
     else if (act === 'aim' && last) {
       const az = Math.round(last.r.az) % 360;
       // Поворачиваем только антенны, у которых прицел вне луча (вторая могла быть направлена в другое место нарочно).
-      for (const x of ['rc', 'video'] as const) if ((x === 'rc' || S.video.enabled) && directional(S.antenna[x]) && !inBeam(S.antenna[x], az, S.antenna[x].heading)) S.antenna[x].heading = az;
-      emit('radio'); emit('station'); toast(`Антенна направлена на прицел (${az}°)`);
+      for (const x of activeAntennaLines()) if (!inBeam(S.antenna[x], az, S.antenna[x].heading)) S.antenna[x].heading = az;
+      emit('antenna'); toast(`Антенна направлена на прицел (${az}°)`);
     }
   });
 
@@ -404,7 +311,7 @@ export function initLinkStrip() {
   updateLive();
 }
 
-// Пересчёт строки при смене пульта или радио (маркер пульта перерисовывает station.ts — он подписан раньше).
-// Пульт сдвинули — прежняя трасса не годится и для предпросмотра высоты.
+// Пересчёт строки при смене пульта, радио, высоты дрона или антенн (маркер пульта перерисовывает station.ts —
+// он подписан раньше). Пульт сдвинули — прежняя трасса не годится и для предпросмотра высоты.
 on('station', () => { last = null; updateLive(); });
-on('radio', () => updateLive());
+for (const ev of ['radio', 'height', 'antenna'] as const) on(ev, () => updateLive());

@@ -10,7 +10,8 @@ import { h } from './ui';
 import { initStation, stationGround } from './station';
 import { initAltimeter } from './altimeter';
 import { hereText } from './verdict';
-import { addLinkLayers, setLinkLine, initLinkStrip, liveMove, liveSettle, liveRecalc, scheduler, locate, offerGpsStation } from './live';
+import { initLinkStrip, liveMove, liveSettle, liveRecalc, scheduler, locate, offerGpsStation } from './live';
+import { addLinkLayers, setLinkLine, syncLinkButton } from './linkLayer';
 import { openPointSheet } from './point';
 import { initMarks, addMarkAtCenter } from './marks';
 import { initRuler } from './ruler';
@@ -30,8 +31,8 @@ import './styles/layout.css'; // последним из стилей: расс�
 initTheme(); // первым делом: тема до отрисовки панелей
 initReadability();
 
-// Для отладки в консоли браузера (только dev-сборка).
-if (import.meta.env.DEV) (window as unknown as { __map: typeof map }).__map = map;
+// Для отладки в консоли браузера: dev-сборка или сборка для smoke без сети (VITE_SMOKE=1, см. scripts/smoke.mjs --offline).
+if (import.meta.env.DEV || import.meta.env.VITE_SMOKE === '1') (window as unknown as { __map: typeof map }).__map = map;
 
 // ---------- Прицел и чип высоты ----------
 let hereH: number | null = null;
@@ -138,8 +139,7 @@ initMobile({ onPointPress: openPointSheet });
 $('zIn').addEventListener('click', () => map.zoomIn());
 $('zOut').addEventListener('click', () => map.zoomOut());
 $('btnGps').addEventListener('click', whereAmI);
-$('btnLink').classList.toggle('on', S.map.link);
-$('btnLink').setAttribute('aria-pressed', String(S.map.link));
+syncLinkButton();
 $('btnLink').addEventListener('click', () => setLinkLine(!S.map.link));
 $('btnHome').addEventListener('click', () => {
   if (!S.station) { toast('Пульт не поставлен'); return; }

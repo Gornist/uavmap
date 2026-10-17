@@ -399,8 +399,8 @@ describe('антенны на земле в проекте', () => {
     // прежний формат: одно направление на обе антенны (heading у antenna) — переносится в каждую
     const bad = { ...defaults(), antenna: { rc: { kind: 'laser', gainDbi: 999, beamDeg: 1 }, video: { kind: 'yagi', gainDbi: 13, beamDeg: 30 }, heading: -90 } } as unknown as State;
     const s = sanitize(bad);
-    expect(s.antenna.rc).toEqual({ kind: 'omni', gainDbi: 8, beamDeg: 60, heading: 270 });
-    expect(s.antenna.video).toEqual({ kind: 'yagi', gainDbi: 13, beamDeg: 30, heading: 270 });
+    expect(s.antenna.rc).toEqual({ kind: 'omni', gainDbi: 8, beamDeg: 60, heading: 270, tiltDeg: 0, beamVDeg: 60 });
+    expect(s.antenna.video).toEqual({ kind: 'yagi', gainDbi: 13, beamDeg: 30, heading: 270, tiltDeg: 0, beamVDeg: 30 });
     const own = sanitize({ ...defaults(), antenna: { rc: { kind: 'patch', gainDbi: 8, beamDeg: 60, heading: 10 }, video: { kind: 'yagi', gainDbi: 13, beamDeg: 30, heading: 725 } } } as unknown as State);
     expect([own.antenna.rc.heading, own.antenna.video.heading]).toEqual([10, 5]);
   });
@@ -408,5 +408,17 @@ describe('антенны на земле в проекте', () => {
     const old = JSON.stringify({ ...defaults(), antenna: { rc: { kind: 'patch', gainDbi: 8, beamDeg: 60 }, video: { kind: 'yagi', gainDbi: 13, beamDeg: 30 }, heading: 135 } });
     const s = restoreProject(old);
     expect([s.antenna.rc.heading, s.antenna.video.heading]).toEqual([135, 135]);
+  });
+  it('наклон и вертикальная ширина луча: умолчание у прежних проектов, пределы, мусор', () => {
+    expect([defaults().antenna.rc.tiltDeg, defaults().antenna.rc.beamVDeg]).toEqual([0, 60]);
+    // Прежний проект (без полей): наклон 0, вертикальная ширина — своя горизонтальная, не умолчание 60° из defaults.
+    const old = restoreProject(JSON.stringify({ ...defaults(), antenna: { rc: { kind: 'patch', gainDbi: 8, beamDeg: 60, heading: 10 }, video: { kind: 'yagi', gainDbi: 13, beamDeg: 30, heading: 20 } } }));
+    expect([old.antenna.rc.tiltDeg, old.antenna.rc.beamVDeg, old.antenna.video.tiltDeg, old.antenna.video.beamVDeg]).toEqual([0, 60, 0, 30]);
+    // Свои значения сохраняются; вне пределов (наклон −10..60, ширина 5..180) и не числа — умолчание.
+    const own = restoreProject(JSON.stringify({ ...defaults(), antenna: { rc: { kind: 'custom', gainDbi: 12, beamDeg: 40, heading: 0, tiltDeg: 25.5, beamVDeg: 20 }, video: { kind: 'yagi', gainDbi: 13, beamDeg: 30, heading: 0, tiltDeg: 90, beamVDeg: 'x' } } }));
+    expect([own.antenna.rc.tiltDeg, own.antenna.rc.beamVDeg]).toEqual([25.5, 20]);
+    expect([own.antenna.video.tiltDeg, own.antenna.video.beamVDeg]).toEqual([0, 30]);
+    const neg = sanitize({ ...defaults(), antenna: { rc: { kind: 'patch', gainDbi: 8, beamDeg: 60, heading: 0, tiltDeg: -10, beamVDeg: 2 }, video: defaults().antenna.video } } as unknown as State);
+    expect([neg.antenna.rc.tiltDeg, neg.antenna.rc.beamVDeg]).toEqual([-10, 60]);
   });
 });

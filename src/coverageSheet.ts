@@ -290,7 +290,7 @@ function renderTable(body: HTMLElement, c: CoverageShown) {
     tr.onclick = () => {
       S.coverage.show = 'margin';
       S.droneH = hv;
-      emit('radio');
+      emit('height');
     };
     tb.appendChild(tr);
   });
@@ -338,7 +338,11 @@ function renderPill() {
     });
   } else {
     const st = stats(c, lineOf(c, S.coverage.line))[i];
-    t.textContent = `Дрон ${hm(c.heights[i])} · до ${fmtKm(st.median)}`;
+    // «Дрон » — отдельным узлом: на узком экране с крупным текстом его прячет CSS, чтобы не терялась дальность.
+    const w = document.createElement('span');
+    w.className = 'cov-pill-w';
+    w.textContent = 'Дрон ';
+    t.append(w, `${hm(c.heights[i])} · до ${fmtKm(st.median)}`);
     // ✓⚠✕ — легенда заливки; у радиогоризонта без заливки её нет.
     if (coverageFill()) for (const s of ['ok', 'weak', 'none'] as const) {
       const b = document.createElement('b');
@@ -352,7 +356,9 @@ function renderPill() {
   if (c.resV && S.coverage.show !== 'minh') {
     const lg = document.createElement('span');
     lg.className = 'cov-pill-lines';
-    lg.innerHTML = `<i style="background:${BEAM_COLOR.rc}"></i>упр. <i style="background:${BEAM_COLOR.video}"></i>видео`;
+    lg.title = 'золотая — управление, голубая — видео';
+    // Слова — в .cov-pill-w: на узком экране с крупным текстом остаются одни цветные чёрточки.
+    lg.innerHTML = `<i style="background:${BEAM_COLOR.rc}"></i><span class="cov-pill-w">упр.</span> <i style="background:${BEAM_COLOR.video}"></i><span class="cov-pill-w">видео</span>`;
     main.appendChild(lg);
   }
   const note = running || c.prelim ? 'считаю…' : staleNote(c) ? 'устарела' : '';

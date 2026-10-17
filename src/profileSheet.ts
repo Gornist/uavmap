@@ -159,7 +159,7 @@ function renderProfileSheet(r: LinkCalc) {
   b.addEventListener('click', (e) => {
     const btn = (e.target as HTMLElement).closest<HTMLElement>('button.apply');
     if (!btn) return;
-    if (btn.dataset.h) { S.droneH = +btn.dataset.h; emit('radio'); }
+    if (btn.dataset.h) { S.droneH = +btn.dataset.h; emit('height'); }
     else if (btn.dataset.p) applyPreset(btn.dataset.p, btn.dataset.line === 'video' ? 'video' : 'rc');
     showProfile(r.target);
   });

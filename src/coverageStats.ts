@@ -92,5 +92,16 @@ export function heightIndex(heights: readonly number[], h: number): { i: number;
   return { i: best, exact: false };
 }
 
+/**
+ * Радиогоризонт сам: нужен ли фоновый пересчёт зоны. Без автозапуска или без пульта — нет; сменились пульт,
+ * аппаратура или антенны (inputsChanged) — да; сменилась только высота дрона — только если её нет среди посчитанных
+ * высот показанного результата (shownHeights: null — результата нет, тогда считать).
+ */
+export function autoCoverageDue(o: { auto: boolean; hasStation: boolean; inputsChanged: boolean; shownHeights: readonly number[] | null; droneH: number }): boolean {
+  if (!o.auto || !o.hasStation) return false;
+  if (o.inputsChanged || !o.shownHeights) return true;
+  return !heightIndex(o.shownHeights, o.droneH).exact;
+}
+
 /** Одинаковые наборы высот (оба по возрастанию). */
 export const sameHeights = (a: readonly number[], b: readonly number[]) => a.length === b.length && a.every((v, i) => v === b[i]);

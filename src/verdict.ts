@@ -76,21 +76,28 @@ export function heightHint(h: number, needs: HeightNeeds, videoName = 'Виде�
   if (n.video === null && now?.video === 'ok') n.video = h;
   if (n.pair === null && both) n.pair = h;
   const lower = (to: number, what: string) => (to <= 0 ? `${what} на любой высоте` : to < h ? `${what}; можно снизиться до ${to} м` : what);
+  // Выше — не всегда лучше: у наклонённой направленной антенны на земле дрон уходит из луча вверх. Нужная
+  // (наименьшая) высота ниже текущей, а сейчас связи нет — снизиться (now — статусы на текущей высоте).
+  const down = (to: number, what: string) => `Снизьтесь до ${to} м — ${what}`;
   const top = `${SEARCH_MAX} м`;
   if (n.rc === null) {
     return now?.rc === 'weak' ? `Управление на грани и на ${top} — подойдите ближе`
       : `Управление не добьёт и на ${top} — подойдите ближе`;
   }
-  if (n.video === undefined) return h < n.rc ? `Поднимите до ${n.rc} м — будет связь` : lower(n.rc, 'Связь держится');
+  if (n.video === undefined) {
+    if (h < n.rc) return `Поднимите до ${n.rc} м — будет связь`;
+    return now && now.rc !== 'ok' ? down(n.rc, 'будет связь') : lower(n.rc, 'Связь держится');
+  }
   const vn = videoName.charAt(0).toLowerCase() + videoName.slice(1); // «видео 5,8 ГГц» — единицы не трогаем
   const noVideo = now?.video === 'weak' ? `${vn} на грани` : `${vn} не добьёт`;
   if (h < n.rc) {
     if (n.pair === null) return `Поднимите до ${n.rc} м — будет управление; ${noVideo}`;
     return n.pair > n.rc ? `Поднимите до ${n.rc} м — будет управление, до ${n.pair} м — и видео` : `Поднимите до ${n.rc} м — будет связь`;
   }
+  if (now && now.rc !== 'ok') return down(n.rc, 'будет управление');
   if (n.pair === null) return `${noVideo.charAt(0).toUpperCase()}${noVideo.slice(1)} и на ${top} — подойдите ближе`;
   if (h < n.pair) return `Поднимите до ${n.pair} м — будет и видео`;
-  return lower(n.pair, 'Управление и видео держатся');
+  return now && !both ? down(n.pair, 'будут и управление, и видео') : lower(n.pair, 'Управление и видео держатся');
 }
 
 /** Высота места под прицелом словами: относительно пульта, если он стоит, иначе — над уровнем моря. */

@@ -43,3 +43,23 @@ export function altBands(level: (h: number) => AltLevel, top: number, n = 40): A
 
 /** Шаг высоты при перетаскивании: на шкале до 600 м — 10 м, выше — 25 м. */
 export const altSnap = (top: number) => (top <= 600 ? 10 : 25);
+
+/** Подпись на шкале: с какой высоты связь есть (ok) или хотя бы на грани (weak). */
+export interface AltNeed { h: number; level: 'ok' | 'weak' }
+
+/**
+ * Где подписать шкалу. pair — нужная высота обеих линий (та же, что в подсказке строки связи, live.ts → heightHint):
+ * есть — «связь от pair м». Нет (не добьёт до предела поиска) — низ первой полосы «на грани» или лучше, если она есть.
+ * Его граница найдена с точностью ~1 м другим поиском, чем нужные высоты строки: если рядом (до 3 м) есть одна из них
+ * (other — нужные высоты линий), это тот же порог (например, вершина склона) — подписываем её число, как в строке.
+ * Связь с самого низа (≤ 0) или подпись выше шкалы — null: строка связи и так это говорит.
+ */
+export function altNeed(bands: AltBand[], pair: number | null, top: number, other: (number | null | undefined)[] = []): AltNeed | null {
+  if (pair !== null) return pair > 0 && pair < top ? { h: pair, level: 'ok' } : null;
+  const b = bands.find((x) => x.level === 'weak' || x.level === 'ok');
+  if (!b) return null;
+  let hh = Math.ceil(b.from); // вверх — как у нужной высоты (minHeightForLink)
+  let best = 3.5;
+  for (const v of other) if (typeof v === 'number' && Math.abs(v - b.from) < best) { best = Math.abs(v - b.from); hh = v; }
+  return hh > 0 && hh < top ? { h: hh, level: 'weak' } : null;
+}

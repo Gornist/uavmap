@@ -45,7 +45,7 @@ export function initMenu(): void {
   x.title = 'Закрыть меню';
   $('scrim').addEventListener('click', close);
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isOpen()) close(); });
-  for (const ev of ['station', 'radio', 'marks', 'routes', 'coords'] as const) {
+  for (const ev of ['station', 'radio', 'height', 'antenna', 'marks', 'routes', 'coords'] as const) {
     on(ev, () => { if (isOpen() && current && !quiet) render(); });
   }
 }

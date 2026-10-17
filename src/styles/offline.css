@@ -13,3 +13,8 @@
 .off-item .row { margin: 4px 0 0; }
 #shBody .off-item .row > button { flex: 1 1 0; }
 .off button, .off .chips button { min-height: 44px; min-width: 44px; }
+/* «Подготовить без сети» — первым блоком шторки */
+.off-prep { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px 8px; background: var(--panel-2); }
+.off-prep .off-sum { margin: 2px 0; }
+.off-prep .off-prep-note { margin: 2px 0 6px; }
+#shBody .off-prep .row > button { flex: 1 1 auto; }

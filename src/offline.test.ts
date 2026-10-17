@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { tileRange, enumerateTiles, countTiles, estimateBytes, planLayers, parseAreas, exclusiveKeys, tileKey, tileUrl, keyToUrl, Area, DEFAULT_TILE_BYTES, areasCover } from './offlineCore';
+import { tileRange, enumerateTiles, countTiles, estimateBytes, planLayers, parseAreas, exclusiveKeys, tileKey, tileUrl, keyToUrl, Area, DEFAULT_TILE_BYTES, areasCover, prepRadiusKm, prepLayers, prepState, dedupLayers, downloadVerdict, VIEW_Z0, VIEW_Z1 } from './offlineCore';
 import { coverageZoom } from './elevation';
 
 const area = (id: string, lat: number, lon: number, km: number, z = [10]): Area => ({
@@ -136,5 +136,70 @@ describe('areasCover: рельеф без сети для трассы', () => {
   });
   it('точки в разных районах — нет: трасса целиком должна быть в одном', () => {
     expect(areasCover([a(), a({ id: 'b', lat: 44.2 })], [st, far])).toBe('no');
+  });
+});
+
+describe('«Подготовить без сети»', () => {
+  it('радиус района — радиус зоны вверх до ближайшего из 5/10/20/40 км', () => {
+    expect(prepRadiusKm(5000)).toBe(5);
+    expect(prepRadiusKm(4000)).toBe(5);
+    expect(prepRadiusKm(5001)).toBe(10);
+    expect(prepRadiusKm(10000)).toBe(10);
+    expect(prepRadiusKm(15000)).toBe(20); // зона по умолчанию
+    expect(prepRadiusKm(25000)).toBe(40);
+    expect(prepRadiusKm(40000)).toBe(40);
+    expect(prepRadiusKm(100000)).toBe(40); // больше наибольшего — наибольший
+  });
+  it('слои: расчёт и карта на весь район, уровень зоны текущего радиуса — даже не из списка зон', () => {
+    for (const [lat, lon] of [[43.68, 40.2], [55.75, 37.62], [64.5, 40.5]]) {
+      for (const r of [5000, 12000, 15000, 25000]) {
+        const { km, layers } = prepLayers(lat, lon, r);
+        expect(km).toBe(prepRadiusKm(r));
+        const z = coverageZoom({ lat, lon }, r).z;
+        expect(layers.some((x) => x.z === z && x.km >= r / 1000), `${lat}, ${r} м`).toBe(true);
+        for (let v = VIEW_Z0; v <= VIEW_Z1; v++) expect(layers.some((x) => x.z === v && x.km === km)).toBe(true);
+        expect(new Set(layers.map((x) => x.z)).size).toBe(layers.length); // без дублей по уровню
+      }
+    }
+  });
+  it('слои: больше 40 км — район 40 км, уровень зоны берётся для 40 км', () => {
+    const { km, layers } = prepLayers(50, 30, 60000);
+    expect(km).toBe(40);
+    expect(layers.every((x) => x.km <= 40)).toBe(true);
+  });
+  it('dedupLayers: меньший радиус того же уровня поглощается, порядок сохраняется', () => {
+    expect(dedupLayers([{ z: 10, km: 5 }, { z: 11, km: 5 }, { z: 10, km: 20 }, { z: 11, km: 5 }])).toEqual([{ z: 11, km: 5 }, { z: 10, km: 20 }]);
+  });
+  const A = (over: Partial<Area> = {}): Area => ({ id: 'a', name: 'a', lat: 43.68, lon: 40.2, km: 20, calc: true, view: true, layers: prepLayers(43.68, 40.2, 15000).layers, tiles: 1, bytes: 1, ts: 1, src: 'mapterhorn', ...over });
+  const st = { lat: 43.68, lon: 40.2 };
+  it('готовность у пульта: вся зона в районе — ready; пульт внутри, зона за краем — edge; вне — none', () => {
+    expect(prepState([A()], st, 15000)).toBe('ready');
+    expect(prepState([A()], st, 20000)).toBe('ready');
+    expect(prepState([A()], { lat: 43.68 + 0.09, lon: 40.2 }, 15000)).toBe('edge'); // ~10 км от центра
+    expect(prepState([A()], { lat: 44.2, lon: 40.2 }, 15000)).toBe('none');
+    expect(prepState([], st, 15000)).toBe('none');
+  });
+  it('готовность по слоям: уровень зоны скачан на меньший радиус вокруг центра района — пульт со сдвигом не «готов»', () => {
+    // «Скачать» 40 км только для расчёта: уровни зон 5–40 км — каждый на свой радиус вокруг центра.
+    const big = A({ km: 40, view: false, layers: planLayers(43.68, 40.2, 40, true, false) });
+    expect(prepState([big], st, 15000)).toBe('ready');
+    const off = { lat: 43.68 + 0.18, lon: 40.2 }; // ~20 км к северу: пульт внутри 40 км, зона 15 км — тоже
+    const zoneZ = coverageZoom(off, 15000).z;
+    const zoneLayer = big.layers.find((l) => l.z === zoneZ)!;
+    expect(prepState([big], off, 15000)).toBe(zoneLayer.km >= 35 ? 'ready' : 'edge');
+    // Слой нужного уровня только на 10 км вокруг центра — зона 15 км у сдвинутого пульта не покрыта.
+    const thin = A({ km: 40, view: false, layers: [{ z: zoneZ, km: 10 }, { z: zoneZ - 1, km: 40 }] });
+    expect(prepState([thin], off, 15000)).toBe('edge');
+  });
+  it('готовность: недокачанный, без расчёта или со старого источника район не считается', () => {
+    expect(prepState([A({ complete: false }), A({ calc: false }), A({ src: 'aws' })], st, 5000)).toBe('none');
+  });
+  it('итог скачивания — понятным текстом', () => {
+    const ok = { done: 10, skipped: 2, errors: 0, aborted: false };
+    expect(downloadVerdict(ok, '~3 МБ', 'Подготовить без сети')).toBe('Готово: ~3 МБ — расчёт здесь работает без сети');
+    expect(downloadVerdict({ ...ok, errors: 3 }, '~3 МБ', 'Обновить')).toMatch(/^Скачано не всё \(~3 МБ\).*«Обновить»/);
+    expect(downloadVerdict({ ...ok, aborted: true }, '~3 МБ', 'Обновить')).toMatch(/отменено.*~3 МБ.*«Обновить» докачает/);
+    // Источник не отвечает — важнее отмены и частичных ошибок.
+    expect(downloadVerdict({ done: 0, skipped: 0, errors: 6, aborted: false, sourceDown: true }, '~0 Б', 'Подготовить без сети')).toMatch(/^Скачано не всё — источник рельефа \(Mapterhorn\) не отвечает.*«Подготовить без сети»/);
   });
 });

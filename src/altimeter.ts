@@ -1,11 +1,13 @@
 // Высотомер у правого края: вертикальная шкала высоты дрона. Полосы — какая связь будет на каждой высоте
 // для текущей трассы пульт → прицел (их считает live.ts), внизу — склон, если прицел выше пульта.
 // Дрон — метка на шкале: её тянут пальцем (строка связи показывает результат сразу, пересчёт — по отпусканию),
-// нажатие на подпись — ввести точное число.
+// нажатие на подпись — ввести точное число. Справа от шкалы — подпись «связь от N м» (то же N, что в строке связи);
+// при первом посчитанном пути — подсказка, как читать шкалу (один раз на устройство).
 import { S, $, emit, on, toast } from './app';
 import { dialog } from './ui';
 import { STATUS_MAP } from './theme';
-import { AltBand, AltLevel, altBands, scaleTop, altSnap } from './altScale';
+import { AltBand, AltLevel, AltNeed, altBands, altNeed, scaleTop, altSnap } from './altScale';
+import type { HeightNeeds } from './verdict';
 
 const H_MAX = 5000; // как в меню «Аппаратура и высота»
 // Без двойных позиций у цвета («#c 0 6px»): их нет в Chrome < 71 (пульты), там фон пропал бы целиком.
@@ -14,6 +16,7 @@ const PENDING_FILL = 'rgba(140, 140, 140, 0.45)';
 
 let top = 300;
 let bands: AltBand[] = [];
+let need: AltNeed | null = null;
 let dragH: number | null = null;
 let onPreview: ((h: number) => void) | null = null;
 let onPreviewEnd: (() => void) | null = null;
@@ -22,13 +25,16 @@ let onPreviewEnd: (() => void) | null = null;
 export function setAltPreview(preview: (h: number) => void, end: () => void) { onPreview = preview; onPreviewEnd = end; }
 
 /**
- * Новые данные трассы: level(h) — связь на высоте h, marks — важные высоты (нужные, склон) для верха шкалы.
+ * Новые данные трассы: level(h) — связь на высоте h, marks — важные высоты (нужные, склон) для верха шкалы,
+ * needs — нужные высоты из подсказки строки связи: подпись «связь от N м» у шкалы — с теми же числами.
  * null — трассы нет (пульт без высоты, прицел на пульте, нет рельефа): шкала серая, высоту менять можно.
  */
-export function setAltData(d: { level: (h: number) => AltLevel; marks: number[] } | null) {
+export function setAltData(d: { level: (h: number) => AltLevel; marks: number[]; needs: HeightNeeds } | null) {
   top = scaleTop([S.droneH, ...(d ? d.marks : [])], top);
   bands = d ? altBands(d.level, top) : [];
+  need = d ? altNeed(bands, d.needs.pair, top, [d.needs.rc, d.needs.video]) : null;
   render();
+  if (d) maybeHint();
 }
 
 const el = () => $('altimeter');
@@ -40,7 +46,7 @@ function tickStep(t: number) { return t <= 400 ? 100 : t <= 800 ? 200 : t <= 120
 function render() {
   const root = el();
   root.hidden = !S.station;
-  if (root.hidden) return;
+  if (root.hidden) { removeHint(); return; }
   const bx = root.querySelector('.alt-bands') as HTMLElement;
   bx.innerHTML = '';
   const list = bands.length ? bands : [{ from: 0, to: top, level: 'pending' as const }];
@@ -66,6 +72,14 @@ function render() {
     t.textContent = String(v);
     tx.appendChild(t);
   }
+  // Подпись справа от шкалы (снаружи: не под бегунком и не на отметках); pointer-events: none — тап уходит на карту.
+  if (need) {
+    const n = document.createElement('div');
+    n.className = `alt-need alt-need-${need.level}`;
+    n.style.bottom = pct(need.h);
+    n.textContent = `${need.level === 'ok' ? 'связь' : 'на грани'} от ${need.h} м`;
+    tx.appendChild(n);
+  }
   renderDrone();
 }
 
@@ -76,7 +90,8 @@ function renderDrone() {
   mk.style.bottom = pct(hh);
   (root.querySelector('.alt-lbl') as HTMLElement).textContent = `${Math.round(hh)}${hh > top ? '↑' : ''}`;
   root.setAttribute('aria-valuenow', String(Math.round(hh)));
-  root.setAttribute('aria-valuetext', `${Math.round(hh)} метров над точкой взлёта`);
+  const nt = need ? `; ${need.level === 'ok' ? 'связь' : 'на грани'} от ${need.h} м` : '';
+  root.setAttribute('aria-valuetext', `${Math.round(hh)} метров над точкой взлёта${nt}`);
 }
 
 function heightAt(clientY: number): number {
@@ -91,7 +106,66 @@ function commit(hh: number) {
   const v = Math.max(0, Math.min(H_MAX, Math.round(hh)));
   if (v === S.droneH) { renderDrone(); onPreviewEnd?.(); return; }
   S.droneH = v;
-  emit('radio'); // пересчёт строки связи, профиля и устаревание зоны
+  emit('height'); // пересчёт строки связи; зона покажет эту высоту (посчитана) или пересчитается
+}
+
+// ---------- Подсказка при первом запуске ----------
+
+const HINT_KEY = 'uavmap.ui.altHint';
+let hintEl: HTMLElement | null = null;
+let hintDone = false; // в этом запуске уже закрыли (или хранилище говорит «видел»)
+
+const hintSeen = () => { try { return localStorage.getItem(HINT_KEY) === '1'; } catch { return false; } };
+
+/** Тап мимо подсказки закрывает её; сам тап не перехватываем — он делает своё (карта, высотомер, кнопки). */
+function onOutside(e: Event) {
+  if (hintEl && !hintEl.contains(e.target as Node)) closeHint();
+}
+
+function removeHint() {
+  if (!hintEl) return;
+  hintEl.remove();
+  hintEl = null;
+  document.removeEventListener('pointerdown', onOutside, true);
+}
+
+function closeHint() {
+  removeHint();
+  hintDone = true;
+  try { localStorage.setItem(HINT_KEY, '1'); } catch { /* нет места — покажем ещё раз при следующем запуске */ }
+}
+
+/**
+ * Один раз на устройство — при первом посчитанном пути, когда высотомер виден: не под шторкой, меню или линейкой
+ * (тогда — при следующем расчёте) и не под тостом (тогда — когда он уйдёт). Расстановка — styles/layout.css (.alt-hint), оформление — live.css.
+ */
+let hintRetry = 0;
+function maybeHint() {
+  if (hintDone || hintEl || !bands.length) return;
+  const root = el(), b = document.body.classList;
+  if (root.hidden || !root.offsetWidth || b.contains('sheet-open') || b.contains('drawer-open') || b.contains('ruler-on')) return;
+  if (hintSeen()) { hintDone = true; return; }
+  // Тост («Пульт поставлен…») стоит там же, внизу, и закрыл бы «Понятно» — ждём, пока он уйдёт.
+  if ($('toast').classList.contains('show')) {
+    if (!hintRetry) hintRetry = window.setTimeout(() => { hintRetry = 0; maybeHint(); }, 800);
+    return;
+  }
+  const sw = (lv: 'ok' | 'weak' | 'none' | 'ground') =>
+    `<i style="background:${lv === 'ground' ? GROUND_FILL : STATUS_MAP[lv]}"></i>`;
+  const d = document.createElement('div');
+  d.id = 'altHint';
+  d.className = 'alt-hint';
+  d.setAttribute('role', 'dialog');
+  d.setAttribute('aria-label', 'Как читать высотомер');
+  d.innerHTML = '<b>Шкала слева — высота дрона</b>'
+    + '<p>Метры над точкой взлёта, как барометр в очках. Цвет — связь на этой высоте при полёте к прицелу:</p>'
+    + `<p class="alt-hint-lg">${sw('ok')}есть ${sw('weak')}на грани ${sw('none')}нет ${sw('ground')}склон</p>`
+    + '<p>Тяните белую плашку или нажмите на шкалу; нажмите на число — ввести точно.</p>'
+    + '<button type="button" class="primary">Понятно</button>';
+  (d.querySelector('button') as HTMLElement).addEventListener('click', closeHint);
+  root.insertAdjacentElement('afterend', d);
+  hintEl = d;
+  document.addEventListener('pointerdown', onOutside, true);
 }
 
 async function askExact() {
@@ -146,7 +220,8 @@ export function initAltimeter() {
     if (d) { e.preventDefault(); commit(Math.max(0, S.droneH + d)); }
     else if (e.key === 'Enter') { e.preventDefault(); void askExact(); }
   });
+  // Полосы приходят от live.ts (setAltData) после пересчёта трассы; здесь — видимость и метка дрона.
   on('station', render);
-  on('radio', render);
+  on('height', render);
   render();
 }

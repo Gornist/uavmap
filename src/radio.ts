@@ -2,6 +2,7 @@
 // см. diffraction.ts), кривизна Земли с эквивалентным радиусом k·R, первая зона Френеля.
 import { R_EARTH } from './geo';
 import { deltaBullington } from './diffraction';
+import { aimAtElevation, elevationDeg, GroundAim } from './antenna';
 
 export interface RadioParams {
   freqMHz: number;
@@ -13,7 +14,11 @@ export interface RadioParams {
   clutterDb: number;   // лес/застройка у точек (вручную)
   fadeMarginDb: number;// желаемый запас на замирания
   k: number;           // коэффициент рефракции (4/3 — стандартная атмосфера)
+  /** Направленная антенна на земле с вертикальной диаграммой (antenna.ts aimRadio): усиление — по углу места на дрон. */
+  aim?: GroundAim;
 }
+/** Числовые поля радиопараметров (то, что задаёт пользователь и хранит проект; aim — только в расчёте). */
+export type RadioNumKey = Exclude<keyof RadioParams, 'aim'>;
 
 /** rc — управление; video — видео; telemetry — телеметрия/LoRa. both — один канал и для управления, и для видео (Wi-Fi). */
 export type PresetKind = 'rc' | 'video' | 'telemetry';
@@ -107,6 +112,9 @@ export function analyzeLink(elev: ArrayLike<number>, dist: number, hA: number, h
   const n = elev.length - 1;
   const lambda = C / (p.freqMHz * 1e6);
   const Re = clampK(p.k) * R_EARTH;
+  // Антенна на земле с наклоном / вертикальной диаграммой: усиление — для угла места на дрон на этой высоте и дальности.
+  // Здесь, а не у вызывающих: нужная высота, высотомер, точки потери связи меняют hB и dist — поправка следует сама.
+  if (p.aim) p = aimAtElevation(p, elevationDeg(hA, hB, dist, Re));
   const d = new Float64Array(n + 1), ground = new Float64Array(n + 1), losH = new Float64Array(n + 1), fz = new Float64Array(n + 1);
   let los = true, minClr = Infinity, worstBlock = 0;
   for (let i = 0; i <= n; i++) {
@@ -144,13 +152,47 @@ export function analyzeLink(elev: ArrayLike<number>, dist: number, hA: number, h
 
 /**
  * Минимальная высота дрона (м над точкой отсчёта), при которой запас ≥ требуемого.
- * heightFn(h) → абсолютная высота дрона для h. Возвращает null, если не хватает и на maxH.
+ * heightFn(h) → абсолютная высота дрона для h. Возвращает null, если не хватает и на maxH
+ * (с вертикальной диаграммой антенны на земле — ни на какой высоте до maxH, см. lowestOk).
  */
 export function minHeightForLink(elev: ArrayLike<number>, dist: number, hA: number, heightFn: (h: number) => number, p: RadioParams, maxH = 1500): number | null {
   const ok = (h: number) => analyzeLink(elev, dist, hA, heightFn(h), p).margin >= p.fadeMarginDb;
+  if (p.aim) return lowestOk(ok, 0, maxH, scanStep(p, dist));
   if (!ok(maxH)) return null;
   if (ok(0)) return 0;
   let lo = 0, hi = maxH;
+  while (hi - lo > 2) { const m = (lo + hi) / 2; if (ok(m)) hi = m; else lo = m; }
+  return Math.ceil(hi);
+}
+
+/** Наибольший шаг перебора высот, когда запас не растёт с высотой монотонно (см. lowestOk), м. */
+const SCAN_STEP = 25;
+
+/**
+ * Шаг перебора высот для линии p на трассе длиной dist: не больше четверти вертикальной ширины луча антенны
+ * на земле в пересчёте на высоту у цели (dist·tan(θv/4); при угле места выше нуля тот же угол — ещё больше метров,
+ * так что оценка с запасом), от 1 до SCAN_STEP м. Узкий луч на близкой цели — окно высот в несколько метров.
+ */
+function scanStep(p: RadioParams, dist: number): number {
+  const bv = Math.min(180, p.aim?.antenna.beamVDeg ?? 180);
+  return Math.max(1, Math.min(SCAN_STEP, dist * Math.tan((bv / 4) * (Math.PI / 180))));
+}
+
+/**
+ * Наименьшая высота от from до maxH, где ok: перебор вверх с шагом step до первой удачной, затем деление
+ * пополам до 2 м. Для антенны на земле с вертикальной диаграммой: выше — не всегда лучше (дрон уходит из луча
+ * вверх), и проверка «хватит ли на maxH» дала бы ложное «не добьёт». Окно связи уже шага перебора (четверть
+ * вертикального луча, см. scanStep) может быть пропущено — только если запас в нём едва дотягивает до желаемого.
+ */
+function lowestOk(ok: (h: number) => boolean, from: number, maxH: number, step: number): number | null {
+  if (ok(from)) return from;
+  let lo = from, hi = -1;
+  for (let h = from + step; ; h += step) {
+    const hh = Math.min(h, maxH);
+    if (ok(hh)) { hi = hh; break; }
+    lo = hh;
+    if (hh >= maxH) return null;
+  }
   while (hi - lo > 2) { const m = (lo + hi) / 2; if (ok(m)) hi = m; else lo = m; }
   return Math.ceil(hi);
 }
@@ -214,6 +256,11 @@ export function minHeightsForPair(elev: ArrayLike<number>, dist: number, hA: num
     const b = heightFn(h);
     return analyzeLink(elev, dist, hA, b, rc).margin >= rc.fadeMarginDb && analyzeLink(elev, dist, hA, b, video).margin >= video.fadeMarginDb;
   };
+  // Вертикальная диаграмма антенны на земле: запас по высоте не монотонен — перебор от большей из двух высот.
+  if (rc.aim || video.aim) {
+    const pair = lowestOk(ok, Math.max(mRc, mV), maxH, Math.min(scanStep(rc, dist), scanStep(video, dist)));
+    return { pair: pair === null ? null : Math.max(pair, mRc, mV), rc: mRc, video: mV };
+  }
   let lo = Math.max(mRc, mV) - 1, hi = maxH;
   if (!ok(maxH)) return { pair: null, rc: mRc, video: mV };
   if (ok(Math.max(0, lo))) return { pair: Math.max(mRc, mV), rc: mRc, video: mV };

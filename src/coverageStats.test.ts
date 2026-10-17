@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { emptyResult } from './coverageCore';
-import { CoverageShown, coverageHeights, firstLossAt, heightIndex, levelAt, lineOf, lvl, paletteIndex, sameHeights, stats } from './coverageStats';
+import { CoverageShown, autoCoverageDue, coverageHeights, firstLossAt, heightIndex, levelAt, lineOf, lvl, paletteIndex, sameHeights, stats } from './coverageStats';
 
 /** Результат на nH высот × rays лучей × samples отсчётов с запасом margin(hi, r, s) и обрывом loss(hi, r). */
 function result(nH: number, rays: number, samples: number, margin: (hi: number, r: number, s: number) => number, loss: (hi: number, r: number) => number) {
@@ -119,5 +119,27 @@ describe('heightIndex / sameHeights', () => {
     expect(sameHeights([30, 100], [30, 100])).toBe(true);
     expect(sameHeights([30, 100], [30])).toBe(false);
     expect(sameHeights([30, 100], [30, 120])).toBe(false);
+  });
+});
+
+describe('радиогоризонт сам: нужен ли автопересчёт зоны', () => {
+  const base = { auto: true, hasStation: true, inputsChanged: false, shownHeights: [100] as number[] | null, droneH: 100 };
+  it('выключен или нет пульта — никогда', () => {
+    for (const inputsChanged of [false, true]) for (const shownHeights of [null, [100], [50]]) {
+      expect(autoCoverageDue({ ...base, auto: false, inputsChanged, shownHeights })).toBe(false);
+      expect(autoCoverageDue({ ...base, hasStation: false, inputsChanged, shownHeights })).toBe(false);
+    }
+  });
+  it('сменились пульт, аппаратура или антенны — пересчёт, даже если высота посчитана', () => {
+    expect(autoCoverageDue({ ...base, inputsChanged: true })).toBe(true);
+  });
+  it('результата нет — посчитать', () => {
+    expect(autoCoverageDue({ ...base, shownHeights: null })).toBe(true);
+  });
+  it('сменилась только высота: посчитанная — без пересчёта, новая — пересчёт', () => {
+    expect(autoCoverageDue(base)).toBe(false);
+    expect(autoCoverageDue({ ...base, shownHeights: [30, 60, 100, 150], droneH: 60 })).toBe(false);
+    expect(autoCoverageDue({ ...base, droneH: 250 })).toBe(true);
+    expect(autoCoverageDue({ ...base, shownHeights: [30, 60, 100, 150], droneH: 120 })).toBe(true); // ближайшая — не та
   });
 });
