@@ -7,11 +7,10 @@ import { coverageZoom } from './elevation';
 import { enumerateTiles } from './offlineCore';
 import { demTileUrl } from './demTiles';
 import { lonLatToPixel } from './geo';
-import { fetchBuffer, HttpStatusError } from './netTiles';
-import { PRIMARY_TIMEOUT_MS, primaryDown, reportPrimary, awsTileUrl, cachedPrimary } from './demNet';
+import { cachedPrimary, loadDemTile } from './demNet';
 
 /** Не больше стольких тайлов (зона 25 км в горах — ~64 детальных тайла, ~7 МБ). */
-const MAX_TILES = 120;
+export const MAX_TILES = 120;
 // Скромно: у AWS (HTTP/1.1) на страницу 6 соединений — подкачка не должна занимать очередь, в которой ждёт зона.
 const PARALLEL = 2;
 /** Пауза после установки пульта: сначала догружается сама карта. */
@@ -22,32 +21,25 @@ let ac: AbortController | null = null;
 let doneKey = '';
 
 /** Тайлы источника для зоны вокруг пульта, ближние к пульту — первыми. */
-function plan(lat: number, lon: number, radius: number): { z: number; x: number; y: number }[] {
+export function plan(lat: number, lon: number, radius: number): { z: number; x: number; y: number }[] {
   const { z } = coverageZoom({ lat, lon }, radius); // виртуальный уровень расчёта зоны
   const tiles = enumerateTiles(lat, lon, [{ z, km: radius / 1000 }]);
   if (!tiles.length) return [];
   const [px, py] = lonLatToPixel(lon, lat, tiles[0].z);
-  const cx = px / 512 - 0.5, cy = py / 512 - 0.5; // тайлы источника — 512 px
+  // Тайл источника — 512 px, но сетка XYZ та же: номер тайла уровня z = пиксель lonLatToPixel(…, z) (256 px на тайл) / 256.
+  // x, y тайла — его левый верхний угол, поэтому центр пульта сдвинут на полтайла.
+  const cx = px / 256 - 0.5, cy = py / 256 - 0.5;
   return tiles.sort((a, b) => (a.x - cx) ** 2 + (a.y - cy) ** 2 - ((b.x - cx) ** 2 + (b.y - cy) ** 2)).slice(0, MAX_TILES);
 }
 
-/** Один тайл: основной источник, при сбое — четыре тайла запасного. Ответы кладёт в кеш Service Worker. */
+/**
+ * Один тайл: тот же путь, что у расчётов (demNet.ts: основной, при зависании/сбое — запасной AWS). Ответы кладёт
+ * в кеш Service Worker, результат не нужен. Тайлы AWS — по одному: подкачка не занимает соединения к S3, в которых ждёт зона.
+ */
 async function fetchTile(t: { z: number; x: number; y: number }, sig: AbortSignal): Promise<void> {
   if (await cachedPrimary(demTileUrl(t.z, t.x, t.y))) return; // уже есть (офлайн-район, прежняя подкачка)
-  if (!primaryDown()) {
-    try {
-      await fetchBuffer(demTileUrl(t.z, t.x, t.y), sig, PRIMARY_TIMEOUT_MS, 1);
-      reportPrimary(true);
-      return;
-    } catch (e) {
-      if (sig.aborted || (e instanceof HttpStatusError && e.status < 500)) return;
-      reportPrimary(false);
-    }
-  }
-  for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) { // по очереди: не больше PARALLEL запросов в полёте
-    if (sig.aborted) return;
-    await fetchBuffer(awsTileUrl(t.z + 1, 2 * t.x + dx, 2 * t.y + dy), sig).catch(() => undefined);
-  }
+  const r = await loadDemTile(t.z, t.x, t.y, { signal: sig, serial: true });
+  if (r?.kind === 'primary') r.bitmap.close();
 }
 
 async function run(): Promise<void> {

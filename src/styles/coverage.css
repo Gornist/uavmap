@@ -15,9 +15,8 @@
 .chips button.x { padding: 4px 10px; }
 .rt td small { display: block; color: var(--muted); font-size: 13px; }
 
-/* Плашка зоны поверх карты (шторка закрыта): под карточкой рельефа справа, top задаёт coverageSheet.ts. */
-/* Плашка зоны — под строкой связи, по центру (высоту строки --strip-h ставит live.ts). */
-.cov-pill { position: absolute; top: calc(16px + var(--strip-h, 0px) + var(--safe-t)); left: 50%; transform: translateX(-50%); z-index: 5; display: flex; align-items: stretch; max-width: calc(100% - 20px - var(--safe-l) - var(--safe-r)); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 22px; box-shadow: var(--shadow); }
+/* Плашка зоны поверх карты (шторка закрыта) — под строкой связи; расстановка по режимам — styles/layout.css. */
+.cov-pill { display: flex; align-items: stretch; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 22px; box-shadow: var(--shadow); }
 .cov-pill[hidden] { display: none; }
 .cov-pill button { background: transparent; border: 0; color: var(--text); min-height: 44px; }
 .cov-pill-main { display: flex; align-items: center; gap: 8px; white-space: nowrap; padding: 6px 4px 6px 14px; text-align: left; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 0; }
@@ -30,3 +29,9 @@
 .no-flexgap .cov-err > * + *, .no-flexgap .cov-check > * + *, .no-flexgap .cov-add > * + * { margin-left: 8px; }
 .cov-pill-lines { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 400; color: var(--muted); }
 .cov-pill-lines i { display: inline-block; width: 12px; height: 3px; border-radius: 2px; margin-left: 4px; }
+/* Узкий экран с крупным текстом: дальность важнее слов — «Дрон» и подписи линий прячутся, остаются число и цветные
+ * чёрточки (что чья — в подсказке по нажатию и в справке). */
+@media (max-width: 640px) {
+  .big-text .cov-pill-w { display: none; }
+  .big-text .cov-pill-lines i { margin-left: 2px; }
+}

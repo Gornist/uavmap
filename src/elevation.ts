@@ -2,8 +2,8 @@
 // Значение = R*256 + G + B/256 − 32768 (метры над уровнем моря).
 // Расчёты работают с виртуальными тайлами 256 px (см. demTiles.ts): каждый — четверть тайла источника 512 px.
 import { LatLon, lonLatToPixel, interpolate, destination, R_EARTH, D2R } from './geo';
-import { DEM_MAX_Z, SHARED_DEM_MAX_Z, SRC_TILE, TILE, demTileUrl, demTileSpan, demTileCount, srcOf } from './demTiles';
-import { PRIMARY_TIMEOUT_MS, HEDGE_MS, primaryDown, reportPrimary, awsStitched, cachedPrimary } from './demNet';
+import { DEM_MAX_Z, SHARED_DEM_MAX_Z, SRC_TILE, TILE, demTileSpan, demTileCount, srcOf } from './demTiles';
+import { primaryDown, loadDemTile, firstOf } from './demNet';
 
 // Кеш тайлов — LRU по порядку Map: при обращении тайл переставляется в конец, вытесняется самый давний.
 // 200 тайлов × 256 КБ (Float32 256×256) ≈ 50 МБ. Мозаику зоны (до 256 тайлов) держат свои ссылки — кеш её не ограничивает.
@@ -32,83 +32,23 @@ export function setLocalDemProvider(fn: LocalDemProvider | null) {
   clearDemCache();
 }
 
-// На слабой мобильной сети отдельный запрос может зависнуть навсегда — без таймаута вся загрузка зоны
-// стоит на «35/36». Зависший или оборванный запрос повторяем один раз; ответ сервера с ошибкой — нет.
-const NET_TIMEOUT_MS = 10000;
-const NET_TRIES = 2;
-
-function fetchBlob(url: string, timeoutMs = NET_TIMEOUT_MS): Promise<Blob> {
-  const ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, rej) => { timer = setTimeout(() => { ac?.abort(); rej(new Error('timeout')); }, timeoutMs); });
-  const req = fetch(url, ac ? { signal: ac.signal } : undefined)
-    .then((r) => (r.ok ? r.blob() : Promise.reject(r.status)));
-  return Promise.race([req, timeout]).then(
-    (b) => { clearTimeout(timer); return b; },
-    (e) => { clearTimeout(timer); throw e; },
-  );
-}
-
 /** Сколько ждать общий источник, прежде чем параллельно идти своим запросом. */
 const SHARED_WAIT_MS = 250;
+/** Дольше общий источник не ждём совсем: воркер мог потерять ответ. */
+const SHARED_TIMEOUT_MS = 10000;
 
-/** Загрузка картинки с одним повтором при зависании/обрыве; HTTP-статус не повторяем (бросается числом). */
-async function fetchBlobRetry(url: string): Promise<Blob> {
-  let last: unknown = new Error('нет попыток');
-  for (let i = 0; i < NET_TRIES; i++) {
-    try { return await fetchBlob(url); } catch (e) { last = e; if (typeof e === 'number') throw e; }
-  }
-  throw last;
-}
-
-/** Тайл из запасного источника (четыре тайла AWS, склеенные в 512 px). Не отклоняется: сбой — null. */
-async function awsTile(z: number, x: number, y: number): Promise<Float32Array | null> {
+/**
+ * Свой запрос со страницы (видит Service Worker и офлайн-кеш). Координаты источника. Выбор источника (основной,
+ * при зависании/сбое — запасной AWS, предохранитель, кеш) — в demNet.ts. Битая картинка — null, а не исключение.
+ */
+async function ownFetch(z: number, x: number, y: number): Promise<Float32Array | null> {
+  const t = await loadDemTile(z, x, y);
+  if (!t) return null;
   try {
-    const c = await awsStitched(z, x, y, fetchBlobRetry);
-    return c ? decode(c) : null;
+    return decode(t.kind === 'aws' ? t.canvas : t.bitmap);
   } catch {
     return null;
   }
-}
-
-/** Разбор картинки основного источника; битая картинка — null, а не исключение. */
-async function decodeBlob(b: Blob): Promise<Float32Array | null> {
-  try { return decode(await createImageBitmap(b)); } catch { return null; }
-}
-
-/**
- * Свой запрос со страницы (видит Service Worker и офлайн-кеш). Координаты источника.
- * Основной источник — одна попытка с таймаутом PRIMARY_TIMEOUT_MS. Молчит дольше HEDGE_MS — параллельно
- * запасной AWS (demNet.ts), берём первый ответ: зависание основного стоит ~1,5 с, а не таймаут. Завис или 5xx —
- * сбой для предохранителя (после двух подряд основной какое-то время не спрашиваем). 4xx — «тайла нет».
- */
-async function ownFetch(z: number, x: number, y: number): Promise<Float32Array | null> {
-  const url = demTileUrl(z, x, y);
-  if (primaryDown()) {
-    // Основной «лежит», но его тайлы в кеше (офлайн-район, подкачка) — берём их, в запасной только за недостающими.
-    const hit = await cachedPrimary(url);
-    const t = hit ? await decodeBlob(hit) : null;
-    return t ?? awsTile(z, x, y);
-  }
-  // Обе ветки гонки не отклоняются: иначе firstOf (только fulfilled) мог бы ждать вечно, а кеш — хранить ошибку.
-  const primary: Promise<Float32Array | null | 'missing'> = fetchBlob(url, PRIMARY_TIMEOUT_MS).then(
-    async (b) => { reportPrimary(true); return decodeBlob(b); },
-    (e) => { if (typeof e === 'number' && e < 500) return 'missing' as const; reportPrimary(false); return null; },
-  );
-  const quick = await Promise.race([primary, new Promise<undefined>((r) => setTimeout(r, HEDGE_MS))]);
-  if (quick === 'missing') return null;
-  if (quick) return quick;
-  if (quick === null) return awsTile(z, x, y); // основной ответил сбоем быстро
-  return firstOf(primary.then((v) => (v === 'missing' ? null : v)), awsTile(z, x, y));
-}
-
-/** Первый непустой результат из двух; null — если оба пустые. */
-function firstOf(a: Promise<Float32Array | null>, b: Promise<Float32Array | null>): Promise<Float32Array | null> {
-  return new Promise((resolve) => {
-    let left = 2;
-    const take = (v: Float32Array | null) => { if (v) resolve(v); else if (--left === 0) resolve(null); };
-    a.then(take); b.then(take);
-  });
 }
 
 /** Тайл источника (SRC_TILE × SRC_TILE). */
@@ -120,7 +60,7 @@ async function srcFromNetwork(z: number, x: number, y: number): Promise<Float32A
   // Ответ общего источника ограничен по времени: воркер мог его потерять — тогда «нет» вместо вечного ожидания.
   const shared = Promise.race([
     sharedDem(z, x, y).then((t) => (t.width === SRC_TILE && t.height === SRC_TILE ? t.data : null), () => null),
-    new Promise<null>((r) => setTimeout(() => r(null), NET_TIMEOUT_MS)),
+    new Promise<null>((r) => setTimeout(() => r(null), SHARED_TIMEOUT_MS)),
   ]);
   const quick = await Promise.race([shared, new Promise<undefined>((r) => setTimeout(r, SHARED_WAIT_MS))]);
   if (quick) return quick;

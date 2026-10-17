@@ -25,6 +25,7 @@ import { initMobile } from './mobile';
 import { elevationAt } from './elevation';
 import { initTheme } from './theme';
 import { initReadability, readOpt } from './readability';
+import './styles/layout.css'; // последним из стилей: расстановка поверх карты перекрывает оформление модулей
 
 initTheme(); // первым делом: тема до отрисовки панелей
 initReadability();

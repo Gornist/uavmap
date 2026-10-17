@@ -27,7 +27,7 @@ textarea.txt { min-height: 70px; resize: vertical; font: inherit; color: var(--t
 
 /* Компактные плашки: узкий портрет и ландшафт телефона */
 @media (max-width: 640px), (max-height: 520px) and (orientation: landscape) {
-  #rulerBar { width: calc(100% - 16px - var(--safe-l) - var(--safe-r)); padding: 6px 8px; }
+  #rulerBar { padding: 6px 8px; }
   #rulerText { flex: 1 1 100%; min-width: 0; font-size: 13px; }
   #rulerBar button { flex: 1; }
 }
@@ -35,7 +35,8 @@ textarea.txt { min-height: 70px; resize: vertical; font: inherit; color: var(--t
   #drawer { width: 100vw; border-right: 0; }
   .dr-head { padding-top: calc(12px + var(--safe-t)); }
   #drBody { padding-bottom: calc(24px + var(--safe-b)); }
-  #sheet { left: 0; right: 0; bottom: 0; width: auto; transform: translateY(var(--drag, 0px)); max-height: 85vh; max-height: 85dvh; border-radius: 16px 16px 0 0; border-width: 1px 0 0; padding: 0 calc(14px + var(--safe-r)) calc(14px + var(--safe-b)) calc(14px + var(--safe-l)); overscroll-behavior: contain; transition: transform 0.18s ease; }
+  /* шторка прижата к низу экрана во всю ширину (расстановка — layout.css): скругление только сверху */
+  #sheet { border-radius: 16px 16px 0 0; border-width: 1px 0 0; padding: 0 calc(14px + var(--safe-r)) calc(14px + var(--safe-b)) calc(14px + var(--safe-l)); overscroll-behavior: contain; transition: transform 0.18s ease; }
   #sheet.dragging { transition: none; }
   #sheet:not([hidden]) { animation: sheetUp 0.2s ease-out; }
   .sh-grip { display: block; height: 28px; margin: 0 -14px; position: relative; touch-action: none; cursor: grab; }
@@ -49,14 +50,10 @@ textarea.txt { min-height: 70px; resize: vertical; font: inherit; color: var(--t
 
 /* Ландшафт телефона */
 @media (max-height: 520px) and (orientation: landscape) {
-  #mapBar { right: calc(8px + var(--safe-r)); bottom: calc(var(--bar-h) + 8px + var(--safe-b)); flex-direction: row; gap: 8px; }
-  .zoom-pill { flex-direction: row; }
+  .zoom-pill { flex-direction: row; } /* кнопки карты здесь — ряд (layout.css), таблетка зума тоже лежит */
   .zoom-pill button + button { border-top: 0; border-left: 1px solid var(--line); }
-  #rulerBar { left: calc(8px + var(--safe-l)); transform: none; width: min(380px, 44vw); } /* слева: справа внизу — кнопки карты, высотомер при линейке скрыт */
-  body.ruler-on #mapBar { bottom: calc(var(--bar-h) + 8px + var(--safe-b)); } /* линейка слева — кнопкам подниматься не нужно */
   #drawer { padding-left: var(--safe-l); }
   .dr-head { padding-top: calc(10px + var(--safe-t)); }
   #drBody { padding-bottom: calc(24px + var(--safe-b)); }
-  #sheet { left: calc(8px + var(--safe-l)); transform: none; top: calc(8px + var(--safe-t)); bottom: calc(8px + var(--safe-b)); width: min(44vw, 400px); max-height: none; }
   #profileCanvas { height: 150px; }
 }

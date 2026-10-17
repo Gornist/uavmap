@@ -1,0 +1,130 @@
+/* ===== Раскладка элементов поверх карты — единственное место, где они расставляются =====
+ * Здесь — position/top/right/bottom/left/transform, ширина по экрану, слои (z-index) и видимость по режимам.
+ * Оформление (цвета, рамки, отступы внутри, размеры кнопок, шрифты) — в style.css, styles/main.css, live.css, coverage.css.
+ * Файл подключается последним (main.ts), поэтому его правила перекрывают остальные без хаков специфичности.
+ *
+ * Схема (L — левый край, R — правый, «по центру» — по горизонтали):
+ *   Десктоп и планшет (шире 1000 px):
+ *     вверху по центру — строка связи #linkStrip (до 620 px), под ней — плашка зоны .cov-pill;
+ *     R вверху — ⓘ атрибуция и левее неё масштаб (правее строки связи);
+ *     R внизу над нижней панелью — кнопки карты #mapBar столбиком (зум-таблетка, «Где я», «Линия к прицелу», «К пульту»);
+ *     L над нижней панелью — высотомер .altimeter (360 px, не выше свободной высоты), правее него — подсказка
+ *       первого запуска .alt-hint (низом вровень со шкалой; в портрете — до кнопок карты, в ландшафте — до строки связи);
+ *     в центре — прицел #cross, под ним чип .cross-chip;
+ *     внизу во всю ширину — #bottomBar (высота --bar-h); над ним по центру — #toast, #progress, панель линейки #rulerBar.
+ *   Сенсорный планшет-пульт (pointer: coarse, от 641×521): то же, --bar-h 68 px (кнопки крупнее — в live.css).
+ *   Узкое окно (≤ 1000 px) и ландшафт телефона: строка связи доходит до масштаба — ⓘ и масштаб опускаются под неё справа.
+ *   Портрет телефона (≤ 640 px): строка связи во всю ширину; ⓘ и масштаб — под ней справа, плашка зоны — ниже них;
+ *     высотомер от нижней панели, 300 px, не заходит под строку (--strip-h); --bar-h 62 px.
+ *   Ландшафт телефона (высота ≤ 520 px): строка связи — R вверху (до 380 px), ⓘ и масштаб — под ней;
+ *     плашка зоны — вверху слева правее высотомера; высотомер — L во всю высоту; кнопки карты — ряд R внизу;
+ *     шторка и линейка — слева (до 400 / 380 px).
+ *   Линейка включена (body.ruler-on): строка связи (ruler.ts ставит hidden), высотомер и чип скрыты;
+ *     #rulerBar по центру над нижней панелью, кнопки карты поднимаются над ней (--ruler-h ставит ruler.ts);
+ *     на ландшафте телефона линейка слева — кнопки остаются на месте.
+ *   Шторка открыта (body.sheet-open): строка связи, высотомер и его подсказка скрыты; #sheet по центру внизу (до 760 px),
+ *     в портрете телефона — во всю ширину от низа экрана (поверх нижней панели), на ландшафте — слева во всю высоту.
+ *
+ * Слои: прицел и чип 4 · высотомер, кнопки карты, плашка зоны 5 · строка связи, нижняя панель, линейка, подсказка 6 ·
+ *       атрибуция и прогресс 7 · шторка 8 · затемнение меню 9 и меню 10 (style.css) · тост 20 · диалоги 40 (menu.css).
+ * Переменные: --bar-h — высота нижней панели (здесь); --strip-h — высота строки связи (live.ts);
+ *   --ruler-h — высота панели линейки (ruler.ts); --safe-t/b/l/r — вырезы экрана (polyfillsBase.ts);
+ *   --gap-edge — отступ панелей от края экрана.
+ * Совместимость с Chrome 68 (пульты): без min()/max()/clamp()/inset — ширина «не больше N» через width + max-width.
+ */
+:root { --bar-h: 60px; --gap-edge: 8px; }
+
+/* ---------- Центр: прицел и чип под ним ---------- */
+#cross { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 4; }
+.cross-chip { position: absolute; left: 50%; top: calc(50% + 30px); transform: translateX(-50%); z-index: 4; }
+
+/* ---------- Вверху: строка связи и плашка зоны под ней ---------- */
+#linkStrip { position: absolute; left: 50%; transform: translateX(-50%); top: calc(var(--gap-edge) + var(--safe-t)); z-index: 6; width: calc(100% - 2 * var(--gap-edge)); max-width: 620px; }
+.cov-pill { position: absolute; top: calc(16px + var(--strip-h, 0px) + var(--safe-t)); left: 50%; transform: translateX(-50%); z-index: 5; max-width: calc(100% - 20px - var(--safe-l) - var(--safe-r)); }
+
+/* ---------- Правый верхний угол: ⓘ атрибуция и левее неё масштаб (углы MapLibre «снизу» переносим наверх) ---------- */
+.maplibregl-ctrl-bottom-right { top: calc(var(--gap-edge) + var(--safe-t)); left: auto; right: calc(var(--gap-edge) + var(--safe-r)); bottom: auto; z-index: 7; } /* развёрнутая — поверх масштаба и строки */
+.maplibregl-ctrl-bottom-right .maplibregl-ctrl { margin: 0; }
+.maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib { max-width: calc(100vw - 80px - var(--safe-l) - var(--safe-r)); }
+.maplibregl-ctrl-bottom-left { top: calc(10px + var(--safe-t)); left: auto; right: calc(42px + var(--safe-r)); bottom: auto; }
+.maplibregl-ctrl-bottom-left .maplibregl-ctrl-scale { margin: 0; }
+
+/* ---------- Правый нижний угол: кнопки карты над нижней панелью ---------- */
+#mapBar { position: absolute; right: calc(10px + var(--safe-r)); bottom: calc(var(--bar-h, 60px) + 12px + var(--safe-b)); z-index: 5; flex-direction: column; gap: 12px; }
+.no-flexgap #mapBar > * + * { margin-top: 10px; }
+
+/* ---------- Левый край: высотомер над нижней панелью ---------- */
+.altimeter { position: absolute; z-index: 5; left: calc(10px + var(--safe-l)); bottom: calc(var(--bar-h) + 20px + var(--safe-b)); height: 360px; max-height: calc(100% - var(--bar-h) - 84px - var(--safe-t) - var(--safe-b)); }
+
+/* Подсказка высотомера при первом запуске — правее шкалы, низом вровень с ней (строку связи вверху не закрывает);
+ * 76 px — правее высотомера в 48 px («Крупный текст», пульт) вместе с подписью «связь от». */
+.alt-hint { position: absolute; z-index: 6; left: calc(76px + var(--safe-l)); bottom: calc(var(--bar-h) + 20px + var(--safe-b)); width: 300px; max-width: calc(100% - 152px - var(--safe-l) - var(--safe-r)); max-height: calc(100% - var(--bar-h) - var(--strip-h, 0px) - 60px - var(--safe-t) - var(--safe-b)); }
+
+/* ---------- Низ: нижняя панель и всё, что над ней по центру ---------- */
+#bottomBar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 6; height: calc(var(--bar-h) + var(--safe-b)); }
+#rulerBar { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(var(--bar-h) + var(--gap-edge) + var(--safe-b)); z-index: 6; width: calc(100% - 2 * var(--gap-edge)); max-width: 620px; }
+#progress { position: absolute; bottom: calc(var(--bar-h, 60px) + 16px + var(--safe-b)); left: 50%; transform: translateX(-50%); z-index: 7; }
+#toast { position: absolute; left: 50%; bottom: calc(var(--bar-h, 60px) + 16px + var(--safe-b)); transform: translateX(-50%); z-index: 20; max-width: 90vw; }
+#sheet { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(var(--gap-edge) + var(--safe-b)); z-index: 8; width: calc(100% - 2 * var(--gap-edge)); max-width: 760px; max-height: 78vh; }
+
+/* ---------- Режимы: линейка и шторка ---------- */
+/* Открытая шторка закрывает строку связи и высотомер — прячем, чтобы не мелькали; при линейке строку прячет ruler.ts. */
+#linkStrip[hidden], body.sheet-open #linkStrip { display: none; }
+body.sheet-open .altimeter, body.ruler-on .altimeter, body.ruler-on .cross-chip { display: none; }
+body.sheet-open .alt-hint, body.ruler-on .alt-hint { display: none; }
+/* при линейке панель встаёт над кнопками карты (правый нижний угол) — кнопки поднимаются над ней */
+body.ruler-on #mapBar { bottom: calc(var(--bar-h, 60px) + var(--ruler-h, 60px) + 20px + var(--safe-b)); }
+
+/* ---------- Узкое окно (строка 620 px по центру + масштаб до 140 px справа помещаются в ряд от ~1000 px)
+ * и ландшафт телефона: ⓘ и масштаб — сразу под строкой связи справа ---------- */
+@media (max-width: 1000px), (max-height: 520px) and (orientation: landscape) {
+  .maplibregl-ctrl-bottom-right { top: calc(var(--strip-h, 0px) + 14px + var(--safe-t)); }
+  .maplibregl-ctrl-bottom-left { top: calc(var(--strip-h, 0px) + 16px + var(--safe-t)); }
+}
+
+/* ---------- Компактные панели: узкий портрет и ландшафт телефона ---------- */
+@media (max-width: 640px), (max-height: 520px) and (orientation: landscape) {
+  #rulerBar { width: calc(100% - 2 * var(--gap-edge) - var(--safe-l) - var(--safe-r)); max-width: none; }
+}
+
+/* ---------- Портрет телефона (и любое окно ≤ 640 px) ---------- */
+@media (max-width: 640px) {
+  :root { --bar-h: 62px; }
+  #mapBar { right: calc(8px + var(--safe-r)); }
+  #linkStrip { width: calc(100% - 12px - var(--safe-l) - var(--safe-r)); max-width: none; top: calc(6px + var(--safe-t)); }
+  /* под строкой справа — ⓘ и масштаб, плашка зоны — ниже них */
+  .cov-pill { top: calc(var(--strip-h, 0px) + 48px + var(--safe-t)); }
+  /* строка связи на всю ширину — высотомер от нижней панели; на маленьком экране не заходит под строку */
+  .altimeter { left: calc(8px + var(--safe-l)); bottom: calc(var(--bar-h) + 16px + var(--safe-b)); height: 300px; max-height: calc(100% - var(--bar-h) - var(--strip-h, 0px) - 40px - var(--safe-t) - var(--safe-b)); }
+  .cross-chip { max-width: calc(100vw - 216px - var(--safe-l) - var(--safe-r)); }
+  /* подсказка — между высотомером и кнопками карты справа (их ширина 52 px) */
+  .alt-hint { left: calc(64px + var(--safe-l)); bottom: calc(var(--bar-h) + 16px + var(--safe-b)); width: auto; right: calc(68px + var(--safe-r)); max-width: none; }
+}
+@media (max-width: 640px) and (orientation: portrait) {
+  /* шторка — во всю ширину от низа экрана; --drag — сдвиг пальцем за ручку (mobile.ts) */
+  #sheet { left: 0; right: 0; bottom: 0; width: auto; max-width: none; transform: translateY(var(--drag, 0px)); max-height: 85vh; max-height: 85dvh; }
+}
+
+/* ---------- Ландшафт телефона ---------- */
+@media (max-height: 520px) and (orientation: landscape) {
+  /* строка связи — вверху справа, плашка зоны — вверху слева правее высотомера (по центру под строкой легла бы на прицел) */
+  #linkStrip { left: auto; right: calc(var(--gap-edge) + var(--safe-r)); transform: none; width: 44vw; max-width: 380px; }
+  .cov-pill { top: calc(var(--gap-edge) + var(--safe-t)); left: calc(64px + var(--safe-l)); transform: none; max-width: calc(56vw - 80px); }
+  /* кнопки карты — ряд внизу справа (таблетка зума тоже лежит — main.css) */
+  #mapBar { right: calc(var(--gap-edge) + var(--safe-r)); bottom: calc(var(--bar-h) + var(--gap-edge) + var(--safe-b)); flex-direction: row; gap: 8px; }
+  .no-flexgap #mapBar > * + * { margin-top: 0; margin-left: 8px; }
+  /* высотомер — у левого края во всю высоту */
+  .altimeter { left: calc(12px + var(--safe-l)); bottom: calc(var(--bar-h) + 12px + var(--safe-b)); height: auto; max-height: none; top: calc(var(--gap-edge) + var(--safe-t)); }
+  /* подсказка — правее высотомера, ниже плашки зоны (она вверху слева, до 52 px от верха) */
+  .alt-hint { left: calc(72px + var(--safe-l)); bottom: calc(var(--bar-h) + 12px + var(--safe-b)); width: calc(56vw - 88px - var(--safe-l)); max-width: 420px; max-height: calc(100% - var(--bar-h) - 76px - var(--safe-t) - var(--safe-b)); }
+  /* линейка слева: справа внизу — кнопки карты, высотомер при линейке скрыт; кнопкам подниматься не нужно */
+  #rulerBar { left: calc(var(--gap-edge) + var(--safe-l)); transform: none; width: 44vw; max-width: 380px; }
+  body.ruler-on #mapBar { bottom: calc(var(--bar-h) + var(--gap-edge) + var(--safe-b)); }
+  /* шторка — слева во всю высоту, карта справа остаётся видна */
+  #sheet { left: calc(var(--gap-edge) + var(--safe-l)); transform: none; top: calc(var(--gap-edge) + var(--safe-t)); bottom: calc(var(--gap-edge) + var(--safe-b)); width: 44vw; max-width: 400px; max-height: none; }
+}
+
+/* ---------- Сенсорный планшет-пульт: нижняя панель выше (кнопки крупнее — live.css) ---------- */
+@media (pointer: coarse) and (min-width: 641px) and (min-height: 521px) {
+  :root { --bar-h: 68px; }
+}

@@ -4,8 +4,7 @@
 import maplibregl from 'maplibre-gl';
 import mlcontour from 'maplibre-contour';
 import { DEM_URL, SHARED_DEM_MAX_Z, demTileUrl } from './demTiles';
-import { fetchBuffer, HttpStatusError } from './netTiles';
-import { PRIMARY_TIMEOUT_MS, primaryDown, reportPrimary, awsStitched, canvasPng, cachedPrimary, AWS_URL } from './demNet';
+import { primaryDown, cachedPrimary, loadDemTile, blobBuffer, canvasPng, AWS_URL } from './demNet';
 import { setSharedDem } from './elevation';
 
 /**
@@ -95,30 +94,20 @@ maplibregl.addProtocol(HILLSHADE_PROTO, async (params, ac) => {
   const m = /^uavdem:\/\/(\d+)\/(\d+)\/(\d+)/.exec(params.url);
   if (!m) throw new Error(`Неверный адрес тайла рельефа: ${params.url}`);
   const [z, x, y] = [+m[1], +m[2], +m[3]];
-  // Основной источник недоступен (предохранитель в demNet.ts) — общий источник тоже качает с него: сразу запасной.
+  // Основной источник недоступен (предохранитель в demNet.ts) — общий источник тоже качает с него: сразу свой запрос.
   if (!primaryDown()) {
     try {
       return await bounded((inner) => demSource.sharedDemProtocolV4({ ...params, url: `${demSource.sharedDemProtocolId}://${z}/${x}/${y}` }, inner), ac, HILLSHADE_SHARED_MS);
     } catch (e) {
       if (ac.signal.aborted) throw e; // тайл больше не нужен (карту сдвинули)
     }
-    try {
-      const data = await fetchBuffer(demTileUrl(z, x, y), ac.signal, PRIMARY_TIMEOUT_MS, 1);
-      reportPrimary(true);
-      return { data };
-    } catch (e) {
-      if (ac.signal.aborted) throw e;
-      if (e instanceof HttpStatusError && e.status < 500) throw e; // тайла нет — нет и в запасном
-      reportPrimary(false);
-    }
   }
-  else {
-    // Основной «лежит», но тайл может быть в кеше (офлайн-район, подкачка) — он лучше запасного.
-    const hit = await cachedPrimary(demTileUrl(z, x, y));
-    if (hit) return { data: await hit.arrayBuffer() };
-  }
-  // Запасной: четыре тайла AWS, склеенные в 512 px и закодированные в PNG (раз уж MapLibre ждёт картинку).
-  const c = await awsStitched(z, x, y, (url) => fetchBuffer(url, ac.signal).then((b) => new Blob([b])));
-  if (!c) throw new Error('Нет рельефа ни в основном, ни в запасном источнике');
-  return { data: await canvasPng(c) };
+  // Свой запрос (demNet.ts): основной, при зависании/сбое — запасной AWS; при открытом предохранителе — сначала кеш.
+  const t = await loadDemTile(z, x, y, { signal: ac.signal });
+  if (ac.signal.aborted) throw Object.assign(new Error('отменено'), { name: 'AbortError' });
+  if (!t) throw new Error('Нет рельефа ни в основном, ни в запасном источнике');
+  // Картинку основного отдаём как пришла; склеенный из AWS холст кодируем в PNG: MapLibre ждёт картинку.
+  if (t.kind === 'aws') return { data: await canvasPng(t.canvas) };
+  t.bitmap.close();
+  return { data: await blobBuffer(t.blob) };
 });

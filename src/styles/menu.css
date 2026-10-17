@@ -47,7 +47,7 @@ button.li { width: 100%; min-height: 44px; font: inherit; color: var(--text); te
 
 /* ----- Диалог (вместо prompt/confirm) ----- */
 .dlg-scrim { position: fixed; inset: 0; z-index: 40; background: var(--scrim); display: flex; align-items: center; justify-content: center; padding: 16px calc(16px + var(--safe-r, 0px)) calc(16px + var(--safe-b, 0px)) calc(16px + var(--safe-l, 0px)); }
-.dlg { width: min(420px, 100%); max-height: 100%; overflow-y: auto; background: var(--panel); color: var(--text); border: 1px solid var(--line-strong); border-radius: 14px; box-shadow: var(--shadow-lg); padding: 16px; }
+.dlg { width: 420px; max-width: 100%; /* без min(): в Chrome 68 его нет */ max-height: 100%; overflow-y: auto; background: var(--panel); color: var(--text); border: 1px solid var(--line-strong); border-radius: 14px; box-shadow: var(--shadow-lg); padding: 16px; }
 .dlg-title { margin: 0 0 8px; font-size: 18px; font-weight: 600; }
 .dlg-text { margin: 0 0 12px; color: var(--text); font-size: 15px; line-height: 1.45; overflow-wrap: anywhere; }
 .dlg-field { display: flex; flex-direction: column; gap: 4px; margin: 0 0 12px; }

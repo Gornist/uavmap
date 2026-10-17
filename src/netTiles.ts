@@ -1,4 +1,4 @@
-// Надёжная загрузка тайлов: растровые (спутник, топо, схема, запасные подписи, запасной путь отмывки), векторные подписи, глифы.
+// Надёжная загрузка тайлов: растровые (спутник, топо, схема, запасные подписи), рельеф (demNet.ts), векторные подписи, глифы.
 // Сеть пульта иногда «встаёт» посреди запроса, а у загрузчика MapLibre таймаута нет: тайл висел «загружается»
 // минутами и держал одно из 6 соединений к серверу (HTTP/1.1 у Esri и S3). Здесь — таймаут и один повтор;
 // не вышло — обычная ошибка (растровые тайлы грузит страница, ошибка не пересылается в воркер).
@@ -15,18 +15,24 @@ export class HttpStatusError extends Error {
 /** https://… → uavnet://…: тайл пойдёт через загрузчик с таймаутом. */
 export const reliable = (url: string) => url.replace(/^https:\/\//, `${PROTO}://`);
 
-/** Тело ответа целиком; на попытку — таймаут, зависшая или оборванная попытка повторяется, HTTP-ошибка — нет. */
-export async function fetchBuffer(url: string, outer?: AbortSignal, timeoutMs = TIMEOUT_MS, tries = TRIES): Promise<ArrayBuffer> {
+/**
+ * Тело ответа целиком (read — как его прочитать); на попытку — таймаут, зависшая или оборванная попытка
+ * повторяется, HTTP-ошибка — нет. Попытка завершается по таймауту или отмене, даже если fetch на сигнал не отреагировал.
+ */
+async function fetchBody<T>(url: string, read: (r: Response) => Promise<T>, outer: AbortSignal | undefined, timeoutMs: number, tries: number): Promise<T> {
   let last: unknown = new Error('нет попыток');
   for (let i = 0; i < tries && !outer?.aborted; i++) {
     const ac = new AbortController();
     const stop = () => ac.abort();
     outer?.addEventListener('abort', stop);
     const timer = setTimeout(stop, timeoutMs);
+    const cut = new Promise<never>((_, rej) => ac.signal.addEventListener('abort', () =>
+      rej(Object.assign(new Error(outer?.aborted ? 'отменено' : 'таймаут'), { name: 'AbortError' }))));
     try {
-      const r = await fetch(url, { signal: ac.signal });
-      if (!r.ok) throw new HttpStatusError(r.status);
-      return await r.arrayBuffer();
+      return await Promise.race([
+        fetch(url, { signal: ac.signal }).then((r) => { if (!r.ok) throw new HttpStatusError(r.status); return read(r); }),
+        cut,
+      ]);
     } catch (e) {
       last = e;
       if (e instanceof HttpStatusError) throw e;
@@ -37,6 +43,14 @@ export async function fetchBuffer(url: string, outer?: AbortSignal, timeoutMs = 
   }
   throw last;
 }
+
+/** Тело ответа как ArrayBuffer (см. fetchBody). */
+export const fetchBuffer = (url: string, outer?: AbortSignal, timeoutMs = TIMEOUT_MS, tries = TRIES) =>
+  fetchBody(url, (r) => r.arrayBuffer(), outer, timeoutMs, tries);
+
+/** Тело ответа как Blob (картинка для createImageBitmap; см. fetchBody). */
+export const fetchBlob = (url: string, outer?: AbortSignal, timeoutMs = TIMEOUT_MS, tries = TRIES) =>
+  fetchBody(url, (r) => r.blob(), outer, timeoutMs, tries);
 
 /** Обработчик протокола для maplibregl.addProtocol (регистрирует app.ts). */
 export const netProtocol = async (params: { url: string }, ac: AbortController) =>
