@@ -86,15 +86,21 @@ function renderStrip(l: NonNullable<typeof last>, pair: PairResult, hh: number) 
 }
 
 /**
- * Данные высотомера: какая связь на каждой высоте; склон — если дрон оказался бы ниже рельефа у прицела;
- * needs — те же нужные высоты, что в подсказке строки связи (подпись «связь от N м» у шкалы совпадает с ней).
+ * Данные высотомера: цвет шкалы — видео на каждой высоте (пилот летит по картинке; видеоприёмника нет — управление);
+ * склон — если дрон оказался бы ниже рельефа у прицела. needs — те же нужные высоты, что в подсказке строки связи
+ * (подписи у шкалы совпадают с ней).
  */
 function altData(l: NonNullable<typeof last>) {
   const fn = heightFnFor(l.r);
-  const level = (hh: number): AltLevel => (fn(hh) < l.r.groundB - 0.05 ? 'ground' : pairAt(l, hh).status);
+  const line = l.video ? 'video' as const : 'rc' as const;
+  const level = (hh: number): AltLevel => {
+    if (fn(hh) < l.r.groundB - 0.05) return 'ground';
+    const p = pairAt(l, hh);
+    return (p.video ?? p.rc).status;
+  };
   const slope = Math.max(0, l.r.groundB - fn(0)); // высота склона над точкой отсчёта
-  const marks = [l.needs.rc, l.needs.video, l.needs.pair, slope].filter((v): v is number => typeof v === 'number');
-  return { level, marks, needs: l.needs };
+  const marks = [l.needs.rc, l.needs.video, slope].filter((v): v is number => typeof v === 'number');
+  return { level, marks, needs: l.needs, line };
 }
 
 /** Сообщение вместо вердикта; offline — добавить кнопку «Скачать район». */

@@ -271,11 +271,16 @@ async function scenario() {
   await step('высотомер: полосы, неверная высота не принимается', async () => {
     const lv = await ev(`[...document.querySelectorAll('#altimeter .alt-band')].map(b => b.className.replace('alt-band alt-', '')).join(',')`);
     if (!/ok|weak|none/.test(lv)) throw new Error('нет цветных полос: ' + lv);
-    // Подпись у шкалы — то же число, что в подсказке строки связи (дрон на 1500 м: «можно снизиться до N м»).
+    // Цвет и подпись шкалы — видео; управлению нужно выше — вторая подпись «упр. от N м». Большая из подписей —
+    // то же число, что в подсказке строки связи (дрон на 1500 м: «можно снизиться до N м» — нужная обеим линиям).
     const need = await ev(`document.querySelector('#lsStatus .ls-need')?.textContent || ''`);
-    const lbl = await ev(`document.querySelector('#altimeter .alt-need')?.textContent || ''`);
+    const lbls = await ev(`[...document.querySelectorAll('#altimeter .alt-need')].map(e => e.textContent)`);
+    const lbl = lbls.join(' / ');
     const n = (need.match(/снизиться до (\d+) м/) || [])[1];
-    if (n && lbl !== `связь от ${n} м`) throw new Error(`подпись «${lbl}», в строке «${need}»`);
+    if (lbls.length && !/^видео (на грани )?от \d+ м$/.test(lbls[0])) throw new Error(`подпись не о видео: «${lbl}»`);
+    // «упр. от» не подписывается, если управлению нужно выше видео меньше чем на 5 м (altimeter.ts, RC_SAME_M).
+    const nums = lbls.map((t) => +(t.match(/от (\d+) м$/) || [])[1]);
+    if (n && !nums.some((v) => v <= +n && +n - v <= 5)) throw new Error(`подписи «${lbl}», в строке «${need}»`);
     if (lbl) {
       const bad = await ev(`(() => { const a = document.querySelector('#altimeter .alt-need').getBoundingClientRect(), b = document.querySelector('#altimeter .alt-lbl').getBoundingClientRect();
         return a.left < 0 || a.right > innerWidth || (a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom); })()`);

@@ -16,6 +16,10 @@ const PENDING_FILL = 'rgba(140, 140, 140, 0.45)';
 
 let top = 300;
 let bands: AltBand[] = [];
+let line: 'video' | 'rc' = 'video'; // чью связь показывает цвет шкалы
+/** Подпись «упр. от N м»: управлению нужно выше, чем видео (иначе на высоте «видео есть» дрон уйдёт в возврат). */
+let rcNeed: number | null = null;
+const RC_SAME_M = 5;
 let need: AltNeed | null = null;
 let dragH: number | null = null;
 let onPreview: ((h: number) => void) | null = null;
@@ -25,14 +29,20 @@ let onPreviewEnd: (() => void) | null = null;
 export function setAltPreview(preview: (h: number) => void, end: () => void) { onPreview = preview; onPreviewEnd = end; }
 
 /**
- * Новые данные трассы: level(h) — связь на высоте h, marks — важные высоты (нужные, склон) для верха шкалы,
- * needs — нужные высоты из подсказки строки связи: подпись «связь от N м» у шкалы — с теми же числами.
+ * Новые данные трассы: level(h) — связь линии line (видео; нет видеоприёмника — управление) на высоте h,
+ * marks — важные высоты (нужные, склон) для верха шкалы, needs — нужные высоты из подсказки строки связи:
+ * подписи «видео от N м» и «упр. от N м» у шкалы — с теми же числами.
  * null — трассы нет (пульт без высоты, прицел на пульте, нет рельефа): шкала серая, высоту менять можно.
  */
-export function setAltData(d: { level: (h: number) => AltLevel; marks: number[]; needs: HeightNeeds } | null) {
+export function setAltData(d: { level: (h: number) => AltLevel; marks: number[]; needs: HeightNeeds; line: 'video' | 'rc' } | null) {
   top = scaleTop([S.droneH, ...(d ? d.marks : [])], top);
   bands = d ? altBands(d.level, top) : [];
-  need = d ? altNeed(bands, d.needs.pair, top, [d.needs.rc, d.needs.video]) : null;
+  line = d ? d.line : 'video';
+  const own = d ? (line === 'video' ? d.needs.video ?? null : d.needs.rc) : null;
+  need = d ? altNeed(bands, own, top, [own]) : null;
+  const rc = d && line === 'video' ? d.needs.rc : null;
+  // Порог тот же (гребень склона: границы ищутся разными способами и расходятся на 1–2 м) — вторая подпись — шум.
+  rcNeed = rc !== null && rc > 0 && rc < top && (!need || rc > need.h + RC_SAME_M) ? rc : null;
   render();
   if (d) maybeHint();
 }
@@ -77,10 +87,26 @@ function render() {
     const n = document.createElement('div');
     n.className = `alt-need alt-need-${need.level}`;
     n.style.bottom = pct(need.h);
-    n.textContent = `${need.level === 'ok' ? 'связь' : 'на грани'} от ${need.h} м`;
+    n.textContent = needText();
+    tx.appendChild(n);
+  }
+  if (rcNeed !== null) {
+    const n = document.createElement('div');
+    n.className = 'alt-need alt-need-rc';
+    // Близко к подписи видео — приподнять, чтобы не наехала (подпись ~18 px); уголок тогда чуть выше своей высоты.
+    const gap = need ? ((rcNeed - need.h) / top) * track().clientHeight : Infinity;
+    n.style.bottom = gap < 20 ? `calc(${pct(rcNeed)} + ${Math.round(20 - gap)}px)` : pct(rcNeed);
+    n.textContent = `упр. от ${rcNeed} м`;
     tx.appendChild(n);
   }
   renderDrone();
+}
+
+/** «видео от 440 м», «видео на грани от 300 м»; без видеоприёмника — «связь от …». */
+function needText(): string {
+  if (!need) return '';
+  const who = line === 'video' ? 'видео' : 'связь';
+  return `${who}${need.level === 'ok' ? '' : ' на грани'} от ${need.h} м`;
 }
 
 function renderDrone() {
@@ -90,7 +116,7 @@ function renderDrone() {
   mk.style.bottom = pct(hh);
   (root.querySelector('.alt-lbl') as HTMLElement).textContent = `${Math.round(hh)}${hh > top ? '↑' : ''}`;
   root.setAttribute('aria-valuenow', String(Math.round(hh)));
-  const nt = need ? `; ${need.level === 'ok' ? 'связь' : 'на грани'} от ${need.h} м` : '';
+  const nt = (need ? `; ${needText()}` : '') + (rcNeed !== null ? `; управление от ${rcNeed} м` : '');
   root.setAttribute('aria-valuetext', `${Math.round(hh)} метров над точкой взлёта${nt}`);
 }
 
@@ -158,7 +184,7 @@ function maybeHint() {
   d.setAttribute('role', 'dialog');
   d.setAttribute('aria-label', 'Как читать высотомер');
   d.innerHTML = '<b>Шкала слева — высота дрона</b>'
-    + '<p>Метры над точкой взлёта, как барометр в очках. Цвет — связь на этой высоте при полёте к прицелу:</p>'
+    + `<p>Метры над точкой взлёта, как барометр в очках. Цвет — ${line === 'video' ? 'видео' : 'связь'} на этой высоте при полёте к прицелу:</p>`
     + `<p class="alt-hint-lg">${sw('ok')}есть ${sw('weak')}на грани ${sw('none')}нет ${sw('ground')}склон</p>`
     + '<p>Тяните белую плашку или нажмите на шкалу; нажмите на число — ввести точно.</p>'
     + '<button type="button" class="primary">Понятно</button>';
