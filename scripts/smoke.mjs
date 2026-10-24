@@ -506,6 +506,40 @@ async function scenario() {
     await waitFor(`document.body.classList.contains('drawer-open')`);
     return lay;
   });
+  await step('меню → Метки и файлы: картинка карты (JPEG) и лист для печати', async () => {
+    // Скачивание и окно печати перехватываем: файл не пишется, диалог не открывается.
+    await ev(`(() => { window.__dl = []; window.__aClick = HTMLAnchorElement.prototype.click; window.__print = window.print; HTMLAnchorElement.prototype.click = function () { window.__dl.push({ name: this.download, href: this.href }); }; window.print = () => { window.__printed = true; }; return 1; })()`);
+    const openFiles = async () => {
+      await ev(`document.querySelector('.dr-back')?.click(); [...document.querySelectorAll('.dr-item')].find(b => /Метки и файлы/.test(b.textContent)).click(); true`);
+    };
+    await openFiles();
+    await ev(`[...document.querySelectorAll('#drBody button')].find(b => b.textContent.trim() === 'Картинка карты').click(); true`);
+    await waitFor(`window.__dl.length > 0`, 20000).catch(() => { throw new Error('картинка не сохранилась'); });
+    const dl = await ev(`(async () => { const d = window.__dl[0]; const b = await (await fetch(d.href)).blob(); return { name: d.name, type: b.type, size: b.size }; })()`);
+    if (!/^uavmap-карта-\d{8}-\d{4}\.jpg$/.test(dl.name) || dl.type !== 'image/jpeg' || dl.size < 20000) throw new Error('картинка: ' + JSON.stringify(dl));
+    await ev(`document.getElementById('btnMenu').click(); true`);
+    await waitFor(`document.body.classList.contains('drawer-open')`);
+    // Прицел — не на пульте: в лист попадает профиль до него.
+    await ev(`document.getElementById('drClose').click(); window.__map.panBy([-220, -120], { duration: 0 }); true`);
+    await sleep(1500);
+    await ev(`document.getElementById('btnMenu').click(); true`);
+    await waitFor(`document.body.classList.contains('drawer-open')`);
+    await openFiles();
+    await ev(`[...document.querySelectorAll('#drBody button')].find(b => b.textContent.trim() === 'Лист для печати').click(); true`);
+    await waitFor(`!!window.__printed && !!document.getElementById('printSheet')`, 20000).catch(() => { throw new Error('лист для печати не собрался'); });
+    const t = await ev(`document.getElementById('printSheet').textContent.replace(/\\s+/g, ' ')`);
+    for (const need of ['До прицела', 'Пульт и аппаратура', 'Управление']) if (!t.includes(need)) throw new Error(`в листе нет «${need}»: ${t.slice(0, 200)}`);
+    const imgs = await ev(`[...document.querySelectorAll('#printSheet img')].map(i => i.naturalWidth).join(',')`);
+    if (!/^\d+,\d+$/.test(imgs) || imgs.split(',').some((v) => +v < 300)) throw new Error('картинки листа (карта, профиль): ' + imgs);
+    // На экране лист не виден; после печати убирается.
+    if (await ev(`getComputedStyle(document.getElementById('printSheet')).display !== 'none'`)) throw new Error('лист виден на экране');
+    await ev(`window.dispatchEvent(new Event('afterprint')); true`);
+    if (await ev(`!!document.getElementById('printSheet') || document.documentElement.classList.contains('printing')`)) throw new Error('лист не убран после печати');
+    await ev(`(() => { HTMLAnchorElement.prototype.click = window.__aClick; window.print = window.__print; return 1; })()`);
+    await ev(`document.getElementById('btnMenu').click(); true`);
+    await waitFor(`document.body.classList.contains('drawer-open')`);
+    return `${dl.name}, ${Math.round(dl.size / 1024)} КБ; лист: картинки ${imgs} px`;
+  });
   await step('тема: переключатель День / Ночь / Авто в настройках', async () => {
     await ev(`document.querySelector('.dr-back')?.click(); true`);
     await ev(`[...document.querySelectorAll('.dr-item')].find(b => /Настройки/.test(b.textContent)).click(); true`);

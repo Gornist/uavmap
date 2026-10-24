@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import proj4 from 'proj4';
-import { formatCoords, fromSK42, parseCoords, toSK42, toSK42Exact } from './coords';
+import { formatCoords, fromSK42, parseCoords, toSK42, toSK42Exact, toSK42InZone, toUTM } from './coords';
 import { distance } from './geo';
 
 /** Эллипсоид Красовского (a=6378245, 1/f=298.3): длина дуги меридиана от экватора, м (численное интегрирование). */
@@ -203,5 +203,24 @@ describe('parseCoords: знак у градусов (ревью Codex)', () => {
     const p = parseCoords('33°30′S 70°W')!;
     expect(p.lat).toBeCloseTo(-33.5, 6);
     expect(p.lon).toBeCloseTo(-70, 6);
+  });
+});
+
+describe('toUTM и toSK42InZone (свой рельеф в метрической проекции)', () => {
+  it('UTM совпадает с proj4 до сантиметра (север и юг, край зоны)', () => {
+    for (const [lat, lon, zone, south] of [[55.7558, 37.6173, 37, false], [-33.45, -70.6667, 19, true], [64.5, 41.9, 37, false], [43.6, 39.7, 37, false]] as const) {
+      const [e, n] = proj4('WGS84', `+proj=utm +zone=${zone}${south ? ' +south' : ''} +datum=WGS84 +units=m`, [lon, lat]);
+      const m = toUTM(lat, lon, zone, south);
+      expect(Math.abs(m.e - e)).toBeLessThan(0.01);
+      expect(Math.abs(m.n - n)).toBeLessThan(0.01);
+    }
+  });
+  it('СК-42 в чужой зоне совпадает с fromSK42 обратно', () => {
+    const p = { lat: 55.75, lon: 36.05 }; // зона 7, но считаем в зоне 6
+    const g = toSK42InZone(p.lat, p.lon, 6);
+    expect(Math.floor(g.y / 1e6)).toBe(6);
+    const back = fromSK42(g.x, g.y);
+    expect(back.lat).toBeCloseTo(p.lat, 6);
+    expect(back.lon).toBeCloseTo(p.lon, 6);
   });
 });

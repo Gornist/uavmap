@@ -73,8 +73,19 @@ export function files(el: HTMLElement) {
     }
   };
 
+  section(el, 'Карта в файл и печать');
+  el.appendChild(h('<p class="hint">Картинка — карта как на экране с пультом, метками, зоной и сведениями внизу. Лист — карта, профиль до прицела и таблица связи; в окне печати можно выбрать «Сохранить как PDF».</p>'));
+  const ex = h('<div class="row row-2"></div>');
+  const exportMod = () => import('../exportSheet');
+  const fail = () => toast('Не удалось загрузить часть приложения — обновите страницу', 5000);
+  ex.append(
+    button('Картинка карты', 'ghost', () => { close(); void exportMod().then((m) => m.exportImage(), fail); }),
+    button('Лист для печати', 'ghost', () => { close(); void exportMod().then((m) => m.printSheet(), fail); }),
+  );
+  el.appendChild(ex);
+
   section(el, 'Резервная копия проекта');
-  el.appendChild(h('<p class="hint">Всё хранится только на этом устройстве. Копия — весь проект одним файлом: пульт, метки, маршруты, настройки.</p>'));
+  el.appendChild(h('<p class="hint">Всё хранится только на этом устройстве. Копия — весь проект одним файлом: пульт, метки, маршруты, аппаратура, антенны, настройки. Скачанные районы рельефа и свои карты в копию не входят — их файлы большие.</p>'));
   const row2 = h('<div class="row row-2"></div>');
   row2.append(
     button('Сохранить копию', 'ghost', () => {

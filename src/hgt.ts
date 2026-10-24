@@ -51,7 +51,7 @@ export class HgtTile {
       data[i] = v;
     }
     if (voids === data.length) throw new Error('Ячейка целиком без данных');
-    if (voids) fillVoids(data, n);
+    if (voids) fillVoids(data, n, n);
     return new HgtTile(sw.lat, sw.lon, n, data, voids);
   }
 
@@ -66,8 +66,8 @@ export class HgtTile {
   }
 }
 
-/** Заполнение пропусков: линейно по строке между ближайшими валидными, иначе по столбцу. */
-function fillVoids(d: Int16Array, n: number) {
+/** Заполнение пропусков (HGT_VOID) сетки w×h: линейно по строке между ближайшими валидными, иначе по столбцу. */
+export function fillVoids(d: Int16Array, w: number, h: number) {
   const run = (start: number, step: number, len: number) => {
     let last = -1;
     for (let k = 0; k <= len; k++) {
@@ -83,8 +83,8 @@ function fillVoids(d: Int16Array, n: number) {
       last = k;
     }
   };
-  for (let r = 0; r < n; r++) run(r * n, 1, n);
-  for (let c = 0; c < n; c++) run(c, n, n);
+  for (let r = 0; r < h; r++) run(r * w, 1, w);
+  for (let c = 0; c < w; c++) run(c, w, h);
 }
 
 // ---------- Тайлы Terrarium ----------

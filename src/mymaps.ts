@@ -1,12 +1,12 @@
-// Свои карты: PMTiles как офлайн-подложка, HGT как свой рельеф (хранение — OPFS).
+// Свои карты: PMTiles и MBTiles как офлайн-подложка, HGT и GeoTIFF как свой рельеф (хранение — OPFS).
 import './styles/mymaps.css';
 import maplibregl from 'maplibre-gl';
-import type { PMTiles } from 'pmtiles';
 import { S, map, toast, openSheet, progress, addBase, removeBase, ensureBase, applyMapStyle, BASES } from './app';
 import { h, button, confirmDialog } from './ui';
 import { setLocalDemProvider } from './elevation';
-import { HgtTile, checkHgtFile, parseHgtName, tileCoverage, synthTile } from './hgt';
-import { MyMapItem, META_KEY, MAX_ITEMS, PM_MAX_BYTES, PM_HEADER_BYTES, checkPmtiles, parseMeta, serializeMeta, newId, cleanName, fmtBounds } from './mymapsCore';
+import { HgtTile, checkHgtFile, parseHgtName, tileCoverage, synthTile, tileBounds } from './hgt';
+import type { TifGrid } from './geotiff';
+import { blobSource, MyMapItem, META_KEY, MAX_ITEMS, PM_MAX_BYTES, PM_HEADER_BYTES, checkPmtiles, parseMeta, serializeMeta, newId, cleanName, fmtBounds } from './mymapsCore';
 import { fmtBytes } from './format';
 
 const DIR = 'mymaps';
@@ -18,7 +18,9 @@ let items: MyMapItem[] = [];
 export const myMapsCount = () => items.length;
 /** Файлы, подключённые только на сессию (OPFS недоступен или не хватило места). */
 const sessionFiles = new Map<string, File>();
-const archives = new Map<string, PMTiles>();
+/** Подключённые подложки: id → чтение тайла XYZ (PMTiles или MBTiles). */
+type TileGetter = (z: number, x: number, y: number, signal: AbortSignal) => Promise<ArrayBuffer | Uint8Array | null>;
+const archives = new Map<string, TileGetter>();
 let protoAdded = false;
 
 // ---------- Хранилище ----------
@@ -76,24 +78,32 @@ async function removeFromOpfs(name: string) {
   await d?.removeEntry(name).catch(() => undefined);
 }
 
-// ---------- PMTiles как подложка ----------
+// ---------- PMTiles и MBTiles как подложка ----------
 function ensureProtocol() {
   if (protoAdded) return;
   protoAdded = true;
   maplibregl.addProtocol(PROTO, async (p, ac) => {
     const m = /^uavpm:\/\/([a-z0-9]+)\/(\d+)\/(\d+)\/(\d+)$/.exec(p.url);
-    const pm = m && archives.get(m[1]);
-    if (!pm) throw new Error('Карта не подключена');
-    const r = await pm.getZxy(+m[2], +m[3], +m[4], ac.signal);
-    return { data: r ? r.data : EMPTY_PNG };
+    const get = m && archives.get(m[1]);
+    if (!get) throw new Error('Карта не подключена');
+    const r = await get(+m[2], +m[3], +m[4], ac.signal);
+    return { data: r ? (r instanceof Uint8Array ? r.slice().buffer : r) : EMPTY_PNG };
   });
 }
 
 async function activatePmtiles(it: MyMapItem) {
   ensureProtocol();
-  // Библиотека PMTiles (~45 КБ) — отдельным чанком: нужна только тем, у кого есть свои карты.
-  const { PMTiles, FileSource } = await import('pmtiles');
-  archives.set(it.id, new PMTiles(new FileSource(await fileOf(it))));
+  if (it.kind === 'mbtiles') {
+    // Чтение SQLite — свой модуль (mbtiles.ts), отдельным чанком.
+    const { MbTiles } = await import('./mbtiles');
+    const db = await MbTiles.open(blobSource(await fileOf(it)));
+    archives.set(it.id, (z, x, y) => db.getZxy(z, x, y));
+  } else {
+    // Библиотека PMTiles (~45 КБ) — отдельным чанком: нужна только тем, у кого есть свои карты.
+    const { PMTiles, FileSource } = await import('pmtiles');
+    const pm = new PMTiles(new FileSource(await fileOf(it)));
+    archives.set(it.id, async (z, x, y, signal) => (await pm.getZxy(z, x, y, signal))?.data ?? null);
+  }
   addBase(`my-${it.id}`, { name: `★ ${it.name}`, tiles: [`${PROTO}://${it.id}/{z}/{x}/{y}`], max: it.maxzoom ?? 18, attr: `Свои карты: ${it.name}` }, { minzoom: it.minzoom ?? 0, bounds: it.bounds });
 }
 
@@ -123,18 +133,48 @@ function hgtName(it: MyMapItem): string {
 }
 
 const hgtItems = () => items.filter((i) => i.kind === 'hgt');
+const tifItems = () => items.filter((i) => i.kind === 'tif');
 const cellKey = (la: number, lo: number) => `${la},${lo}`;
 
+// ---------- GeoTIFF как рельеф ----------
+const tifCache = new Map<string, Promise<TifGrid>>(); // id → растр (LRU по порядку вставки)
+const TIF_LRU = 1; // растр — до 32 МБ Int16 (geotiff.ts, MAX_PX)
+
+function loadTif(it: MyMapItem): Promise<TifGrid> {
+  let p = tifCache.get(it.id);
+  if (p) { tifCache.delete(it.id); tifCache.set(it.id, p); return p; }
+  p = Promise.all([fileOf(it), import('./geotiff')]).then(([f, m]) => m.readGeoTiff(blobSource(f)));
+  p.catch(() => tifCache.delete(it.id));
+  tifCache.set(it.id, p);
+  while (tifCache.size > TIF_LRU) tifCache.delete(tifCache.keys().next().value!);
+  return p;
+}
+
+/** Границы тайла XYZ пересекаются с прямоугольником [з, ю, в, с]. */
+const touches = (z: number, x: number, y: number, b: [number, number, number, number]) => {
+  const t = tileBounds(z, x, y);
+  return t.west < b[2] && t.east > b[0] && t.south < b[3] && t.north > b[1];
+};
+
+/** Свой рельеф для тайла: сначала ячейки HGT (если покрывают целиком), потом растры GeoTIFF; null — из сети. */
 function refreshDem() {
-  const hs = hgtItems();
-  if (!hs.length) { setLocalDemProvider(null); return; }
+  const hs = hgtItems(), ts = tifItems();
+  if (!hs.length && !ts.length) { setLocalDemProvider(null); return; }
   const byCell = new Map(hs.map((i) => [cellKey(Math.round(i.bounds[1]), Math.round(i.bounds[0])), i]));
   setLocalDemProvider(async (z, x, y) => {
-    const cells = tileCoverage(z, x, y, (la, lo) => byCell.has(cellKey(la, lo)));
-    if (!cells) return null;
-    const tiles = new Map<string, HgtTile>();
-    for (const [la, lo] of cells) tiles.set(cellKey(la, lo), await loadHgt(byCell.get(cellKey(la, lo))!));
-    return synthTile(z, x, y, (la, lo) => tiles.get(cellKey(la, lo)));
+    const cells = byCell.size ? tileCoverage(z, x, y, (la, lo) => byCell.has(cellKey(la, lo))) : null;
+    if (cells) {
+      const tiles = new Map<string, HgtTile>();
+      for (const [la, lo] of cells) tiles.set(cellKey(la, lo), await loadHgt(byCell.get(cellKey(la, lo))!));
+      return synthTile(z, x, y, (la, lo) => tiles.get(cellKey(la, lo)));
+    }
+    for (const it of ts) {
+      if (!touches(z, x, y, it.bounds)) continue;
+      const [g, m] = await Promise.all([loadTif(it), import('./geotiff')]);
+      const t = m.synthFromGrid(z, x, y, g);
+      if (t) return t;
+    }
+    return null;
   });
 }
 
@@ -154,10 +194,19 @@ export async function initMyMaps(): Promise<void> {
       toast('Свои карты-подложки не подключились — обновите страницу', 6000);
     }
   }
+  // То же для MBTiles: модуль чтения не загрузился — записи и файлы оставляем, подключим после обновления страницы.
+  let mbOk = true;
+  if (items.some((i) => i.kind === 'mbtiles')) {
+    try { await import('./mbtiles'); } catch (e) {
+      mbOk = false;
+      console.warn('mymaps: модуль MBTiles не загрузился', e);
+      toast('Свои карты-подложки не подключились — обновите страницу', 6000);
+    }
+  }
   for (const it of items) {
-    if (it.kind === 'pmtiles' && !pmOk) continue;
+    if ((it.kind === 'pmtiles' && !pmOk) || (it.kind === 'mbtiles' && !mbOk)) continue;
     try {
-      if (it.kind === 'pmtiles') await activatePmtiles(it);
+      if (it.kind === 'pmtiles' || it.kind === 'mbtiles') await activatePmtiles(it);
       else await fileOf(it); // HGT: проверяем, что файл на месте
     } catch (e) {
       console.warn('mymaps: не удалось восстановить', it.id, e);
@@ -204,6 +253,47 @@ async function importPmtiles(f: File) {
   toast(`Карта «${it.name}» подключена${where(stored)}`, 4500);
 }
 
+async function importMbtiles(f: File) {
+  if (items.length >= MAX_ITEMS) throw new Error(`Не больше ${MAX_ITEMS} карт — удалите ненужную`);
+  if (f.size > PM_MAX_BYTES) throw new Error('Файл больше 2 ГБ — вырежьте нужный район');
+  const { MbTiles } = await import('./mbtiles');
+  const db = await MbTiles.open(blobSource(f)); // проверка схемы и индексов до копирования
+  const id = newId();
+  const nm = cleanName(db.info.name) || cleanName(f.name.replace(/\.mbtiles$/i, '')) || id;
+  const it: MyMapItem = { id, kind: 'mbtiles', name: nm, size: f.size, added: Date.now(), file: `${id}.mbtiles`, bounds: db.info.bounds, minzoom: db.info.minzoom, maxzoom: db.info.maxzoom };
+  const stored = await copyToOpfs(f, it.file);
+  if (!stored) sessionFiles.set(id, f);
+  items.push(it);
+  try { await activatePmtiles(it); } catch (e) { items.pop(); sessionFiles.delete(id); await removeFromOpfs(it.file); throw e; }
+  saveMeta();
+  toast(`Карта «${it.name}» подключена${where(stored)}`, 4500);
+}
+
+async function importTif(f: File) {
+  if (items.length >= MAX_ITEMS) throw new Error(`Не больше ${MAX_ITEMS} карт — удалите ненужную`);
+  const { readGeoTiff, TIF_MAX_BYTES } = await import('./geotiff');
+  if (f.size > TIF_MAX_BYTES) throw new Error('Файл больше 1 ГБ — вырежьте нужный район (gdal_translate -projwin)');
+  progress(0.1, 'Читаю GeoTIFF…');
+  const g = await readGeoTiff(blobSource(f)); // полная проверка: привязка, система координат, высоты
+  const id = newId();
+  const it: MyMapItem = { id, kind: 'tif', name: cleanName(f.name.replace(/\.tiff?$/i, '')) || id, size: f.size, added: Date.now(), file: `${id}.tif`, bounds: g.bounds };
+  const stored = await copyToOpfs(f, it.file);
+  if (!stored) sessionFiles.set(id, f);
+  items.push(it);
+  tifCache.set(id, Promise.resolve(g));
+  while (tifCache.size > TIF_LRU) tifCache.delete(tifCache.keys().next().value!);
+  saveMeta();
+  refreshDem();
+  const step = g.stepM >= 10 ? `${Math.round(g.stepM)} м` : `${g.stepM.toFixed(1).replace('.', ',')} м`;
+  toast(`Рельеф «${it.name}» подключён: ${g.crs}, шаг ${step}${g.reduced ? ' (уменьшенная копия)' : ''}${where(stored)}`, 6000);
+}
+
+/** Свой рельеф: по расширению — GeoTIFF или ячейка HGT. */
+const importDem = (f: File) => (/\.tiff?$/i.test(f.name) ? importTif(f) : importHgt(f));
+
+/** Карта-подложка: по расширению — PMTiles или MBTiles. */
+const importMap = (f: File) => (/\.mbtiles$/i.test(f.name) ? importMbtiles(f) : importPmtiles(f));
+
 async function importHgt(f: File) {
   const err = checkHgtFile(f.name, f.size);
   if (err) throw new Error(`${cleanName(f.name)}: ${err}`);
@@ -224,13 +314,14 @@ async function importHgt(f: File) {
 }
 
 async function dropItem(it: MyMapItem, doRefresh = true) {
-  if (it.kind === 'pmtiles') deactivatePmtiles(it);
+  if (it.kind === 'pmtiles' || it.kind === 'mbtiles') deactivatePmtiles(it);
   hgtCache.delete(it.id);
+  tifCache.delete(it.id);
   sessionFiles.delete(it.id);
   items = items.filter((i) => i !== it);
   await removeFromOpfs(it.file);
   saveMeta();
-  if (it.kind === 'hgt' && doRefresh) refreshDem();
+  if ((it.kind === 'hgt' || it.kind === 'tif') && doRefresh) refreshDem();
 }
 
 // ---------- Шторка ----------
@@ -242,7 +333,7 @@ export function openMyMapsSheet(): void {
   const run = async (fn: () => Promise<void>) => {
     if (busy.v) return;
     busy.v = true;
-    try { await fn(); } catch (e) { toast(e instanceof Error ? e.message : 'Не удалось добавить файл. Подходят растровые PMTiles и ячейки HGT', 6000); } finally { progress(null); busy.v = false; render(); }
+    try { await fn(); } catch (e) { toast(e instanceof Error ? e.message : 'Не удалось добавить файл. Подходят растровые PMTiles и MBTiles, рельеф HGT и GeoTIFF', 6000); } finally { progress(null); busy.v = false; render(); }
   };
 
   function render() {
@@ -250,12 +341,12 @@ export function openMyMapsSheet(): void {
     root.appendChild(h('<p class="hint mm-hint">Своя подложка и свой рельеф из файлов — работают без сети и хранятся на этом устройстве.</p>'));
     const add = h('<div class="row"></div>');
     add.append(
-      button('+ Карта (PMTiles)', 'primary', () => void run(async () => { for (const f of await pick('.pmtiles,application/octet-stream,application/vnd.pmtiles', false)) await importPmtiles(f); })),
-      button('+ Рельеф (HGT)', 'ghost', () => void run(async () => { for (const f of await pick('.hgt,application/octet-stream', true)) await importHgt(f); })),
+      button('+ Карта (PMTiles, MBTiles)', 'primary', () => void run(async () => { for (const f of await pick('.pmtiles,.mbtiles,application/octet-stream,application/vnd.pmtiles,application/vnd.sqlite3,application/x-sqlite3', false)) await importMap(f); })),
+      button('+ Рельеф (HGT, GeoTIFF)', 'ghost', () => void run(async () => { for (const f of await pick('.hgt,.tif,.tiff,image/tiff,application/octet-stream', true)) await importDem(f); })),
     );
     root.appendChild(add);
     const info = h('<details class="details"><summary>Какие файлы подходят</summary></details>');
-    info.appendChild(h('<p class="hint mm-hint"></p>')).textContent = 'Карта: файл PMTiles с картинками (png, jpg, webp) до 2 ГБ; из MBTiles его делает утилита pmtiles convert (github.com/protomaps/go-pmtiles). Рельеф: файлы HGT с именем вида N55E037.hgt (SRTM; например, viewfinderpanoramas.org), до 30 МБ каждый.';
+    info.appendChild(h('<p class="hint mm-hint"></p>')).textContent = 'Карта: файл PMTiles или MBTiles с картинками (png, jpg, webp) до 2 ГБ — растровые карты из SAS.Планета, QGIS, MOBAC, TileMill. Рельеф: файлы HGT с именем вида N55E037.hgt (SRTM; например, viewfinderpanoramas.org), до 30 МБ каждый, или GeoTIFF высот до 1 ГБ (одна полоса; WGS-84, Web Mercator, UTM или СК-42 Гаусса–Крюгера; большой растр — берётся его уменьшенная копия, если она есть).';
     info.appendChild(h('<p class="hint mm-hint"></p>')).textContent = 'Свой рельеф идёт в профиль, зону и высоту под прицелом, если файлы целиком покрывают участок. Отмывка и горизонтали берутся из сети.';
     root.appendChild(info);
     if (!navigator.storage?.getDirectory) root.appendChild(h('<p class="hint mm-warn"></p>')).textContent = 'Этот браузер не умеет хранить файлы: карты подключаются до перезапуска, потом их нужно добавить снова. Обновите Chrome, чтобы они сохранялись.';
@@ -268,15 +359,15 @@ export function openMyMapsSheet(): void {
       title.textContent = it.name;
       const meta = h('<div class="mm-meta"></div>');
       const sess = sessionFiles.has(it.id) ? ' · до перезапуска' : '';
-      meta.textContent = it.kind === 'pmtiles'
-        ? `Подложка · ${fmtBytes(it.size)} · масштабы ${it.minzoom}–${it.maxzoom}${sess}`
-        : `Рельеф · ${fmtBytes(it.size)} · ${fmtBounds(it.bounds)}${sess}`;
+      meta.textContent = it.kind === 'pmtiles' || it.kind === 'mbtiles'
+        ? `Подложка ${it.kind === 'mbtiles' ? 'MBTiles' : 'PMTiles'} · ${fmtBytes(it.size)} · масштабы ${it.minzoom}–${it.maxzoom}${sess}`
+        : `Рельеф ${it.kind === 'tif' ? 'GeoTIFF' : 'HGT'} · ${fmtBytes(it.size)} · ${fmtBounds(it.bounds)}${sess}`;
       const acts = h('<div class="mm-acts"></div>');
       acts.appendChild(button('Показать', 'ghost', () => {
         const [w, s, e, n] = it.bounds;
         map.fitBounds([[w, s], [e, n]], { padding: 40, maxZoom: it.maxzoom ?? 16, duration: 600 });
       }));
-      if (it.kind === 'pmtiles') {
+      if (it.kind === 'pmtiles' || it.kind === 'mbtiles') {
         const bid = `my-${it.id}`;
         const cur = S.map.base === bid;
         const b = button(cur ? 'Подложка ✓' : 'Сделать подложкой', cur ? 'ghost on' : 'ghost', () => {

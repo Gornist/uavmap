@@ -62,14 +62,19 @@ const N2 = N * N, N3 = N2 * N, N4 = N3 * N, N5 = N4 * N, N6 = N5 * N;
 const E = Math.sqrt(KRASS.es);
 /** Радиус спрямляющей сферы A (k = 1). */
 const A = (KRASS.a / (1 + N)) * (1 + N2 / 4 + N4 / 64 + N6 / 256);
-const ALPHA = [
-  N / 2 - (2 * N2) / 3 + (5 * N3) / 16 + (41 * N4) / 180 - (127 * N5) / 288 + (7891 * N6) / 37800,
-  (13 * N2) / 48 - (3 * N3) / 5 + (557 * N4) / 1440 + (281 * N5) / 630 - (1983433 * N6) / 1935360,
-  (61 * N3) / 240 - (103 * N4) / 140 + (15061 * N5) / 26880 + (167603 * N6) / 181440,
-  (49561 * N4) / 161280 - (179 * N5) / 168 + (6601661 * N6) / 7257600,
-  (34729 * N5) / 80640 - (3418889 * N6) / 1995840,
-  (212378941 * N6) / 319334400,
-];
+/** Коэффициенты α прямого ряда Крюгера по n = f/(2−f). */
+function alphaOf(n: number): number[] {
+  const n2 = n * n, n3 = n2 * n, n4 = n3 * n, n5 = n4 * n, n6 = n5 * n;
+  return [
+    n / 2 - (2 * n2) / 3 + (5 * n3) / 16 + (41 * n4) / 180 - (127 * n5) / 288 + (7891 * n6) / 37800,
+    (13 * n2) / 48 - (3 * n3) / 5 + (557 * n4) / 1440 + (281 * n5) / 630 - (1983433 * n6) / 1935360,
+    (61 * n3) / 240 - (103 * n4) / 140 + (15061 * n5) / 26880 + (167603 * n6) / 181440,
+    (49561 * n4) / 161280 - (179 * n5) / 168 + (6601661 * n6) / 7257600,
+    (34729 * n5) / 80640 - (3418889 * n6) / 1995840,
+    (212378941 * n6) / 319334400,
+  ];
+}
+const ALPHA = alphaOf(N);
 const BETA = [
   N / 2 - (2 * N2) / 3 + (37 * N3) / 96 - N4 / 360 - (81 * N5) / 512 + (96199 * N6) / 604800,
   N2 / 48 + N3 / 15 - (437 * N4) / 1440 + (46 * N5) / 105 - (1118711 * N6) / 3870720,
@@ -139,6 +144,45 @@ export function fromSK42(x: number, y: number): { lat: number; lon: number } {
   const zone = Math.floor(y / 1e6);
   const g = gkInverse(x, y, zone);
   return fromGeocentric(sk42ToWgs(toGeocentric(g.lat, g.lon, KRASS)), WGS84);
+}
+
+/**
+ * WGS-84 → СК-42 в заданной зоне Гаусса–Крюгера, м (x — север, y — восток с номером зоны, как в EPSG:284xx).
+ * Для своего рельефа в СК-42: точку переводим в зону растра, даже если она за краем зоны.
+ */
+export function toSK42InZone(lat: number, lon: number, zone: number): { x: number; y: number } {
+  const g = fromGeocentric(wgsToSk42(toGeocentric(lat, lon, WGS84)), KRASS);
+  return gkForward(g.lat, g.lon, zone);
+}
+
+/** WGS-84 → геодезические СК-42 (Красовский), градусы: для растров в широте/долготе СК-42 (EPSG:4284). */
+export function wgsToSk42Geo(lat: number, lon: number): { lat: number; lon: number } {
+  return fromGeocentric(wgsToSk42(toGeocentric(lat, lon, WGS84)), KRASS);
+}
+
+/** Геодезические СК-42 → WGS-84, градусы. */
+export function sk42GeoToWgs(lat: number, lon: number): { lat: number; lon: number } {
+  return fromGeocentric(sk42ToWgs(toGeocentric(lat, lon, KRASS)), WGS84);
+}
+
+// UTM на WGS-84: та же поперечная Меркатора рядами Крюгера, k0 = 0,9996, ложный восток 500 км, на юге — север 10 000 км.
+const UN = (1 - Math.sqrt(1 - WGS84.es)) / (1 + Math.sqrt(1 - WGS84.es));
+const UE = Math.sqrt(WGS84.es);
+const UA = 0.9996 * (WGS84.a / (1 + UN)) * (1 + UN ** 2 / 4 + UN ** 4 / 64 + UN ** 6 / 256);
+const UALPHA = alphaOf(UN);
+
+/** WGS-84 → UTM зоны zone (северное или южное полушарие), м. */
+export function toUTM(lat: number, lon: number, zone: number, south: boolean): { e: number; n: number } {
+  const l = (lon - (zone * 6 - 183)) * D2R, tau = Math.tan(lat * D2R);
+  const sg = Math.sinh(UE * Math.atanh((UE * tau) / Math.sqrt(1 + tau * tau)));
+  const tp = tau * Math.sqrt(1 + sg * sg) - sg * Math.sqrt(1 + tau * tau), cl = Math.cos(l);
+  const xi0 = Math.atan2(tp, cl), eta0 = Math.asinh(Math.sin(l) / Math.hypot(tp, cl));
+  let xi = xi0, eta = eta0;
+  for (let j = 1; j <= 6; j++) {
+    xi += UALPHA[j - 1] * Math.sin(2 * j * xi0) * Math.cosh(2 * j * eta0);
+    eta += UALPHA[j - 1] * Math.cos(2 * j * xi0) * Math.sinh(2 * j * eta0);
+  }
+  return { e: UA * eta + 500000, n: UA * xi + (south ? 10000000 : 0) };
 }
 
 function dms(v: number, pos: string, neg: string) {

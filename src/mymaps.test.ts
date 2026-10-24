@@ -56,6 +56,13 @@ describe('метаданные localStorage', () => {
   it('круг туда-обратно', () => {
     expect(parseMeta(serializeMeta([good, hgt] as never))).toEqual([good, hgt]);
   });
+  it('MBTiles и GeoTIFF: тот же формат записи; MBTiles без масштабов и чужое расширение файла — отбрасываются', () => {
+    const mb = { id: 'mbt00001', kind: 'mbtiles', name: 'SAS', size: 99, added: 3, file: 'mbt00001.mbtiles', bounds: [37, 55, 38, 56], minzoom: 8, maxzoom: 15 };
+    const tif = { id: 'tif00001', kind: 'tif', name: 'dem', size: 99, added: 4, file: 'tif00001.tif', bounds: [37.1, 55.2, 37.4, 55.5] };
+    expect(parseMeta(serializeMeta([mb, tif] as never))).toEqual([mb, tif]);
+    const noZoom = { ...mb, minzoom: undefined, maxzoom: undefined };
+    expect(parseMeta(serializeMeta([noZoom, { ...tif, file: 'tif00001.tiff' }] as never))).toEqual([]);
+  });
   it('мусор целиком', () => {
     for (const raw of [null, '', '{', 'null', '[]', '{"v":2,"items":[]}', '{"v":1,"items":5}', '"x"']) expect(parseMeta(raw)).toEqual([]);
   });

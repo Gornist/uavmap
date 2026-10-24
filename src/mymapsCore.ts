@@ -9,11 +9,11 @@ export const MAX_ITEMS = 50;
 
 export interface MyMapItem {
   id: string;
-  kind: 'pmtiles' | 'hgt';
+  kind: 'pmtiles' | 'mbtiles' | 'hgt' | 'tif';
   name: string;
   size: number;
   added: number;
-  /** Имя файла в OPFS: <id>.pmtiles / <id>.hgt. */
+  /** Имя файла в OPFS: <id>.<kind>. */
   file: string;
   /** [запад, юг, восток, север] */
   bounds: [number, number, number, number];
@@ -77,7 +77,7 @@ export function parseMeta(raw: string | null): MyMapItem[] {
     if (out.length >= MAX_ITEMS) break;
     if (!r || typeof r !== 'object') continue;
     const o = r as Record<string, unknown>;
-    const kind = o.kind === 'pmtiles' || o.kind === 'hgt' ? o.kind : null;
+    const kind = o.kind === 'pmtiles' || o.kind === 'mbtiles' || o.kind === 'hgt' || o.kind === 'tif' ? o.kind : null;
     if (!kind || typeof o.id !== 'string' || !ID_RE.test(o.id) || seen.has(o.id) || typeof o.name !== 'string') continue;
     if (o.file !== `${o.id}.${kind}`) continue;
     const size = num(o.size, 0, PM_MAX_BYTES), added = num(o.added, 0, 1e14);
@@ -86,7 +86,7 @@ export function parseMeta(raw: string | null): MyMapItem[] {
     const [w, s, e, n] = b as number[];
     if (w >= e || s >= n) continue;
     const item: MyMapItem = { id: o.id, kind, name: cleanName(o.name) || o.id, size, added, file: o.file as string, bounds: [w, s, e, n] };
-    if (kind === 'pmtiles') {
+    if (kind === 'pmtiles' || kind === 'mbtiles') {
       const z0 = num(o.minzoom, 0, 24), z1 = num(o.maxzoom, 0, 24);
       if (z0 === null || z1 === null || !Number.isInteger(z0) || !Number.isInteger(z1) || z0 > z1) continue;
       item.minzoom = z0; item.maxzoom = z1;
@@ -103,3 +103,12 @@ export function fmtBounds(b: [number, number, number, number]): string {
   const f = (v: number) => v.toFixed(2);
   return `${f(b[1])}…${f(b[3])}° с.ш., ${f(b[0])}…${f(b[2])}° в.д.`;
 }
+
+/** Источник байтов: срез файла (свои карты читаются кусками, не целиком). Отдельно от File — чтобы тестировать на буфере. */
+export interface ByteSource { size: number; read(offset: number, length: number): Promise<ArrayBuffer> }
+
+export const blobSource = (b: Blob): ByteSource => ({
+  size: b.size,
+  // Blob.arrayBuffer() — только с Chrome 76, пульты на Chrome 68.
+  read: (o, n) => new Response(b.slice(o, o + n)).arrayBuffer(),
+});

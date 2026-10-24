@@ -45,6 +45,8 @@ export function setCoverageFill(on: boolean): void {
   redrawCoverage();
 }
 export const coverageFill = () => fillOn;
+/** Что сейчас нарисовано (null — зоны на карте нет): для легенды экспорта. */
+export const coverageOnMap = (): CoverageShown | null => current;
 
 /** Убрать растр и границу с карты, освободить картинку. */
 export function clearCoverageView(): void {

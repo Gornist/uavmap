@@ -1,0 +1,27 @@
+/* Лист для печати (exportSheet.ts): на экране не виден; при печати — только он, чёрным по белому. */
+#printSheet { display: none; }
+@media print {
+  @page { size: A4 portrait; margin: 12mm; }
+  /* Приложение на весь экран без прокрутки (html, body: 100%, overflow: hidden) — на бумаге лист на несколько страниц. */
+  html.printing, html.printing body { height: auto !important; min-height: 0 !important; overflow: visible !important; position: static !important; background: #fff !important; }
+  html.printing body > *:not(#printSheet) { display: none !important; }
+  html.printing #printSheet { display: block; position: static; color: #000; background: #fff; font: 11pt/1.35 system-ui, sans-serif; }
+  #printSheet h1 { margin: 0 0 6pt; font-size: 16pt; }
+  #printSheet h1 small { font-size: 10pt; font-weight: 400; color: #444; }
+  #printSheet h2 { margin: 10pt 0 4pt; font-size: 13pt; break-after: avoid; }
+  #printSheet p { margin: 3pt 0; }
+  #printSheet img { display: block; width: 100%; height: auto; break-inside: avoid; }
+  #printSheet .ps-map { max-height: 150mm; object-fit: contain; }
+  #printSheet .ps-profile { margin: 4pt 0; border: 0.5pt solid #999; }
+  #printSheet .ps-verdict { font-size: 13pt; font-weight: 700; }
+  /* Заголовок раздела не отрывается от своей таблицы (break-after у h2 в Chrome не работает надёжно). */
+  #printSheet .ps-sec { break-inside: avoid; page-break-inside: avoid; }
+  #printSheet .ps-t { width: 100%; border-collapse: collapse; break-inside: avoid; }
+  #printSheet .ps-t th, #printSheet .ps-t td { padding: 3pt 5pt; border: 0.5pt solid #999; text-align: left; vertical-align: top; }
+  #printSheet .ps-t th { width: 28%; font-weight: 600; background: #f0f0f0; }
+  #printSheet .ps-note { margin-top: 8pt; font-size: 8.5pt; color: #444; }
+  /* Статусы на бумаге — тёмные оттенки (жёлтый на белом не читается). */
+  #printSheet .status-ok { color: #1e7a3a; }
+  #printSheet .status-weak { color: #9a6400; }
+  #printSheet .status-none { color: #b3261e; }
+}
