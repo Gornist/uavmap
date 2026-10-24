@@ -6,8 +6,8 @@ import { ANTENNA_TYPES, AntennaKind, directional, rumb, angleOff, elevationDeg, 
 import { bearing, distance, R_EARTH } from './geo';
 import { clampK, LineId } from './radio';
 
-/** Цвета лучей на карте: управление — акцент, видео — голубой (те же — у меток в блоке настройки). */
-export const BEAM_COLOR: Record<LineId, string> = { rc: '#d9a446', video: '#4aa3ff' };
+import { BEAM_COLOR } from './theme';
+export { BEAM_COLOR };
 export const LINE_TITLE: Record<LineId, string> = { rc: 'Пульт (управление)', video: 'Видеоприёмник' };
 
 /** Направление от пульта на прицел, ° (null — пульта нет или прицел на нём). */

@@ -634,6 +634,26 @@ async function scenario() {
     await sleep(1500);
     if (await ev(`!!document.getElementById('altHint')`)) throw new Error('подсказка высотомера показана повторно');
   });
+  // Каталог интерфейса (design.html, только dev-сервер): без ошибок, контраст текстовых токенов, без прокрутки вбок.
+  if (!/\/uavmap\//.test(URL_)) await step('каталог интерфейса design.html: обе темы, контраст, без прокрутки вбок', async () => {
+    await send('Page.navigate', { url: new URL('design.html', URL_).href });
+    await waitFor(`!!document.querySelector('#pv .pv-t')`, 15000);
+    const out = [];
+    for (const t of ['day', 'night']) {
+      await ev(`document.querySelector('[data-theme-set="${t}"]').click(); true`);
+      await sleep(200);
+      const bad = await ev(`[...document.querySelectorAll('#pv .pv-t td.status-none')].map(td => td.closest('tr').innerText.replace(/\\s+/g, ' '))`);
+      if (bad.length) throw new Error(`${t}: мало контраста — ${bad.join('; ')}`);
+      const rows = await ev(`document.querySelectorAll('#pv .pv-t tr').length - 1`);
+      out.push(`${t}: ${rows} пар ✓`);
+    }
+    // Страница с прокруткой: мобильный Chrome расширяет окно под широкое содержимое (innerWidth растёт) —
+    // сравниваем с заданной шириной окна (как в setDeviceMetricsOverride ниже), +1 px на округление.
+    const vw = mode === 'mobile' ? (LAND ? 844 : 390) : 1200;
+    const sw = await ev(`document.documentElement.scrollWidth > ${vw + 1} ? document.documentElement.scrollWidth + ' > ${vw}' : ''`);
+    if (sw) throw new Error(`горизонтальная прокрутка (${sw})`);
+    return out.join(', ');
+  });
 }
 
 // ---------- Запасной рельеф: основной источник (Mapterhorn) «висит» ----------

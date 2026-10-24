@@ -76,6 +76,9 @@ export const STATUS_RGB: Record<Status, [number, number, number]> = {
 };
 
 /** Цвета слоёв карты, зависящие от темы. */
+/** Цвета линий на карте: управление — акцент, видео — голубой (лучи антенн, границы радиогоризонта, подписи). */
+export const BEAM_COLOR: Record<'rc' | 'video', string> = { rc: '#d9a446', video: '#4aa3ff' };
+
 export const MAP_THEME: Record<ThemeName, { bg: string; casing: string; casingOpacity: number; route: string; baseBrightness: number }> = {
   // casing — тёмная обводка линий: читается и на светлом топо, и на спутнике (сама линия яркая).
   day: { bg: '#e9e5dd', casing: '#15130f', casingOpacity: 0.7, route: '#2f86e0', baseBrightness: 1 },

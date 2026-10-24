@@ -1,0 +1,47 @@
+/* Каталог интерфейса (design.html): только раскладка самого каталога. Компоненты — стилями приложения. */
+/* Прокручивается окно (html), body — без своей прокрутки: иначе липкая шапка «прилипает» к body и уезжает. */
+html { height: auto; overflow: auto; }
+body.pv-body { height: auto; min-height: 100%; overflow: visible; overscroll-behavior: auto; -webkit-user-select: text; user-select: text; }
+#pv { max-width: 980px; margin: 0 auto; padding: 16px 16px 48px; }
+#pv h1 { margin: 0 0 4px; font-size: 24px; }
+#pv h2 { margin: 28px 0 10px; font-size: 20px; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+#pv h3 { margin: 18px 0 8px; font-size: 16px; }
+.pv-head { position: sticky; top: 0; z-index: 2; background: var(--bg); padding: 8px 0; border-bottom: 1px solid var(--line); }
+.pv-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 8px 0; }
+.no-flexgap .pv-row > * { margin: 0 10px 10px 0; }
+.pv-seg { display: inline-flex; margin: 0; }
+.pv-seg button.on { background: var(--accent-soft); color: var(--text); font-weight: 600; }
+/* Фон «как карта» под компонентами, которые живут поверх неё */
+.pv-map { margin-top: 12px; padding: 12px; border-radius: var(--r); background: repeating-linear-gradient(45deg, #43503a 0, #43503a 14px, #4c5a41 14px, #4c5a41 28px); }
+.pv-map h2 { color: #fff; border-color: rgba(255, 255, 255, 0.3); text-shadow: 0 1px 2px #000; }
+.pv-map .pv-note { color: #f1ede6; text-shadow: 0 1px 2px #000; }
+.pv-map .seg { background: var(--panel); }
+.pv-static { position: static !important; transform: none !important; }
+#linkStrip.pv-static { max-width: 620px; }
+#bottomBar.pv-static { max-width: 620px; border: 1px solid var(--line); border-radius: var(--r); }
+#toast.pv-static { display: inline-block; margin-top: 12px; }
+.pv-static-pill { display: inline-flex; }
+.pv-alt { display: flex; align-items: flex-start; gap: 24px; flex-wrap: wrap; }
+.pv-static-alt { position: relative; height: 300px; margin: 0 150px 0 4px; }
+.pv-sheet { max-width: 560px; padding: 12px 14px 14px; }
+.pv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.pv-sw { display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }
+.pv-sw i { flex: none; width: 28px; height: 28px; border-radius: 6px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.2); }
+.pv-sw b { flex: 1 1 auto; font-weight: 600; overflow-wrap: anywhere; }
+/* Своя таблица (не .rt приложения: там последний столбец сжат до 1 %). */
+.pv-t { border-collapse: collapse; font-size: 14px; }
+.pv-t th, .pv-t td { vertical-align: middle; text-align: left; padding: 6px 14px 6px 0; border-bottom: 1px solid var(--line); }
+.pv-t th { color: var(--muted); font-size: 13px; font-weight: 600; }
+/* Телефон: строка таблицы — карточкой (образец, пара, контраст друг под другом), шапка не липнет. */
+@media (max-width: 640px) {
+  .pv-head { position: static; }
+  .pv-t, .pv-t tbody, .pv-t tr, .pv-t td { display: block; }
+  .pv-t tr:first-child { display: none; }
+  .pv-t tr { padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .pv-t td { padding: 2px 0; border: 0; }
+}
+.pv-chip { display: inline-block; padding: 4px 8px; border-radius: 6px; font-weight: 600; white-space: nowrap; }
+.pv-lines { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 10px; padding: 10px; border-radius: var(--r); background: #6b7a5c; color: #fff; }
+.pv-lines span { text-shadow: 0 1px 2px #000; }
+.pv-type { margin: 6px 0; }
+.pv-mapbar { padding: 8px 0; }
