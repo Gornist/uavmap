@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  analyzeLink, analyzePair, RANK, budget, DEFAULT_VIDEO, minHeightsForPair, presetsFor, C, DEFAULT_RADIO, freeSpaceRange, fresnelR, fspl, minHeightForLink, PRESETS,
+  analyzeLink, analyzePair, RANK, budget, DEFAULT_VIDEO, withCanopy, canopyOf, vegLoss, vegGamma, vegLimit, minHeightsForPair, presetsFor, C, DEFAULT_RADIO, freeSpaceRange, fresnelR, fspl, minHeightForLink, PRESETS,
   radioHorizon, RadioParams, lossAlong,
 } from './radio';
 import { bullingtonTaper, knifeEdgeJ } from './diffraction';
@@ -456,5 +456,58 @@ describe('lossAlong: где по пути пропадёт связь', () => {
       if (r.belowGround || r.status === 'none') brute = (5000 * k) / 300;
     }
     expect(lossAlong(e, 5000, 2, 120, P)).toBe(brute);
+  });
+});
+
+describe('лес на трассе (ITU-R P.833)', () => {
+  const N = 100, D = 1000;
+  const flat = () => new Float32Array(N + 1);
+  /** Полог h м на отсчётах [i0, i1]. */
+  const canopy = (h: number, i0: number, i1: number) => { const c = new Float32Array(N + 1); for (let i = i0; i <= i1; i++) c[i] = h; return c; };
+
+  it('затухание сквозь кроны: γ·d в начале, предел A_m на длинном пути; 5,8 ГГц сильнее 2,4', () => {
+    expect(vegLoss(0, 5800)).toBe(0);
+    expect(vegLoss(5, 2440)).toBeCloseTo(5 * vegGamma(2440), 0); // короткий путь — почти γ·d
+    expect(vegLoss(1e5, 5800)).toBeCloseTo(vegLimit(5800), 3);
+    expect(vegLimit(5800)).toBeGreaterThan(vegLimit(2440));
+    expect(vegLoss(50, 5800) - vegLoss(50, 2440)).toBeGreaterThan(10); // «управление есть, видео нет» у опушки
+  });
+
+  it('луч ниже крон на 200 м: потери ≤ затуханию сквозь кроны и ≤ дифракции над ними; без полога — как раньше', () => {
+    const bare = analyzeLink(flat(), D, 5, 5, P);
+    expect(bare.forest).toBeNull();
+    const e = withCanopy(flat(), canopy(10, 40, 60));
+    const r = analyzeLink(e, D, 5, 5, P);
+    expect(r.forest!.m).toBeCloseTo(210, -1);
+    expect(r.forest!.db).toBeGreaterThan(5);
+    expect(r.forest!.db).toBeLessThanOrEqual(vegLoss(r.forest!.m, P.freqMHz) + 1e-9);
+    expect(r.margin).toBeCloseTo(bare.margin - r.forest!.db, 6);
+    expect(r.canopyTop![50]).toBeCloseTo(r.ground[50] + 10, 6);
+  });
+
+  it('дрон высоко — луч над кронами: лес не отнимает', () => {
+    const e = withCanopy(flat(), canopy(10, 40, 60));
+    const r = analyzeLink(e, D, 5, 200, P);
+    expect(r.forest!.m).toBe(0);
+    expect(r.forest!.db).toBe(0);
+  });
+
+  it('хребет закрывает луч, на гребне лес: кроны — часть препятствия (дифракция растёт)', () => {
+    const ridge = flat();
+    for (let i = 45; i <= 55; i++) ridge[i] = 40;
+    const bare = analyzeLink(ridge, D, 5, 5, P);
+    const r = analyzeLink(withCanopy(ridge.slice(), canopy(8, 45, 55)), D, 5, 5, P);
+    expect(bare.los).toBe(false);
+    expect(r.forest!.m).toBe(0);
+    expect(r.forest!.db).toBeGreaterThan(1);
+  });
+
+  it('полог доходит до укороченных трасс (точки потери связи) и до нужной высоты', () => {
+    const e = withCanopy(flat(), canopy(10, 1, 99));
+    const fn = (h: number) => h;
+    const withF = minHeightForLink(e, D, 2, fn, P);
+    const without = minHeightForLink(flat(), D, 2, fn, P);
+    expect(withF === null || (without !== null && withF > without)).toBe(true);
+    expect(canopyOf(e)).not.toBeNull();
   });
 });

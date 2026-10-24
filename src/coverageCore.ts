@@ -33,6 +33,11 @@ export interface CoverageJob {
    * С наклоном / вертикальной шириной луча (hasVertical) — ещё и по углу места на дрон, для каждого отсчёта и высоты.
    */
   aim?: { antenna: Antenna; heading: number };
+  /**
+   * Высота рельефа под пультом, м. Без неё — из сетки; задают, когда в сетку добавлен полог леса (forest.ts):
+   * антенна пульта в лесу стоит под кронами, а не на них, и точка отсчёта высоты дрона — земля, а не верх крон.
+   */
+  stationGround?: number;
   r0?: number; r1?: number;  // считать лучи r0..r1−1 (по умолчанию все)
   exact?: boolean;           // false — заведомо «нет связи» без точного запаса (см. выше); по умолчанию true
 }
@@ -96,7 +101,7 @@ export function computeCoverage(j: CoverageJob, onProgress?: (frac: number) => v
   const fK = 2 / lambda;
 
   const [px0, py0] = lonLatToPixel(j.lon, j.lat, j.grid.z);
-  const ground0 = sampleGrid(j.grid, px0, py0);
+  const ground0 = j.stationGround ?? sampleGrid(j.grid, px0, py0);
   const tx = ground0 + j.antH;
   // Вертикальная диаграмма антенны на земле (antenna.ts): только если есть — иначе быстрый путь без изменений.
   const vAnt = j.aim && hasVertical(j.aim.antenna) ? j.aim.antenna : null;

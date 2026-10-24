@@ -107,6 +107,8 @@ export function hardware(el: HTMLElement) {
   ch.textContent = `${cur.hint[0].toUpperCase()}${cur.hint.slice(1)}${clutterLoss(S.clutter, S.radio.freqMHz) ? ` — сигнал слабее на ${Math.round(clutterLoss(S.clutter, S.radio.freqMHz))} дБ` : ''}.`;
   el.appendChild(ch);
 
+  forestSection(el);
+
   antennas(el);
 
   el.appendChild(h('<p class="hint muted">Высота дрона — над точкой взлёта, как её показывает барометр в очках. Её задают на высотомере у края карты.</p>'));
@@ -155,4 +157,20 @@ function antennas(el: HTMLElement) {
   section(el, 'Антенны на земле');
   el.appendChild(h('<p class="hint muted">То же — в шторке пульта: нажмите на 📡 на карте.</p>'));
   antennaPanel(el, render);
+}
+
+/** Лес на трассе (forest.ts): учитывать ли и высота деревьев. */
+function forestSection(el: HTMLElement) {
+  section(el, 'Лес на трассе');
+  const c = h('<label class="chk"><input type="checkbox"><span><span class="chk-t">Учитывать лес</span><small class="muted">по карте OpenStreetMap: кроны на пути гасят сигнал, видео 5,8 ГГц — сильнее управления</small></span></label>');
+  const inp = c.querySelector('input') as HTMLInputElement;
+  inp.checked = S.forest.on;
+  inp.addEventListener('change', () => { S.forest.on = inp.checked; emit('radio'); render(); });
+  el.appendChild(c);
+  if (!S.forest.on) return;
+  el.appendChild(h('<p class="hint">Высота деревьев</p>'));
+  const seg = h('<div class="seg"></div>');
+  for (const v of [10, 15, 20, 25]) seg.appendChild(button(`${v} м`, S.forest.height === v ? 'on' : '', () => { S.forest.height = v; emit('radio'); render(); }));
+  el.appendChild(seg);
+  el.appendChild(h('<p class="hint muted">Рельеф со спутника уже частично содержит кроны, поэтому к нему добавляется половина высоты деревьев. Пульт под деревьями — лес вокруг учтётся сам, класс «В лесу» выше тогда не нужен. Леса, которого нет на карте OSM, расчёт не знает.</p>'));
 }

@@ -16,6 +16,7 @@ import { setAltData, setAltPreview } from './altimeter';
 import { AltLevel } from './altScale';
 import { showProfile } from './lazy';
 import { openOfflineSheet, offlineCover } from './offline';
+import type { ForestState } from './forest';
 
 let liveBusy = false, livePending = false;
 /** Для живой строки хватает 200 отсчётов: запас расходится с полным профилем (до 600) не более чем на 0,2 дБ. */
@@ -24,10 +25,17 @@ const LIVE_N = 200;
 let moving = false; // карта движется (между первым move и moveend)
 
 /** Третья строка (мелко): запасы линий и азимут. Прочерк вместо служебного запаса «дрон ниже склона». */
-function subLine(pair: PairResult, az: number, loss: string): string {
+function subLine(pair: PairResult, az: number, loss: string, forest: ForestState): string {
   const m = (x: LinkResult) => `<span class="${stCls(x.status)} num">${x.belowGround ? '—' : dB(x.margin)}</span>`;
   const lines = pair.video ? `Упр. ${m(pair.rc)} · Видео ${m(pair.video)}` : `Запас ${m(pair.rc)}`;
-  return `${lines} · аз. <span class="num">${Math.round(az) % 360}°</span>${loss}${offlineNote()}`;
+  return `${lines} · аз. <span class="num">${Math.round(az) % 360}°</span>${forestNote(pair, forest)}${loss}${offlineNote()}`;
+}
+
+/** Лес на трассе: сколько он отнимает (у самой «лесной» линии — обычно видео) или что его не удалось учесть. */
+function forestNote(pair: PairResult, forest: ForestState): string {
+  if (forest === 'missing') return ' · лес не учтён';
+  const db = Math.max(pair.rc.forest?.db ?? 0, pair.video?.forest?.db ?? 0);
+  return db >= 1 ? ` · лес <span class="num">−${Math.round(db)} дБ</span>` : '';
 }
 
 /** Прицел вне луча направленной антенны на земле — какой именно (управление / видео) и кнопка развернуть их на прицел. */
@@ -79,7 +87,7 @@ function renderStrip(l: NonNullable<typeof last>, pair: PairResult, hh: number) 
   const vName = l.video ? `Видео ${freqName(l.video.freqMHz)}` : undefined;
   const loss = lossInfo(l, hh); // доли миллисекунды — и при перетаскивании высотомера
   $('lsStatus').innerHTML = `<div class="ls-verdict ${stCls(pair.status)}">${ICON[pair.status]} ${pairVerdict(pair)} · <span class="num">${km(l.r.dist)}</span><span class="ls-more" aria-hidden="true">›</span></div>`
-    + `<div class="ls-need">${escapeHtml(heightHint(hh, l.needs, vName, { rc: pair.rc.status, video: pair.video?.status }))}</div><div class="ls-sub muted">${subLine(pair, l.r.az, loss.text)}</div>`
+    + `<div class="ls-need">${escapeHtml(heightHint(hh, l.needs, vName, { rc: pair.rc.status, video: pair.video?.status }))}</div><div class="ls-sub muted">${subLine(pair, l.r.az, loss.text, l.r.forest)}</div>`
     + aimNote(l.r.az);
   if (S.station) linkLine(S.station, l.r.target, { color: statusCss(pair.status), dash: pair.rc.los ? 0 : 1, op: 1 });
   setLoss(loss.features);
@@ -321,3 +329,5 @@ export function initLinkStrip() {
 // он подписан раньше). Пульт сдвинули — прежняя трасса не годится и для предпросмотра высоты.
 on('station', () => { last = null; updateLive(); });
 for (const ev of ['radio', 'height', 'antenna'] as const) on(ev, () => updateLive());
+// Маски леса догрузились после расчёта (forest.ts): пересчитать с лесом.
+on('forest', () => updateLive());

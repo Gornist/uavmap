@@ -282,7 +282,7 @@ export function progress(frac: number | null, text = '') {
  * height — высота дрона S.droneH; antenna — антенны на земле (тип, усиление, ширина луча, азимут);
  * offline — список офлайн-районов изменился (скачан, удалён).
  */
-type Ev = 'station' | 'radio' | 'height' | 'antenna' | 'marks' | 'routes' | 'coords' | 'offline';
+type Ev = 'station' | 'radio' | 'height' | 'antenna' | 'marks' | 'routes' | 'coords' | 'offline' | 'forest';
 const subs = new Map<Ev, Set<() => void>>();
 export const on = (e: Ev, f: () => void) => { if (!subs.has(e)) subs.set(e, new Set()); subs.get(e)!.add(f); };
 export const emit = (e: Ev) => { persist(); subs.get(e)?.forEach((f) => f()); };

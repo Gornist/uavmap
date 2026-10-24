@@ -2,8 +2,9 @@
 // отмена, устаревание результата при смене пульта/радио/антенн. Владеет показанным результатом (shown).
 // Смена высоты дрона (событие 'height') результат не портит: если она посчитана — показываем её без пересчёта.
 import { S, toast, progress, on } from './app';
-import { LatLon } from './geo';
-import { fetchGrid, coverageBox, coverageZoom, demPixelM, DemMissingError, DemGrid } from './elevation';
+import { LatLon, lonLatToPixel } from './geo';
+import { fetchGrid, coverageBox, coverageZoom, demPixelM, sampleGrid, DemMissingError, DemGrid } from './elevation';
+import { forestIntoGrid, ForestState } from './forest';
 import { demTileCount } from './demTiles';
 import { budget } from './radio';
 import { effRadio, effVideo, effVideoOrNull, activeAntennaLines } from './station';
@@ -47,10 +48,10 @@ export function markInputsChanged(): void {
 }
 
 /**
- * Отпечаток радиопараметров и антенн: отсекает пустые события 'radio'/'antenna' — тот же тип антенны нажат ещё раз,
+ * Отпечаток радиопараметров, антенн и леса: отсекает пустые события 'radio'/'antenna' — тот же тип антенны нажат ещё раз,
  * «Свои параметры» выбраны без правки, число введено в другой записи. Без него зона пересчитывалась бы зря.
  */
-const radioSig = () => JSON.stringify([effRadio(), effVideoOrNull(), S.antenna]);
+const radioSig = () => JSON.stringify([effRadio(), effVideoOrNull(), S.antenna, S.forest]);
 
 // ---------- Радиогоризонт сам ----------
 // Пульт поставлен или сменились аппаратура, антенны, высота — через паузу зона пересчитывается в фоне и рисуется
@@ -97,6 +98,8 @@ export function initCoverageRun(): void {
     if (autoDue(false)) autoSoon();
     notify?.();
   });
+  // Маски леса догрузились (forest.ts), а зона посчитана без них — пересчитать (сама или пометкой «устарела»).
+  on('forest', () => { if (zoneForest === 'missing' && shown) markStale(); });
   autoSoon(); // пульт уже стоит (проект восстановлен)
 }
 
@@ -133,10 +136,27 @@ export function clearCoverage(): void {
   notify?.();
 }
 
+// ---------- Лес в зоне ----------
+/** Сколько ждать маски леса для зоны, мс (тайлов больше, чем у трассы; не дождались — зона без леса). */
+const ZONE_FOREST_WAIT_MS = 4000;
+/** Рельеф под пультом до добавления полога (forest.ts меняет сетку): точка отсчёта для зоны — земля, не кроны. */
+const bareGround = new WeakMap<DemGrid, number>();
+/** Состояние леса последней посчитанной зоны — для шторки «Зона» («лес не учтён»). */
+let zoneForest: ForestState = 'off';
+export const coverageForest = () => zoneForest;
+
+/** Сетка зоны с пологом леса: высоту под пультом запомнить до полога. */
+async function withForest(g: DemGrid, lat: number, lon: number): Promise<{ g: DemGrid; forest: ForestState }> {
+  const [px, py] = lonLatToPixel(lon, lat, g.z);
+  bareGround.set(g, sampleGrid(g, px, py));
+  return { g, forest: await forestIntoGrid(g, ZONE_FOREST_WAIT_MS) };
+}
+
 /** Посчитать все лучи частями в пуле воркеров; результат по каждой линии собран в полные массивы. */
 let chunkSeq = 0;
-function runPass(id: number, base: Omit<CoverageChunk, 'grid' | 'r0' | 'r1'>, grid: DemGrid, parts: number, onProgress?: (f: number) => void): Promise<CoverageResult[]> {
+function runPass(id: number, base0: Omit<CoverageChunk, 'grid' | 'r0' | 'r1'>, grid: DemGrid, parts: number, onProgress?: (f: number) => void): Promise<CoverageResult[]> {
   ensurePool();
+  const base = { ...base0, stationGround: bareGround.get(grid) };
   const nH = base.heights.length, nS = Math.floor(base.radius / base.step) + 1;
   const out = base.lines.map(() => emptyResult(nH, base.rays, nS));
   const queue = splitRays(base.rays, parts);
@@ -227,10 +247,13 @@ export async function startCoverage(opts: { auto?: boolean } = {}): Promise<void
   const stepP = step * 2, raysP = rays / 4;
   let zc = Math.max(8, z - 2);
   while (zc > 8 && demTileCount(corners, zc, 2) > PRELIM_TILES) zc--;
-  const coarseP = zc < z ? fetchGrid(corners, zc, Math.ceil(stepP / demPixelM(center.lat, zc)) + 2) : null;
+  // Лес — в каждую сетку до расчёта (forest.ts; не пришёл за ZONE_FOREST_WAIT_MS — зона без леса).
+  const coarseP = zc < z ? fetchGrid(corners, zc, Math.ceil(stepP / demPixelM(center.lat, zc)) + 2).then((g) => withForest(g, center.lat, center.lon)).then((r) => r.g) : null;
   let computing = false;
   let fineReady: DemGrid | null = null;
-  const fineP = fetchGrid(corners, z, pad, (d, t) => { if (id === runId && !computing) progress(d / t, `Загрузка рельефа ${d}/${t}`); });
+  let fineForest: ForestState = 'off';
+  const fineP = fetchGrid(corners, z, pad, (d, t) => { if (id === runId && !computing) progress(d / t, `Загрузка рельефа ${d}/${t}`); })
+    .then((g) => withForest(g, center.lat, center.lon)).then((r) => { fineForest = r.forest; return r.g; });
   fineP.then((g) => { fineReady = g; }, () => undefined); // ошибку разберём ниже, при ожидании
   try {
     const gP = await Promise.race(coarseP ? [fineP, coarseP.catch(() => fineP)] : [fineP]);
@@ -252,6 +275,7 @@ export async function startCoverage(opts: { auto?: boolean } = {}): Promise<void
     if (id !== runId) return;
     running = false; progress(null);
     idleLater();
+    zoneForest = fineForest;
     show(mkShown(res, step, rays, false), rev);
   } catch (err) {
     if (id !== runId) return;

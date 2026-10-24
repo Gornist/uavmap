@@ -224,7 +224,7 @@ function footerLines(): string[] {
   const head = `Радиус · ${human()} · дрон ${S.droneH} м ${ALT_TEXT}`;
   const gearLine = `Управление: ${gear('rc')}${S.video.enabled ? ` · видео: ${gear('video')}` : ''}`;
   const stLine = st ? `Пульт: СК-42 ${sk42(st.lat, st.lon)} · WGS-84 ${wgs(st.lat, st.lon)} · антенна ${st.antH} м${stationGround !== null ? ` · рельеф ${Math.round(stationGround)} м` : ''}` : 'Пульт не поставлен';
-  return [head, stLine, gearLine, `Оценка по рельефу, не гарантия. ${attribution()}`];
+  return [head, stLine, gearLine, `Оценка по рельефу${S.forest.on ? ' и лесу' : ''}, не гарантия. ${attribution()}`];
 }
 
 /** Сохранить картинку карты в файл. */
@@ -328,8 +328,8 @@ export async function printSheet(): Promise<void> {
       <img class="ps-map" src="${mapUrl}" alt="Карта">
       ${link}
       ${gearHtml}
-      <p class="ps-note">Модель: свободное пространство + дифракция на рельефе (ITU-R P.526-15). Лес, здания и помехи
-      не учтены — это оценка, а не гарантия. ${escapeHtml(attribution())}</p>`;
+      <p class="ps-note">Модель: свободное пространство + дифракция на рельефе (ITU-R P.526-15)${S.forest.on ? `; лес — по карте OpenStreetMap, деревья ${S.forest.height} м, затухание в кронах — ITU-R P.833` : ''}.
+      Здания и помехи не учтены — это оценка, а не гарантия. ${escapeHtml(attribution())}</p>`;
     document.body.appendChild(sheet);
     document.documentElement.classList.add('printing');
     // Картинки (data URL) должны успеть разобраться до печати.

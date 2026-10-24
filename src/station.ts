@@ -5,7 +5,8 @@ import { S, map, center, setGeo, fc, toast, openSheet, closeSheet, emit, on } fr
 import { h } from './ui';
 import { LatLon, distance, bearing, destination } from './geo';
 import { elevationAt, profile, demPlan } from './elevation';
-import { analyzePair, minHeightForLink, LinkResult, PairResult, LineId, PRESETS, RadioParams } from './radio';
+import { analyzePair, minHeightForLink, withCanopy, LinkResult, PairResult, LineId, PRESETS, RadioParams } from './radio';
+import { forestProfile, ForestState } from './forest';
 import { withClutter } from './clutter';
 import { aimRadio, directionalLines, rumb } from './antenna';
 import { antennaPanel, BEAM_COLOR } from './antennaUi';
@@ -193,13 +194,18 @@ export interface LinkCalc {
   groundA: number; groundB: number; antH: number; hA: number;
   /** Радиопараметры, с которыми посчитана трасса (местность и антенна в направлении на цель). */
   rp: RadioParams; vp: RadioParams | null;
+  /** Лес на трассе: учтён (полог привязан к elev, radio.ts withCanopy), выключен или не пришёл. */
+  forest: ForestState;
 }
 
 /**
  * Расчёт трассы пульт → target. null — пульта нет, его высота не загружена, точки совпадают
  * или пульт успели перенести, пока грузился профиль. При нехватке рельефа — DemMissingError.
  */
-export async function calcLink(target: LatLon, maxN = 600): Promise<LinkCalc | null> {
+/** Сколько ждать маски леса для трассы, мс (тайлы OpenFreeMap штатно приходят за 0,1–0,5 с, рельеф грузится параллельно). */
+const FOREST_WAIT_MS = 1500;
+
+export async function calcLink(target: LatLon, maxN = 600, forestWait = FOREST_WAIT_MS): Promise<LinkCalc | null> {
   if (!S.station || stationGround === null) return null;
   // Снимок входных данных: после await глобальное состояние могло измениться.
   const rev = stationRev, groundA = stationGround, antH = S.station.antH;
@@ -211,14 +217,17 @@ export async function calcLink(target: LatLon, maxN = 600): Promise<LinkCalc | n
   const radio = effRadio(az), video = effVideoOrNull(az);
   const { z, step } = demPlan(a.lat, dist);
   const n = Math.max(16, Math.min(maxN, Math.round(dist / step)));
-  const elev = await profile(a, target, n, z);
+  // Лес — параллельно с рельефом, ждём не дольше forestWait от начала: не пришёл — считаем без леса («лес не учтён»).
+  const [elev, veg] = await Promise.all([profile(a, target, n, z), forestProfile(a, target, n, z, forestWait)]);
   if (rev !== stationRev) return null;
   elev[0] = groundA;
+  withCanopy(elev, veg.canopy);
   const groundB = elev[n];
   const hA = groundA + antH;
   const pair = analyzePair(elev, dist, hA, droneAbs(groundB, S.droneH, groundA), radio, video);
-  return { res: pair.rc, vres: pair.video, pair, elev, dist, az, target, groundA, groundB, antH, hA, rp: radio, vp: video };
+  return { res: pair.rc, vres: pair.video, pair, elev, dist, az, target, groundA, groundB, antH, hA, rp: radio, vp: video, forest: veg.state };
 }
+
 
 /** Высота дрона (в текущем режиме отсчёта) для трассы r: h → абсолютная высота над точкой цели. */
 export const heightFnFor = (r: LinkCalc) => (hh: number) => droneAbs(r.groundB, hh, r.groundA);

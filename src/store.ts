@@ -31,6 +31,8 @@ export interface State {
   clutter: ClutterClass;   // местность у пульта
   /** Антенны на земле: управление — у пульта, видео — у приёмника; у каждой тип и направление. */
   antenna: { rc: Antenna; video: Antenna };
+  /** Лес на трассе (forest.ts): учитывать ли и высота деревьев, м. */
+  forest: { on: boolean; height: number };
 }
 
 const KEY = 'radius.project.v1';
@@ -53,6 +55,7 @@ export const defaults = (): State => ({
   coordFormat: 'sk42',
   clutter: 'open',
   antenna: { rc: { ...DEFAULT_ANTENNA }, video: { ...DEFAULT_ANTENNA } },
+  forest: { on: true, height: 15 },
 });
 
 function merge<T>(base: T, over: unknown): T {
@@ -198,6 +201,8 @@ export function sanitize(s: State): State {
     };
   };
   out.antenna = { rc: ant(an.rc, d.antenna.rc), video: ant(an.video, d.antenna.video) };
+  const fo: Record<string, unknown> = isObj(s.forest) ? s.forest : {};
+  out.forest = { on: typeof fo.on === 'boolean' ? fo.on : d.forest.on, height: Math.round(fin(fo.height, 5, 40, d.forest.height)) };
   return out;
 }
 

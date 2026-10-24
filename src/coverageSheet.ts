@@ -14,7 +14,7 @@ import { COV_MAX_HEIGHTS } from './store';
 import { openOfflineSheet } from './offline';
 import { CoverageShown, CovLine, coverageHeights, heightIndex, lineOf, paletteIndex, sameHeights, stats } from './coverageStats';
 import { PALETTE, initCoverageView, redrawCoverage, setCoverageOpacity } from './coverageView';
-import { shown, stale, running, lastError, initCoverageRun, setCoverageListener, markInputsChanged, startCoverage, cancelCoverage, clearCoverage, setAutoCoverage } from './coverageRun';
+import { shown, stale, running, lastError, initCoverageRun, setCoverageListener, markInputsChanged, startCoverage, cancelCoverage, clearCoverage, setAutoCoverage, coverageForest } from './coverageRun';
 import { coverageFill, setCoverageFill } from './coverageView';
 import { BEAM_COLOR } from './antennaUi';
 import { prefetchSoon } from './prefetch';
@@ -248,6 +248,10 @@ function renderSummary(body: HTMLElement, c: CoverageShown) {
     const who = line === 'both' ? 'По худшей из двух линий' : line === 'video' ? 'Только по видео' : 'Только по управлению';
     body.appendChild(hint(`${who}, высота ${ALT_TEXT}.`, 'hint'));
   }
+  // Лес в зоне — только кроны поверх рельефа (дифракция над ними); затухание сквозь кроны — в строке связи и профиле.
+  const fr = coverageForest();
+  if (fr === 'missing') body.appendChild(hint('Лес не учтён: карта леса не загрузилась.', 'hint'));
+  else if (fr === 'ok') body.appendChild(hint('Лес учтён как кроны поверх рельефа; сквозь кроны у опушек точнее — в строке связи и профиле.', 'hint muted'));
   if (S.coverage.show === 'minh' && c.heights.length >= 2) body.appendChild(hint('Цвет на карте — какая высота дрона нужна для связи:', 'cov-sec'));
   const legend = h('<div class="legend"></div>');
   for (const [cl, txt] of legendItems(c)) {

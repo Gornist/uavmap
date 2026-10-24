@@ -1,4 +1,5 @@
-// График профиля трассы: рельеф с учётом кривизны Земли, линия визирования, 1-я зона Френеля и её 60 %.
+// График профиля трассы: рельеф с учётом кривизны Земли, лес (полог над рельефом), линия визирования,
+// 1-я зона Френеля и её 60 %.
 import type { LinkResult } from './radio';
 import { fixed } from './format';
 
@@ -19,7 +20,7 @@ export function drawProfile(cv: HTMLCanvasElement, r: LinkResult, labels: { a: s
   let lo = Infinity, hi = -Infinity;
   for (let i = 0; i <= n; i++) {
     lo = Math.min(lo, r.ground[i], r.los_h[i] - r.fz[i]);
-    hi = Math.max(hi, r.ground[i], r.los_h[i] + r.fz[i]);
+    hi = Math.max(hi, r.ground[i], r.los_h[i] + r.fz[i], r.canopyTop ? r.canopyTop[i] : -Infinity);
   }
   const pad = (hi - lo) * 0.08 + 5;
   lo -= pad; hi += pad;
@@ -65,6 +66,16 @@ export function drawProfile(cv: HTMLCanvasElement, r: LinkResult, labels: { a: s
   ctx.beginPath();
   for (let i = 0; i <= n; i++) ctx.lineTo(X(r.d[i]), Y(r.ground[i]));
   ctx.stroke();
+
+  // лес: полог над рельефом (верх крон — r.canopyTop; столбики по отсчётам, где есть лес)
+  if (r.canopyTop) {
+    ctx.fillStyle = col('--forest') || 'rgba(60, 140, 70, 0.55)';
+    const w = Math.max(1, (W - L - Rt) / n + 0.5);
+    for (let i = 1; i < n; i++) {
+      if (r.canopyTop[i] - r.ground[i] < 0.5) continue;
+      ctx.fillRect(X(r.d[i]) - w / 2, Y(r.canopyTop[i]), w, Y(r.ground[i]) - Y(r.canopyTop[i]));
+    }
+  }
 
   // участки, где рельеф лезет в 60 % зоны / перекрывает луч
   for (let i = 1; i < n; i++) {

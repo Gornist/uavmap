@@ -540,6 +540,22 @@ async function scenario() {
     await waitFor(`document.body.classList.contains('drawer-open')`);
     return `${dl.name}, ${Math.round(dl.size / 1024)} КБ; лист: картинки ${imgs} px`;
   });
+  await step('лес на трассе: раздел в «Аппаратуре», высота деревьев, выключение убирает лес из строки', async () => {
+    await ev(`document.querySelector('.dr-back')?.click(); [...document.querySelectorAll('.dr-item')].find(b => /Аппаратура/.test(b.textContent)).click(); true`);
+    const chk = `[...document.querySelectorAll('#drBody label.chk')].find(l => /Учитывать лес/.test(l.textContent))?.querySelector('input')`;
+    if (!(await ev(`!!(${chk}) && (${chk}).checked`))) throw new Error('нет включённого «Учитывать лес»');
+    const hs = await ev(`[...document.querySelectorAll('#drBody .seg button')].map(b => b.textContent).filter(t => / м$/.test(t)).join(',')`);
+    if (hs !== '10 м,15 м,20 м,25 м') throw new Error('высоты деревьев: ' + hs);
+    await ev(`[...document.querySelectorAll('#drBody .seg button')].find(b => b.textContent === '20 м').click(); true`);
+    if (!(await ev(`[...document.querySelectorAll('#drBody .seg button')].find(b => b.textContent === '20 м')?.classList.contains('on')`))) throw new Error('«20 м» не отмечена');
+    await ev(`(${chk}).click(); true`);
+    await sleep(1500);
+    const off = await ev(`document.getElementById('lsStatus').textContent`);
+    if (/лес/.test(off)) throw new Error('лес выключен, а в строке: ' + off);
+    await ev(`(${chk}).click(); [...document.querySelectorAll('#drBody .seg button')].find(b => b.textContent === '15 м')?.click(); true`);
+    await sleep(300);
+    return `высоты ${hs}`;
+  });
   await step('тема: переключатель День / Ночь / Авто в настройках', async () => {
     await ev(`document.querySelector('.dr-back')?.click(); true`);
     await ev(`[...document.querySelectorAll('.dr-item')].find(b => /Настройки/.test(b.textContent)).click(); true`);

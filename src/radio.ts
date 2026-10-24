@@ -100,6 +100,10 @@ export interface LinkResult {
   minClearance: number;         // min (зазор / радиус Френеля); ≥0.6 — зона «чистая»
   fresnelBlocked: number;       // доля перекрытия первой зоны в худшей точке, 0..1+
   edges: number[];              // индексы точек Буллингтона: νmax (прямая видимость) или горизонты от A и от Б
+  /** Лес на трассе (withCanopy): м пути сквозь кроны и потери от леса, дБ (уже в totalLoss); null — лес не задан. */
+  forest: { m: number; db: number } | null;
+  /** Верх крон над хордой (как ground, с выпуклостью Земли); null — без леса. Для графика. */
+  canopyTop: Float64Array | null;
   // для графика
   d: Float64Array; ground: Float64Array; los_h: Float64Array; fz: Float64Array;
 }
@@ -135,9 +139,10 @@ export function analyzeLink(elev: ArrayLike<number>, dist: number, hA: number, h
 
   const db = deltaBullington(elev, dist, hA, hB, Re, p.freqMHz, lambda);
   const diffraction = db.loss, edges = db.edges;
+  const veg = forestLoss(elev, canopies.get(elev as object), dist, hA, hB, Re, p.freqMHz, lambda, diffraction, ground, losH, los);
 
   const fs = fspl(dist, p.freqMHz);
-  const totalLoss = fs + diffraction;
+  const totalLoss = fs + diffraction + (veg ? veg.db : 0);
   const prx = p.txPowerDbm + p.txGainDbi + p.rxGainDbi - p.lossDb - p.clutterDb - totalLoss;
   // Антенна ниже рельефа в своей точке (дрон «в склоне» в режиме над взлётом) — связи нет.
   const belowGround = hA < elev[0] - 0.05 || hB < elev[n] - 0.05; // допуск на округление Float32
@@ -146,8 +151,65 @@ export function analyzeLink(elev: ArrayLike<number>, dist: number, hA: number, h
   return {
     dist, fspl: fs, diffraction, totalLoss, prx, margin, status, los: los && !belowGround, belowGround,
     minClearance: Number.isFinite(minClr) ? minClr : 1, fresnelBlocked: Math.max(0, worstBlock), edges,
+    forest: veg ? { m: veg.m, db: veg.db } : null, canopyTop: veg ? veg.top : null,
     d, ground, los_h: losH, fz,
   };
+}
+
+// ---------- Лес на трассе (ITU-R P.833-10) ----------
+// Полог задаётся отдельно от рельефа: высота крон над рельефом в каждом отсчёте (0 — не лес). Привязан к самому
+// массиву отметок (withCanopy), поэтому доходит до всех расчётов по этой трассе — нужной высоты, высотомера, точек
+// потери связи — без лишнего параметра в каждой функции.
+const canopies = new WeakMap<object, ArrayLike<number>>();
+
+/** Привязать полог (м над рельефом по отсчётам, той же длины) к профилю; null — без леса. Возвращает тот же профиль. */
+export function withCanopy<T extends ArrayLike<number>>(elev: T, canopy: ArrayLike<number> | null): T {
+  if (canopy && canopy.length === elev.length) canopies.set(elev as object, canopy); else canopies.delete(elev as object);
+  return elev;
+}
+export const canopyOf = (elev: ArrayLike<number>): ArrayLike<number> | null => canopies.get(elev as object) ?? null;
+
+/** Удельное затухание в кронах, дБ/м: ≈ 0,2·f[ГГц] (P.833-10, рис. 2; смешанный лес в листве). */
+export const vegGamma = (fMHz: number) => 0.2 * (fMHz / 1000);
+/** Предел затухания A_m = 1,37·f[МГц]^0,42, дБ (P.833-10, табл. 1: смешанный лес 12–16 м, Санкт-Петербург). */
+export const vegLimit = (fMHz: number) => 1.37 * Math.pow(fMHz, 0.42);
+/** Затухание на пути d м сквозь кроны с насыщением (P.833-10, § 2.1): A_m·(1 − e^(−d·γ/A_m)). */
+export function vegLoss(dM: number, fMHz: number): number {
+  if (dM <= 0) return 0;
+  const am = vegLimit(fMHz);
+  return am * (1 - Math.exp((-dM * vegGamma(fMHz)) / am));
+}
+
+/**
+ * Потери от леса сверх дифракции на рельефе.
+ * - Рельеф луч не закрывает: итог — по самому «лёгкому» пути (P.833-10, § 3): min(дифракция над кронами −
+ *   дифракция над рельефом, затухание сквозь кроны). Путь сквозь кроны — отсчёты, где луч ниже верха крон, но выше
+ *   рельефа. Концы трассы не приподнимаются: антенна в лесу «видит» кроны вокруг себя как путь сквозь них.
+ * - Рельеф луч закрывает: волна огибает хребет — и лес на его гребне вместе с ним, прямого пути сквозь кроны нет;
+ *   полог — часть препятствия (FOREST.md, § 2, п. 1): дифракция над кронами − над рельефом.
+ */
+function forestLoss(
+  elev: ArrayLike<number>, canopy: ArrayLike<number> | undefined, dist: number, hA: number, hB: number, Re: number,
+  fMHz: number, lambda: number, bare: number, ground: Float64Array, losH: Float64Array, bareLos: boolean,
+): { m: number; db: number; top: Float64Array } | null {
+  if (!canopy) return null;
+  const n = elev.length - 1;
+  const top = new Float64Array(n + 1), withTop = new Float64Array(n + 1);
+  let any = false, inside = 0;
+  for (let i = 0; i <= n; i++) {
+    const c = i > 0 && i < n ? Math.max(0, canopy[i]) : 0;
+    top[i] = ground[i] + c;
+    withTop[i] = elev[i] + c;
+    if (c > 0) {
+      any = true;
+      const clr = losH[i] - ground[i];
+      if (clr >= 0 && clr < c) inside++;
+    }
+  }
+  if (!any) return { m: 0, db: 0, top };
+  const m = (inside * dist) / n;
+  const over = deltaBullington(withTop, dist, hA, hB, Re, fMHz, lambda).loss - bare;
+  return { m, db: Math.max(0, bareLos ? Math.min(over, vegLoss(m, fMHz)) : over), top };
 }
 
 /**
@@ -206,7 +268,10 @@ function lowestOk(ok: (h: number) => boolean, from: number, maxH: number, step: 
 export function lossAlong(elev: ArrayLike<number>, dist: number, hA: number, hB: number, p: RadioParams): number | null {
   const n = elev.length - 1;
   if (n < 2) return null;
-  const sub = (k: number) => (elev instanceof Float32Array || elev instanceof Float64Array ? elev.subarray(0, k + 1) : Array.prototype.slice.call(elev, 0, k + 1));
+  const cut = (a: ArrayLike<number>, k: number) => (a instanceof Float32Array || a instanceof Float64Array ? a.subarray(0, k + 1) : Array.prototype.slice.call(a, 0, k + 1));
+  const can = canopyOf(elev);
+  // Часть трассы — со своей частью полога (иначе лес потерялся бы на укороченной трассе).
+  const sub = (k: number) => withCanopy(cut(elev, k), can ? cut(can, k) : null);
   const lost = (k: number) => {
     const r = analyzeLink(sub(k), (dist * k) / n, hA, hB, p);
     return r.belowGround || r.status === 'none';

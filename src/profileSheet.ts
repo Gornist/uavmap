@@ -58,6 +58,15 @@ function explain(r: LinkCalc, need: number | null): string {
   if (ob?.kind === 'block') parts.push(`Хребет ${near(ob.at)} закрывает обзор${p.status === 'ok' ? ', но сигнал его огибает' : ''}.`);
   else if (ob) parts.push(`Рельеф ${near(ob.at)} почти касается линии связи — сигнал ослаблен.`);
   else parts.push(p.status === 'ok' ? 'Между пультом и дроном препятствий нет.' : p.status === 'weak' ? 'Препятствий нет, но для такой дальности сигнал слабоват.' : 'Препятствий нет, но на такую дальность не хватает мощности.');
+  // Лес: сколько отнял у самой «лесной» линии (у видео на 5,8 ГГц — больше всего).
+  const fl = [r.res, ...(r.vres ? [r.vres] : [])].filter((x) => x.forest && x.forest.db >= 1);
+  if (fl.length) {
+    const worstF = fl.reduce((a, b) => (b.forest!.db > a.forest!.db ? b : a));
+    const who = r.vres && worstF === r.vres ? ' у видео' : r.vres ? ' у управления' : '';
+    parts.push(worstF.forest!.m > 0
+      ? `Лес на пути: ${Math.round(worstF.forest!.m)} м сквозь кроны, сигнал${who} слабее на ${Math.round(worstF.forest!.db)} дБ.`
+      : `Лес у линии связи ослабляет сигнал${who} на ${Math.round(worstF.forest!.db)} дБ.`);
+  } else if (r.forest === 'missing') parts.push('Лес не учтён: карта леса не загрузилась.');
   if (p.status !== 'ok') {
     if (need === null) parts.push(p.status === 'weak' ? 'Высота не поможет — подойдите ближе или возьмите аппаратуру мощнее.' : 'Даже на 1500 м уверенной связи не будет — подойдите ближе или возьмите аппаратуру мощнее.');
     else if (need > S.droneH) parts.push(`Поднимитесь до ${need} м или подойдите ближе.`);
@@ -65,6 +74,13 @@ function explain(r: LinkCalc, need: number | null): string {
     if (p.status === 'weak' && p.worst === 'video' && r.vres && r.res.status === 'ok') parts.push('Управление держится, картинка пропадёт раньше.');
   }
   return parts.join(' ');
+}
+
+/** Строка о лесе в описании модели. */
+function forestModel(r: LinkCalc): string {
+  if (r.forest === 'off') return 'Лес выключен (Меню → Аппаратура).';
+  if (r.forest === 'missing') return 'Лес не учтён: карта леса не загрузилась.';
+  return `Лес — по карте OpenStreetMap, деревья ${S.forest.height} м (к рельефу — половина: кроны в нём уже частично есть), затухание в кронах — ITU-R P.833.`;
 }
 
 // Раскрытые блоки «Подробнее» в профиле переживают перерисовку (выбор высоты/аппаратуры из таблицы).
@@ -121,7 +137,7 @@ function renderProfileSheet(r: LinkCalc) {
     <p class="verdict-why">${explain(r, mins.pair)}</p>
     <p class="prof-need">Нужная высота ${ALT_TEXT}: ${needLinesHtml(lineNeeds(r, radioEff, videoEff, mins))}</p>
     <canvas id="profileCanvas"></canvas>
-    <div class="legend"><span><i style="background:var(--accent)"></i>линия связи</span><span><i style="background:var(--fresnel60)"></i>зона Френеля</span><span><i style="background:var(--none)"></i>препятствие</span></div>
+    <div class="legend"><span><i style="background:var(--accent)"></i>линия связи</span><span><i style="background:var(--fresnel60)"></i>зона Френеля</span>${res.canopyTop ? '<span><i style="background:var(--forest)"></i>лес</span>' : ''}<span><i style="background:var(--none)"></i>препятствие</span></div>
     <div class="kv kv-key">
       <div><small>Дальность</small><b class="num">${km(r.dist)}</b></div>
       <div><small>${vres ? 'Высота для обеих линий' : 'Высота для уверенной связи'} (сейчас ${S.droneH} м)</small><b class="num">${mh(mins.pair)}</b></div>
@@ -134,13 +150,14 @@ function renderProfileSheet(r: LinkCalc) {
       ${two('Запас, дБ', (x) => (x.belowGround ? '—' : dB(x.margin).replace(' дБ', '')))}
       ${two('Потери в свободном пространстве, дБ', (x) => int(x.fspl))}
       ${two('Потери на рельефе (дифракция), дБ', (x) => int(x.diffraction))}
+      ${res.forest ? two('Лес: м сквозь кроны, потери дБ', (x) => (x.forest ? `${Math.round(x.forest.m)} м, ${int(x.forest.db)}` : '—')) : ''}
       ${two('Уровень приёма, дБм', (x) => int(x.prx))}
       <div><small>Зона Френеля свободна</small><b class="num">${res.belowGround ? '—' : Math.round(Math.max(0, Math.min(1, res.minClearance)) * 100) + ' %'}</b></div>
       <div><small>Радиогоризонт</small><b class="num">${km(hz)}</b></div>
       ${vres ? `<div><small>Нужная высота: упр. / видео</small><b class="num">${mh(mins.rc)} / ${mh(mins.video)}</b></div>` : ''}
       <div><small>Дальность без рельефа${vres ? ', упр. / видео' : ''}</small><b class="num">${vres ? `${fsr(radioEff)} / ${fsr(videoEff!)}` : fsr(radioEff)}</b></div>
     </div>
-    <p class="hint">Модель: свободное пространство + дифракция на рельефе (ITU-R P.526-15), k = ${fixed(S.radio.k, 2)}, местность у пульта: ${CLUTTER_NAME()}. Лес, здания, помехи и диаграммы антенн не учтены — это оценка, а не гарантия.</p>`)}
+    <p class="hint">Модель: свободное пространство + дифракция на рельефе (ITU-R P.526-15), k = ${fixed(S.radio.k, 2)}, местность у пульта: ${CLUTTER_NAME()}. ${forestModel(r)} Здания и помехи не учтены — это оценка, а не гарантия.</p>`)}
     ${det('cmp', 'Сравнить высоты и аппаратуру', `<p class="hint">Высота дрона ${ALT_TEXT}; список высот — в шторке «Зона». «Применить» — считать на этой высоте.</p>
     <table class="rt" id="tblH"><tr>${hHead}</tr>${hRows}</table>
     ${presetTables}`)}

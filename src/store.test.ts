@@ -422,3 +422,14 @@ describe('антенны на земле в проекте', () => {
     expect([neg.antenna.rc.tiltDeg, neg.antenna.rc.beamVDeg]).toEqual([-10, 60]);
   });
 });
+
+describe('лес на трассе: настройка', () => {
+  it('по умолчанию учитывается, деревья 15 м; мусор и высота вне 5–40 м — умолчание', () => {
+    expect(defaults().forest).toEqual({ on: true, height: 15 });
+    const d = defaults();
+    expect(sanitize({ ...d, forest: 'x' } as never).forest).toEqual({ on: true, height: 15 });
+    expect(sanitize({ ...d, forest: { on: false, height: 99 } } as never).forest).toEqual({ on: false, height: 15 });
+    expect(sanitize({ ...d, forest: { on: true, height: 20 } } as never).forest).toEqual({ on: true, height: 20 });
+    expect(restoreProject(JSON.stringify({ marks: [] })).forest).toEqual({ on: true, height: 15 }); // старый проект
+  });
+});
