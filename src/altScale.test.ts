@@ -21,6 +21,16 @@ describe('scaleTop', () => {
 });
 
 describe('altBands', () => {
+  it('узкое окно связи (уже шага сетки) не теряется, если его высота передана в extra', () => {
+    // Наклонённый узкий луч: связь только на 411–418 м — между точками сетки 405 и 420 (шаг 600/40 = 15 м).
+    const win = (h: number): AltLevel => (h >= 411 && h < 418 ? 'ok' : 'none');
+    expect(altBands(win, 600).some((b) => b.level === 'ok')).toBe(false); // без подсказки — проскочило
+    const b = altBands(win, 600, 40, [411]);
+    const ok = b.find((x) => x.level === 'ok');
+    expect(ok).toBeDefined();
+    expect(Math.abs(ok!.from - 411)).toBeLessThanOrEqual(1);
+    expect(Math.abs(ok!.to - 418)).toBeLessThanOrEqual(1);
+  });
   const lv = (h: number): AltLevel => (h < 37 ? 'ground' : h < 213 ? 'none' : h < 487 ? 'weak' : 'ok');
   it('полосы снизу вверх с точными (±1 м) границами', () => {
     const b = altBands(lv, 600);

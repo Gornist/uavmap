@@ -1,7 +1,7 @@
 // «Где встать»: подбор места для пульта, откуда лучше связь с прицелом, — сразу в радиусе 1 км (можно 3 км),
 // перебор точек на сетке рельефа, ромбы-варианты «1, 2, 3» на карте и таблица. Варианты без связи отсеиваются.
 import maplibregl from 'maplibre-gl';
-import { S, map, center, toast, openSheet, closeSheet, progress } from './app';
+import { S, map, center, emit, toast, openSheet, closeSheet, progress } from './app';
 import { h } from './ui';
 import { km, dB } from './format';
 import { LatLon, distance, bearing, lonLatToPixel, destination } from './geo';
@@ -11,7 +11,7 @@ import { demTileCount } from './demTiles';
 import { ICON, stCls, pairVerdict, statusCss } from './verdict';
 import { setStation, effRadio, effVideoOrNull, droneAbs, activeAntennaLines } from './station';
 import { openOfflineSheet } from './offline';
-import { directional } from './antenna';
+import { pointAntenna } from './antennaUi';
 
 /** Сколько вариантов показываем (ромбы «1, 2, 3»). */
 const TOP_N = 3;
@@ -99,16 +99,20 @@ function nothingFound(radius: number) {
 
 /**
  * Поставить пульт в вариант и вернуть прицел на цель — строка связи сразу покажет связь оттуда.
- * Варианты оценены с направленной антенной, смотрящей на цель (на новом месте пилот её так и поставит),
- * поэтому и направление антенн разворачиваем на цель — иначе строка связи сказала бы «вне луча».
+ * Варианты оценены с пиковым усилением направленной антенны — она смотрит точно на дрон над целью (на новом месте
+ * пилот её так и поставит), поэтому и антенны наводим на него: азимут и наклон на текущей высоте («На прицел»).
+ * Иначе строка связи сказала бы «вне луча», а с прежним наклоном связь вышла бы хуже обещанной.
  */
 function choose(t: Spot, i: number, target: LatLon) {
   const aim = Math.round(bearing(t.p, target)) % 360;
-  for (const a of [S.antenna.rc, S.antenna.video]) if (directional(a)) a.heading = aim;
-  setStation(t.p);
+  const lines = activeAntennaLines();
+  setStation(t.p); // сначала пульт: наклон считается от его антенны
+  for (const line of lines) pointAntenna(line, aim, t.dist);
+  if (lines.length) emit('antenna');
   closeSheet(); // onClose шторки убирает ромбы
   map.flyTo({ center: [target.lon, target.lat] });
-  toast(`Пульт поставлен в вариант ${i + 1}${activeAntennaLines().length ? `, антенны — на цель (${aim}°)` : ''}`);
+  const tilt = lines.length ? S.antenna[lines[0]].tiltDeg ?? 0 : 0;
+  toast(`Пульт поставлен в вариант ${i + 1}${lines.length ? `, антенны — на цель (${aim}°${tilt ? `, наклон ${tilt}°` : ''})` : ''}`);
 }
 
 function showSpots(top: Spot[], target: LatLon, radius: number) {

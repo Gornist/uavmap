@@ -36,7 +36,7 @@ export function setAltPreview(preview: (h: number) => void, end: () => void) { o
  */
 export function setAltData(d: { level: (h: number) => AltLevel; marks: number[]; needs: HeightNeeds; line: 'video' | 'rc' } | null) {
   top = scaleTop([S.droneH, ...(d ? d.marks : [])], top);
-  bands = d ? altBands(d.level, top) : [];
+  bands = d ? altBands(d.level, top, 40, [d.needs.rc, d.needs.video, d.needs.pair].filter((v): v is number => typeof v === 'number')) : [];
   line = d ? d.line : 'video';
   const own = d ? (line === 'video' ? d.needs.video ?? null : d.needs.rc) : null;
   need = d ? altNeed(bands, own, top, [own]) : null;

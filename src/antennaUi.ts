@@ -19,28 +19,34 @@ export function aimToCross(): number | null {
 }
 
 /**
- * Угол места с антенны линии на дрон над прицелом на текущей высоте, ° (null — пульта нет или прицел на нём, < 5 м,
- * как у расчёта трассы). Высота дрона — над точкой взлёта (droneAbs в station.ts), антенна — над землёй у пульта:
+ * Угол места с антенны линии на дрон на текущей высоте в d м от пульта, ° (null — пульта нет или d < 5 м, как у
+ * расчёта трассы). Высота дрона — над точкой взлёта (droneAbs в station.ts), антенна — над землёй у пульта:
  * их разность от рельефа не зависит, кривизна — с k линии, как в analyzeLink.
  */
-export function elevToCross(line: LineId): number | null {
+function elevAt(line: LineId, d: number): number | null {
   const st = S.station;
-  if (!st) return null;
-  const d = distance(st, center());
-  if (d < 5) return null;
+  if (!st || d < 5) return null;
   return elevationDeg(st.antH, S.droneH, d, clampK((line === 'rc' ? S.radio : S.video.radio).k) * R_EARTH);
 }
 
 const clampTilt = (v: number) => Math.min(TILT_MAX, Math.max(TILT_MIN, Math.round(v)));
 const changed = () => emit('antenna');
 
+/**
+ * Навести антенну линии: азимут az и наклон на дрон на текущей высоте в d м от пульта (d < 5 м — наклон не трогаем).
+ * Без события: зовущий сам решает, что пересчитать.
+ */
+export function pointAntenna(line: LineId, az: number, d: number): void {
+  S.antenna[line].heading = az;
+  const el = elevAt(line, d);
+  if (el !== null) S.antenna[line].tiltDeg = clampTilt(el);
+}
+
 /** Направить антенну линии на прицел: азимут и наклон на дрон над прицелом; false — некуда (нет пульта или прицел на нём). */
 export function aimLine(line: LineId): boolean {
   const az = aimToCross();
   if (az === null) return false;
-  S.antenna[line].heading = az;
-  const el = elevToCross(line);
-  if (el !== null) S.antenna[line].tiltDeg = clampTilt(el);
+  pointAntenna(line, az, distance(S.station!, center()));
   changed();
   return true;
 }
@@ -104,7 +110,7 @@ export function antennaPanel(el: HTMLElement, rerender: () => void): void {
         ref.className = 'hint ant-ref';
         if (az === null) { ref.textContent = 'Азимут — от севера по часовой стрелке, как на компасе.'; return; }
         const off = Math.round(angleOff(az, a.heading));
-        const el = elevToCross(line);
+        const el = elevAt(line, distance(S.station!, center()));
         const elOff = el === null ? 0 : Math.round(el - (a.tiltDeg ?? 0));
         // «В луче» — по тому же эллиптическому контуру −3 дБ, что и расчёт (azTerm + elTerm ≤ 3), а не по осям отдельно.
         const term = azTerm(a, az, a.heading) + (el !== null && hasVertical(a) ? elTerm(a, el) : 0);

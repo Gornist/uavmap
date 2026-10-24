@@ -20,15 +20,20 @@ export function scaleTop(marks: number[], prev?: number): number {
 
 /**
  * Полосы от 0 до top: level(h) в n точках, границы между разными уровнями уточняются делением пополам до ~1 м,
- * чтобы край цвета совпадал с числами подсказки.
+ * чтобы край цвета совпадал с числами подсказки. extra — высоты, которые проверить обязательно (нужные высоты из
+ * строки связи): окно связи у узкого наклонённого луча бывает уже шага сетки и иначе проскочило бы между точками.
  */
-export function altBands(level: (h: number) => AltLevel, top: number, n = 40): AltBand[] {
+export function altBands(level: (h: number) => AltLevel, top: number, n = 40, extra: number[] = []): AltBand[] {
   const step = top / n;
+  const hs = Array.from({ length: n }, (_, i) => (i + 1) * step);
+  for (const e of extra) if (Number.isFinite(e) && e > 0 && e < top) hs.push(e);
+  hs.sort((a, b) => a - b);
   const out: AltBand[] = [];
   let prevH = 0, prevLv = level(0);
   out.push({ from: 0, to: 0, level: prevLv });
-  for (let i = 1; i <= n; i++) {
-    const hh = i * step, lv = level(hh);
+  for (const hh of hs) {
+    if (hh <= prevH) continue;
+    const lv = level(hh);
     if (lv !== prevLv) {
       let lo = prevH, hi = hh; // level(lo) = prevLv, level(hi) = lv
       while (hi - lo > 1) { const m = (lo + hi) / 2; if (level(m) === prevLv) lo = m; else hi = m; }
